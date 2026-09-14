@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'game_launch.dart';
+import 'player_progress.dart';
 
 part 'game_rack_solver.dart';
 part 'game_bot_engine.dart';
@@ -11,8 +12,9 @@ part 'game_animations.dart';
 part 'game_settings.dart';
 part 'game_table_widgets.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await playerProgress.load();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -569,6 +571,7 @@ class _GameScreenState extends State<GameScreen> {
       transitionDuration: const Duration(milliseconds: 240),
       pageBuilder: (_, _, _) => GameSettingsDialog(
         initial: _gameSettings,
+        launchConfig: widget.launchConfig,
         onExitToMenu: () => Navigator.of(
           context,
           rootNavigator: true,
@@ -759,6 +762,19 @@ class _GameScreenState extends State<GameScreen> {
     return null;
   }
 
+  void _playInteractionFeedback({bool strong = false}) {
+    if (_gameSettings.sound) {
+      SystemSound.play(SystemSoundType.click);
+    }
+    if (_gameSettings.vibration) {
+      if (strong) {
+        HapticFeedback.mediumImpact();
+      } else {
+        HapticFeedback.selectionClick();
+      }
+    }
+  }
+
   void _tapTile(int tileId) {
     if (_turn != 0) {
       _msg_('Sıra sende değil.');
@@ -769,7 +785,10 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     final tile = _rackTileById(tileId);
-    if (tile != null) setState(() => tile.selected = !tile.selected);
+    if (tile != null) {
+      _playInteractionFeedback();
+      setState(() => tile.selected = !tile.selected);
+    }
   }
 
   Set<int> get _selectedTileIds =>
@@ -846,6 +865,7 @@ class _GameScreenState extends State<GameScreen> {
       _drawnThisTurn = true;
       _tookDiscard = false;
     });
+    _playInteractionFeedback();
   }
 
   // ── Atılan Taşı Al (soldan çek) ───────────────────────────────────────
@@ -880,6 +900,7 @@ class _GameScreenState extends State<GameScreen> {
       _drawnThisTurn = true;
       _tookDiscard = true;
     });
+    _playInteractionFeedback();
   }
 
   void _returnTakenDiscard() {
@@ -904,6 +925,7 @@ class _GameScreenState extends State<GameScreen> {
       _tookDiscard = false;
       _takenDiscardTile = null;
     });
+    _playInteractionFeedback();
     _msg_('Taş geri bırakıldı. Artık ortadan taş çekebilirsin.');
   }
 
@@ -950,6 +972,7 @@ class _GameScreenState extends State<GameScreen> {
       _tookDiscard = false;
       _takenDiscardTile = null;
     });
+    _playInteractionFeedback(strong: true);
 
     if (_rack.isEmpty) {
       _endRoundPlayerWins();
@@ -1149,7 +1172,9 @@ class _GameScreenState extends State<GameScreen> {
     _rackDragTilt.value = 0;
     _pendingRackDragTilt = 0;
     final draggedIds = data.tileIds.isEmpty ? {data.tileId} : data.tileIds;
-    _draggingProcessableTile = draggedIds.any(_processableTileIds.contains);
+    _draggingProcessableTile =
+        _gameSettings.gridMagnifier &&
+        draggedIds.any(_processableTileIds.contains);
     if (!_draggingProcessableTile) {
       _pendingGridDragPosition = null;
       _gridDragPosition.value = null;
@@ -1754,6 +1779,13 @@ class _GameScreenState extends State<GameScreen> {
     required int playerPen,
     required List<int> botPens,
   }) {
+    final playerWon = winner == 'Oyuncu 1' || winner == 'Sen';
+    final reward = playerProgress.recordCompletedGame(
+      config: widget.launchConfig,
+      won: playerWon,
+      openedHand: _playerOpened,
+      finishedHand: playerWon,
+    );
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1764,6 +1796,7 @@ class _GameScreenState extends State<GameScreen> {
         botPens: botPens,
         elCount: _elCount,
         totalPenalty: _totalPenalty,
+        reward: reward,
         homeLabel: _isTournamentGame ? 'TURNUVAYA DÖN' : 'ANA SAYFA',
         onNewRound: () {
           Navigator.pop(context);
@@ -1804,7 +1837,9 @@ class _GameScreenState extends State<GameScreen> {
     final myTurn = _turn == 0 && !_botBusy;
     final canAct = myTurn && _drawnThisTurn;
     final eligibleMeldIndexes = _eligibleMeldIndexes;
-    final processableTileIds = _processableTileIds;
+    final processableTileIds = _gameSettings.moveHints
+        ? _processableTileIds
+        : const <int>{};
 
     return Scaffold(
       backgroundColor: const Color(0xFF003E2A),
@@ -4081,6 +4116,7 @@ class GameEndDialog extends StatelessWidget {
   final List<int> botPens;
   final int elCount;
   final int totalPenalty;
+  final GameReward? reward;
   final String homeLabel;
   final VoidCallback onNewRound;
   final VoidCallback onResetMatch;
@@ -4094,6 +4130,7 @@ class GameEndDialog extends StatelessWidget {
     required this.botPens,
     required this.elCount,
     required this.totalPenalty,
+    this.reward,
     this.homeLabel = 'ANA SAYFA',
     required this.onNewRound,
     required this.onResetMatch,
@@ -4216,6 +4253,10 @@ class GameEndDialog extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
+                    if (reward != null) ...[
+                      _GameRewardCard(reward: reward!),
+                      const SizedBox(height: 12),
+                    ],
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(11),
@@ -4298,6 +4339,95 @@ class GameEndDialog extends StatelessWidget {
       ),
     );
   }
+}
+
+class _GameRewardCard extends StatelessWidget {
+  final GameReward reward;
+
+  const _GameRewardCard({required this.reward});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('game-reward-card'),
+    width: double.infinity,
+    padding: const EdgeInsets.all(11),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [
+          OC.numGreen.withValues(alpha: 0.16),
+          OC.gold.withValues(alpha: 0.18),
+        ],
+      ),
+      borderRadius: BorderRadius.circular(9),
+      border: Border.all(color: OC.gold.withValues(alpha: 0.65)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'OYUN ÖDÜLLERİ',
+          style: TextStyle(
+            color: OC.panelBrown,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 7),
+        Wrap(
+          spacing: 14,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.auto_awesome,
+                  color: Color(0xFF1688D4),
+                  size: 18,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  '+${reward.xp} XP',
+                  style: const TextStyle(
+                    color: Color(0xFF116DAA),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.monetization_on, color: OC.coinGold, size: 19),
+                const SizedBox(width: 4),
+                Text(
+                  '+${formatGameNumber(reward.coins)} Altın',
+                  style: const TextStyle(
+                    color: OC.panelBrown,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            if (reward.levelsGained > 0)
+              Text(
+                '+${reward.levelsGained} SEVİYE!',
+                style: const TextStyle(
+                  color: OC.numGreen,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        Text(
+          reward.xpBreakdown.join(' • '),
+          style: const TextStyle(color: OC.numBlack, fontSize: 9, height: 1.3),
+        ),
+      ],
+    ),
+  );
 }
 
 class _ScoreRow extends StatelessWidget {

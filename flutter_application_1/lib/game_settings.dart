@@ -2,33 +2,33 @@ part of 'game.dart';
 
 class GameSettings {
   final bool sound;
-  final bool music;
   final bool vibration;
   final bool moveHints;
+  final bool gridMagnifier;
   final bool animations;
   final double fontScale;
 
   const GameSettings({
     this.sound = true,
-    this.music = true,
     this.vibration = true,
     this.moveHints = true,
+    this.gridMagnifier = true,
     this.animations = true,
     this.fontScale = 1,
   });
 
   GameSettings copyWith({
     bool? sound,
-    bool? music,
     bool? vibration,
     bool? moveHints,
+    bool? gridMagnifier,
     bool? animations,
     double? fontScale,
   }) => GameSettings(
     sound: sound ?? this.sound,
-    music: music ?? this.music,
     vibration: vibration ?? this.vibration,
     moveHints: moveHints ?? this.moveHints,
+    gridMagnifier: gridMagnifier ?? this.gridMagnifier,
     animations: animations ?? this.animations,
     fontScale: fontScale ?? this.fontScale,
   );
@@ -36,11 +36,13 @@ class GameSettings {
 
 class GameSettingsDialog extends StatefulWidget {
   final GameSettings initial;
+  final GameLaunchConfig launchConfig;
   final VoidCallback onExitToMenu;
 
   const GameSettingsDialog({
     super.key,
     required this.initial,
+    required this.launchConfig,
     required this.onExitToMenu,
   });
 
@@ -111,18 +113,17 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      _sectionTitle('MASA BİLGİSİ'),
+                      _matchInfo(),
+                      const SizedBox(height: 12),
+                      _sectionTitle('OYUN DENEYİMİ'),
                       _switch(
                         Icons.volume_up_rounded,
                         'Ses Efektleri',
                         settings.sound,
                         (value) => settings = settings.copyWith(sound: value),
-                      ),
-                      _switch(
-                        Icons.music_note_rounded,
-                        'Müzik',
-                        settings.music,
-                        (value) => settings = settings.copyWith(music: value),
                       ),
                       _switch(
                         Icons.vibration_rounded,
@@ -139,12 +140,22 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                             settings = settings.copyWith(moveHints: value),
                       ),
                       _switch(
+                        Icons.zoom_in_map_rounded,
+                        'Grid Büyüteci',
+                        settings.gridMagnifier,
+                        (value) =>
+                            settings = settings.copyWith(gridMagnifier: value),
+                      ),
+                      _switch(
                         Icons.animation_rounded,
                         'Animasyonlar',
                         settings.animations,
                         (value) =>
                             settings = settings.copyWith(animations: value),
                       ),
+                      const SizedBox(height: 12),
+                      _sectionTitle('ERİŞİLEBİLİRLİK'),
+                      _fontScaleSetting(),
                     ],
                   ),
                 ),
@@ -184,6 +195,125 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
       ),
     );
   }
+
+  Widget _sectionTitle(String title) => Padding(
+    padding: const EdgeInsets.only(left: 4, bottom: 6),
+    child: Text(
+      title,
+      style: const TextStyle(
+        color: OC.btnBrown,
+        fontSize: 10,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1.15,
+      ),
+    ),
+  );
+
+  Widget _matchInfo() {
+    final config = widget.launchConfig;
+    final details = <(IconData, String, String)>[
+      (Icons.sports_esports_rounded, 'Mod', config.modeLabel),
+      (Icons.login_rounded, 'Giriş', config.entryPointLabel),
+      if (config.entryPoint == GameEntryPoint.room)
+        (Icons.meeting_room_rounded, 'Oda', config.selectionLabel),
+      if (config.entryFee != null)
+        (Icons.monetization_on_rounded, 'Giriş Ücreti', '${config.entryFee}'),
+      if (config.isTournament)
+        (Icons.emoji_events_rounded, 'Aşama', config.selectionLabel),
+      if (config.opponent != null)
+        (Icons.person_rounded, 'Rakip', config.opponent!),
+    ];
+    return Container(
+      key: const ValueKey('game-match-info'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: OC.tableGreen.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: OC.numGreen.withValues(alpha: 0.45)),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        children: [
+          for (final detail in details)
+            SizedBox(
+              width: 170,
+              child: Row(
+                children: [
+                  Icon(detail.$1, size: 17, color: OC.numGreen),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        text: '${detail.$2}: ',
+                        style: const TextStyle(
+                          color: Colors.black54,
+                          fontSize: 11,
+                        ),
+                        children: [
+                          TextSpan(
+                            text: detail.$3,
+                            style: const TextStyle(
+                              color: OC.panelBrown,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fontScaleSetting() => Container(
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 5),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.48),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: OC.tileBdr),
+    ),
+    child: Column(
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.text_fields_rounded, color: OC.numGreen),
+            const SizedBox(width: 9),
+            const Expanded(
+              child: Text(
+                'Yazı Boyutu',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Text(
+              '${(settings.fontScale * 100).round()}%',
+              style: const TextStyle(
+                color: OC.btnBrown,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: settings.fontScale,
+          min: 0.85,
+          max: 1.25,
+          divisions: 4,
+          activeColor: OC.numGreen,
+          onChanged: (value) => setState(() {
+            settings = settings.copyWith(fontScale: value);
+          }),
+        ),
+      ],
+    ),
+  );
 
   Widget _switch(
     IconData icon,

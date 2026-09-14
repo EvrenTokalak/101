@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'game_launch.dart';
 import 'game_navigation.dart';
 import 'main.dart';
+import 'player_progress.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ODA SEÇ EKRANIColors.black.withOpacity(0.5
@@ -126,6 +127,18 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
 
   Future<void> _enterRoom() async {
     final room = _rooms[_selectedIndex];
+    if (!playerProgress.trySpendCoins(room.entryFee)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${room.label} odası için ${formatGameNumber(room.entryFee)} altın gerekiyor.',
+          ),
+          backgroundColor: const Color(0xFF8B1E1E),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -196,7 +209,11 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
                         child: Column(
                           children: [
                             // ── Üst bar ─────────────────────────────────────────
-                            _TopBar(coinBalance: 25600),
+                            AnimatedBuilder(
+                              animation: playerProgress,
+                              builder: (_, _) =>
+                                  _TopBar(coinBalance: playerProgress.coins),
+                            ),
 
                             // ── Başlık ───────────────────────────────────────────
                             const SizedBox(height: 16),

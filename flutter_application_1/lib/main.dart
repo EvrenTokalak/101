@@ -6,10 +6,12 @@ import 'package:flutter/services.dart';
 import 'game_launch.dart';
 import 'game_navigation.dart';
 import 'oda.dart' as oda;
+import 'player_progress.dart';
 import 'tournament.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await playerProgress.load();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -803,129 +805,134 @@ class _ProfileChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Seviye rozeti (yuvarlak)
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: OkeyColors.buttonBrown,
-              shape: BoxShape.circle,
-              border: Border.all(color: OkeyColors.gold, width: 1.5),
-              boxShadow: [
-                BoxShadow(
-                  color: OkeyColors.gold.withValues(alpha: 0.2),
-                  blurRadius: 8,
-                ),
-              ],
-            ),
-            child: const Center(
-              child: Text(
-                '9',
-                style: TextStyle(
-                  color: OkeyColors.goldLight,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  fontFamily: 'Georgia',
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Avatar + isim + yıldız puanı + rozet
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: OkeyColors.gold.withValues(alpha: 0.4),
-                width: 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Avatar
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: OkeyColors.tableMid,
-                    border: Border.all(color: OkeyColors.gold, width: 1.5),
+    return AnimatedBuilder(
+      animation: playerProgress,
+      builder: (context, _) => GestureDetector(
+        onTap: onTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Seviye rozeti (yuvarlak)
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: OkeyColors.buttonBrown,
+                shape: BoxShape.circle,
+                border: Border.all(color: OkeyColors.gold, width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: OkeyColors.gold.withValues(alpha: 0.2),
+                    blurRadius: 8,
                   ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.person,
-                      color: OkeyColors.cream,
-                      size: 20,
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  '${playerProgress.level}',
+                  style: const TextStyle(
+                    color: OkeyColors.goldLight,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'Georgia',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Avatar + isim + yıldız puanı + rozet
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: OkeyColors.gold.withValues(alpha: 0.4),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Avatar
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: OkeyColors.tableMid,
+                      border: Border.all(color: OkeyColors.gold, width: 1.5),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Evren',
-                      style: TextStyle(
+                    child: const Center(
+                      child: Icon(
+                        Icons.person,
                         color: OkeyColors.cream,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Georgia',
+                        size: 20,
                       ),
                     ),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.star,
-                          color: OkeyColors.gold,
-                          size: 12,
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          '12.350',
-                          style: const TextStyle(
-                            color: OkeyColors.goldLight,
-                            fontSize: 11,
-                            fontFamily: 'Georgia',
-                          ),
-                        ),
-                      ],
-                    ),
-                    Container(
-                      margin: const EdgeInsets.only(top: 2),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: OkeyColors.gold.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text(
-                        '101',
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Evren',
                         style: TextStyle(
-                          color: OkeyColors.goldLight,
-                          fontSize: 10,
+                          color: OkeyColors.cream,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           fontFamily: 'Georgia',
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.workspace_premium_rounded,
+                            color: OkeyColors.gold,
+                            size: 12,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            playerProgress.title,
+                            style: const TextStyle(
+                              color: OkeyColors.goldLight,
+                              fontSize: 11,
+                              fontFamily: 'Georgia',
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        margin: const EdgeInsets.only(top: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: OkeyColors.gold.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          playerProgress.isMaxLevel
+                              ? 'MAKS. SEVİYE'
+                              : 'XP ${playerProgress.levelXp}/${playerProgress.xpForNextLevel}',
+                          style: const TextStyle(
+                            color: OkeyColors.goldLight,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'Georgia',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -944,55 +951,117 @@ class _TopRightBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Coin chip
-        GestureDetector(
-          onTap: onWallet,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: OkeyColors.gold, width: 1),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.monetization_on,
-                  color: OkeyColors.gold,
-                  size: 18,
-                ),
-                const SizedBox(width: 5),
-                const Text(
-                  '25.600',
-                  style: TextStyle(
-                    color: OkeyColors.cream,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'Georgia',
+    return AnimatedBuilder(
+      animation: playerProgress,
+      builder: (context, _) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _XpProgressChip(progress: playerProgress),
+          const SizedBox(width: 8),
+          // Coin chip
+          GestureDetector(
+            onTap: onWallet,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: OkeyColors.gold, width: 1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.monetization_on,
+                    color: OkeyColors.gold,
+                    size: 18,
                   ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(
-                  Icons.add_circle,
-                  color: OkeyColors.goldLight,
-                  size: 16,
-                ),
-              ],
+                  const SizedBox(width: 5),
+                  Text(
+                    formatGameNumber(playerProgress.coins),
+                    style: const TextStyle(
+                      color: OkeyColors.cream,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'Georgia',
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.add_circle,
+                    color: OkeyColors.goldLight,
+                    size: 16,
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        // İkon butonları
-        _IconBtn(icon: Icons.mail_outlined, onTap: onMessages),
-        const SizedBox(width: 6),
-        _IconBtn(icon: Icons.settings_outlined, onTap: onSettings),
-      ],
+          const SizedBox(width: 8),
+          // İkon butonları
+          _IconBtn(icon: Icons.mail_outlined, onTap: onMessages),
+          const SizedBox(width: 6),
+          _IconBtn(icon: Icons.settings_outlined, onTap: onSettings),
+        ],
+      ),
     );
   }
+}
+
+class _XpProgressChip extends StatelessWidget {
+  final PlayerProgressController progress;
+
+  const _XpProgressChip({required this.progress});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('main-xp-chip'),
+    width: 132,
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+    decoration: BoxDecoration(
+      color: Colors.black.withValues(alpha: 0.58),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xFF65B9FF), width: 1),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.auto_awesome, color: Color(0xFF8CCBFF), size: 14),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                'SV. ${progress.level} • ${progress.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Text(
+              progress.isMaxLevel
+                  ? 'MAX'
+                  : '${progress.levelXp}/${progress.xpForNextLevel}',
+              style: const TextStyle(color: Color(0xFFBDE2FF), fontSize: 8.5),
+            ),
+          ],
+        ),
+        const SizedBox(height: 3),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: progress.levelProgress,
+            minHeight: 4,
+            backgroundColor: Colors.white12,
+            valueColor: const AlwaysStoppedAnimation(Color(0xFF54B7FF)),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _IconBtn extends StatelessWidget {
@@ -1036,36 +1105,40 @@ class _FeatureDialog extends StatelessWidget {
   });
 
   List<_FeatureEntry> get _entries => switch (title) {
-    'PROFİLİM' => const [
+    'PROFİLİM' => [
       _FeatureEntry(
         Icons.military_tech_rounded,
-        'Seviye 18',
-        '12.450 / 15.000 XP',
-        '83%',
+        'Seviye ${playerProgress.level} • ${playerProgress.title}',
+        playerProgress.isMaxLevel
+            ? 'En yüksek seviyeye ulaşıldı'
+            : '${playerProgress.levelXp} / ${playerProgress.xpForNextLevel} XP',
+        playerProgress.isMaxLevel
+            ? 'MAX'
+            : '%${(playerProgress.levelProgress * 100).round()}',
       ),
       _FeatureEntry(
         Icons.sports_esports_rounded,
-        '64 oyun',
-        '37 galibiyet · 27 mağlubiyet',
+        '${playerProgress.gamesPlayed} oyun',
+        '${playerProgress.gamesWon} galibiyet · ${playerProgress.gamesPlayed - playerProgress.gamesWon} mağlubiyet',
         null,
       ),
       _FeatureEntry(
         Icons.trending_up_rounded,
         'Kazanma Oranı',
-        '%58 · En iyi seri: 6',
+        '%${(playerProgress.winRate * 100).round()} · Toplam ${playerProgress.totalXpEarned} XP',
         null,
       ),
       _FeatureEntry(
         Icons.workspace_premium_rounded,
-        'Başarımlar',
-        'İlk 101 · Seri Ustası · Keskin Göz',
+        'El İstatistikleri',
+        '${playerProgress.handsOpened} el açıldı · ${playerProgress.handsFinished} el bitirildi',
         null,
       ),
     ],
-    'CÜZDAN' => const [
+    'CÜZDAN' => [
       _FeatureEntry(
         Icons.monetization_on_rounded,
-        '25.600 Jeton',
+        '${formatGameNumber(playerProgress.coins)} Altın',
         'Kullanılabilir bakiye',
         null,
       ),
@@ -1077,8 +1150,8 @@ class _FeatureDialog extends StatelessWidget {
       ),
       _FeatureEntry(
         Icons.receipt_long_rounded,
-        'Son İşlem',
-        'Masa ödülü · +1.250 jeton',
+        'Oda Girişleri',
+        'Oda ücreti giriş sırasında bakiyeden düşülür',
         null,
       ),
     ],
@@ -1399,16 +1472,12 @@ class _MenuSettings {
   final bool soundEffects;
   final bool music;
   final bool vibration;
-  final bool notifications;
-  final bool animations;
   final double fontScale;
 
   const _MenuSettings({
     this.soundEffects = true,
     this.music = true,
     this.vibration = true,
-    this.notifications = true,
-    this.animations = true,
     this.fontScale = 1,
   });
 
@@ -1416,16 +1485,12 @@ class _MenuSettings {
     bool? soundEffects,
     bool? music,
     bool? vibration,
-    bool? notifications,
-    bool? animations,
     double? fontScale,
   }) {
     return _MenuSettings(
       soundEffects: soundEffects ?? this.soundEffects,
       music: music ?? this.music,
       vibration: vibration ?? this.vibration,
-      notifications: notifications ?? this.notifications,
-      animations: animations ?? this.animations,
       fontScale: fontScale ?? this.fontScale,
     );
   }
@@ -1527,28 +1592,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                           const SizedBox(height: 14),
                           _sectionTitle('GÖRÜNÜM'),
                           _buildFontScaleSetting(),
-                          _settingSwitch(
-                            icon: Icons.animation_rounded,
-                            title: 'Akıcı Animasyonlar',
-                            subtitle: 'Geçiş ve taş animasyonları',
-                            value: _settings.animations,
-                            onChanged: (value) => setState(() {
-                              _settings = _settings.copyWith(animations: value);
-                            }),
-                          ),
-                          const SizedBox(height: 14),
-                          _sectionTitle('BİLDİRİMLER'),
-                          _settingSwitch(
-                            icon: Icons.notifications_active_outlined,
-                            title: 'Bildirimler',
-                            subtitle: 'Turnuva ve ödül hatırlatmaları',
-                            value: _settings.notifications,
-                            onChanged: (value) => setState(() {
-                              _settings = _settings.copyWith(
-                                notifications: value,
-                              );
-                            }),
-                          ),
                         ],
                       ),
                     ),

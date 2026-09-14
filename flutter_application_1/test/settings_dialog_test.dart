@@ -13,6 +13,9 @@ void main() {
     await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
     await tester.pump(const Duration(milliseconds: 700));
 
+    expect(find.byKey(const ValueKey('main-xp-chip')), findsOneWidget);
+    expect(find.textContaining('SV. 9'), findsOneWidget);
+
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -21,6 +24,8 @@ void main() {
     expect(find.text('Ses Efektleri'), findsOneWidget);
     expect(find.text('Yazı Boyutu'), findsOneWidget);
     expect(find.text('Oyun Davetleri'), findsNothing);
+    expect(find.text('Bildirimler'), findsNothing);
+    expect(find.text('Akıcı Animasyonlar'), findsNothing);
 
     final slider = tester.widget<Slider>(find.byType(Slider));
     slider.onChanged!(1.2);
@@ -47,7 +52,7 @@ void main() {
     await tester.tap(find.text('25.600'));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('CÜZDAN'), findsOneWidget);
-    expect(find.text('25.600 Jeton'), findsOneWidget);
+    expect(find.text('25.600 Altın'), findsOneWidget);
     expect(find.text('Günlük Bonus'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.close_rounded).last);
@@ -55,7 +60,7 @@ void main() {
     await tester.tap(find.text('Evren'));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('PROFİLİM'), findsOneWidget);
-    expect(find.text('Seviye 18'), findsOneWidget);
+    expect(find.textContaining('Seviye 9'), findsOneWidget);
     expect(find.text('Kazanma Oranı'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.close_rounded).last);

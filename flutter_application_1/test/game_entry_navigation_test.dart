@@ -5,6 +5,7 @@ import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
 import 'package:flutter_application_1/main.dart' as app;
 import 'package:flutter_application_1/oda.dart';
+import 'package:flutter_application_1/player_progress.dart';
 import 'package:flutter_application_1/tournament.dart';
 
 Future<void> pumpRouteTransition(WidgetTester tester) async {
@@ -21,6 +22,7 @@ Future<void> disposeGameRoute(WidgetTester tester) async {
 void main() {
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
+    playerProgress.reset();
   });
 
   testWidgets('Katlamalı seçimi oyun ekranını doğru modla açar', (

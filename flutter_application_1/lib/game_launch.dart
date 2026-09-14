@@ -68,4 +68,17 @@ class GameLaunchConfig {
        );
 
   bool get isTournament => entryPoint == GameEntryPoint.tournament;
+
+  String get modeLabel => switch (mode) {
+    OkeyGameMode.classic101 => 'Klasik 101',
+    OkeyGameMode.paired101 => 'Eşli 101',
+    OkeyGameMode.progressive => 'Katlamalı',
+  };
+
+  String get entryPointLabel => switch (entryPoint) {
+    GameEntryPoint.quickPlay => 'Hemen Oyna',
+    GameEntryPoint.gameMode => 'Oyun Modları',
+    GameEntryPoint.room => 'Oda',
+    GameEntryPoint.tournament => 'Turnuva',
+  };
 }
