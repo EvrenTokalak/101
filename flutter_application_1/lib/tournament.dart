@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import 'game.dart';
+import 'game_launch.dart';
+import 'game_navigation.dart';
 
 class TournamentScreen extends StatefulWidget {
   const TournamentScreen({super.key});
@@ -18,17 +18,14 @@ class _TournamentScreenState extends State<TournamentScreen> {
   bool _champion = false;
 
   Future<void> _startMatch() async {
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    if (!mounted) return;
-    final won = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const GameScreen(tournamentMode: true)),
+    final won = await openGameScreen<bool>(
+      context,
+      config: GameLaunchConfig.tournament(
+        round: _round,
+        roundLabel: _roundNames[_round],
+        opponent: _opponents[_round],
+      ),
     );
-    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     if (!mounted || won == null) return;
     setState(() {
       if (!won) {

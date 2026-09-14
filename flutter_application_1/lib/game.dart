@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'game_launch.dart';
+
 part 'game_rack_solver.dart';
 part 'game_bot_engine.dart';
 part 'game_animations.dart';
@@ -483,11 +485,13 @@ class _BotDrawMotion {
 class GameScreen extends StatefulWidget {
   final bool tournamentMode;
   final int? startingPlayer;
+  final GameLaunchConfig launchConfig;
 
   const GameScreen({
     super.key,
     this.tournamentMode = false,
     this.startingPlayer,
+    this.launchConfig = const GameLaunchConfig.quickPlay(),
   }) : assert(
          startingPlayer == null || (startingPlayer >= 0 && startingPlayer <= 3),
        );
@@ -500,6 +504,9 @@ class _GameScreenState extends State<GameScreen> {
   static const int _rackSlotCount = _rackRowLength * 2;
   // Gerçek oyuncu temposu; testlerde gerektiğinde bu sabit açılabilir.
   static const bool _instantBotTurns = true;
+
+  bool get _isTournamentGame =>
+      widget.tournamentMode || widget.launchConfig.isTournament;
 
   // ── Deste & Taşlar ────────────────────────────────────────────────────
   List<Tile> _deck = [];
@@ -1757,7 +1764,7 @@ class _GameScreenState extends State<GameScreen> {
         botPens: botPens,
         elCount: _elCount,
         totalPenalty: _totalPenalty,
-        homeLabel: widget.tournamentMode ? 'TURNUVAYA DÖN' : 'ANA SAYFA',
+        homeLabel: _isTournamentGame ? 'TURNUVAYA DÖN' : 'ANA SAYFA',
         onNewRound: () {
           Navigator.pop(context);
           setState(() {
@@ -1779,7 +1786,7 @@ class _GameScreenState extends State<GameScreen> {
           });
         },
         onHome: () {
-          if (widget.tournamentMode) {
+          if (_isTournamentGame) {
             Navigator.of(context).pop();
             Navigator.of(context).pop(winner == 'Oyuncu 1');
           } else {
@@ -1966,21 +1973,20 @@ class _GameScreenState extends State<GameScreen> {
                                           onTap: _autoOpenStandardMelds,
                                         ),
                                         _RackAction(
-                                          label: _processedMoves.isNotEmpty
-                                              ? 'GERİ AL'
-                                              : 'İŞLE',
-                                          icon: _processedMoves.isNotEmpty
-                                              ? Icons.undo_rounded
-                                              : Icons.auto_fix_high_rounded,
+                                          label: 'İŞLE',
+                                          icon: Icons.auto_fix_high_rounded,
                                           active: true,
-                                          color: _processedMoves.isNotEmpty
-                                              ? const Color(0xFF9A650E)
-                                              : const Color(0xFF08658F),
-                                          onTap: _processedMoves.isNotEmpty
-                                              ? _undoProcessedMoves
-                                              : _enterAddMode,
+                                          color: const Color(0xFF08658F),
+                                          onTap: _enterAddMode,
                                         ),
                                       ],
+                                      splitLastAction: _RackAction(
+                                        label: 'GERİ AL',
+                                        icon: Icons.undo_rounded,
+                                        active: _processedMoves.isNotEmpty,
+                                        color: const Color(0xFF9A650E),
+                                        onTap: _undoProcessedMoves,
+                                      ),
                                     ),
                                   ),
                                   SizedBox(width: controlGap),
@@ -2631,7 +2637,22 @@ class _GridDragMagnifier extends StatelessWidget {
                 decoration: MagnifierDecoration(
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                      color: OC.numGreen.withValues(alpha: 0.88),
+                      width: 1.4,
+                    ),
                   ),
+                  shadows: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.48),
+                      blurRadius: 13,
+                      spreadRadius: 2,
+                    ),
+                    BoxShadow(
+                      color: OC.numGreen.withValues(alpha: 0.24),
+                      blurRadius: 8,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -3497,7 +3518,7 @@ class _RackRows extends StatelessWidget {
                         builder: (context, candidates, rejected) => Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 1.2),
                           child: AnimatedSlide(
-                            duration: const Duration(milliseconds: 120),
+                            duration: const Duration(milliseconds: 85),
                             curve: Curves.easeOutCubic,
                             offset:
                                 candidates.isNotEmpty ||
@@ -3611,8 +3632,9 @@ class _RackAction {
 
 class _RackActionPanel extends StatelessWidget {
   final List<_RackAction> actions;
+  final _RackAction? splitLastAction;
 
-  const _RackActionPanel({required this.actions});
+  const _RackActionPanel({required this.actions, this.splitLastAction});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -3631,17 +3653,174 @@ class _RackActionPanel extends StatelessWidget {
     ),
     child: Column(
       children: [
-        ...actions.map(
-          (action) => Expanded(
+        ...actions.asMap().entries.map((entry) {
+          final isSplitRow =
+              splitLastAction?.active == true &&
+              entry.key == actions.length - 1;
+          return Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
-              child: _SceneActionButton(action: action),
+              child: isSplitRow
+                  ? _DiagonalActionButton(
+                      primary: entry.value,
+                      secondary: splitLastAction!,
+                    )
+                  : _SceneActionButton(action: entry.value),
             ),
-          ),
-        ),
+          );
+        }),
       ],
     ),
   );
+}
+
+class _DiagonalActionButton extends StatelessWidget {
+  final _RackAction primary;
+  final _RackAction secondary;
+
+  const _DiagonalActionButton({required this.primary, required this.secondary});
+
+  @override
+  Widget build(BuildContext context) => _PressScale(
+    enabled: true,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _DiagonalActionHalf(
+            action: primary,
+            clipper: const _UpperLeftDiagonalClipper(),
+          ),
+          _DiagonalActionHalf(
+            action: secondary,
+            clipper: const _LowerRightDiagonalClipper(),
+          ),
+          IgnorePointer(
+            child: CustomPaint(painter: const _DiagonalActionBorderPainter()),
+          ),
+          IgnorePointer(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(5, 4, 5, 3),
+              child: Stack(
+                children: [
+                  Align(
+                    alignment: const Alignment(-0.58, -0.54),
+                    child: _DiagonalActionLabel(primary.label),
+                  ),
+                  Align(
+                    alignment: const Alignment(0.58, 0.54),
+                    child: _DiagonalActionLabel(secondary.label),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DiagonalActionHalf extends StatelessWidget {
+  final _RackAction action;
+  final CustomClipper<Path> clipper;
+
+  const _DiagonalActionHalf({required this.action, required this.clipper});
+
+  @override
+  Widget build(BuildContext context) => ClipPath(
+    clipper: clipper,
+    child: Material(
+      color: Colors.transparent,
+      child: Ink(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color.lerp(action.color, Colors.white, 0.13)!,
+              Color.lerp(action.color, Colors.black, 0.18)!,
+            ],
+          ),
+        ),
+        child: InkWell(onTap: action.active ? action.onTap : null),
+      ),
+    ),
+  );
+}
+
+class _DiagonalActionLabel extends StatelessWidget {
+  final String label;
+
+  const _DiagonalActionLabel(this.label);
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(
+      label,
+      maxLines: 1,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 10.5,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 0.1,
+        shadows: [Shadow(color: Colors.black87, blurRadius: 2)],
+      ),
+    ),
+  );
+}
+
+class _UpperLeftDiagonalClipper extends CustomClipper<Path> {
+  const _UpperLeftDiagonalClipper();
+
+  @override
+  Path getClip(Size size) => Path()
+    ..moveTo(0, 0)
+    ..lineTo(size.width, 0)
+    ..lineTo(0, size.height)
+    ..close();
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+class _LowerRightDiagonalClipper extends CustomClipper<Path> {
+  const _LowerRightDiagonalClipper();
+
+  @override
+  Path getClip(Size size) => Path()
+    ..moveTo(size.width, 0)
+    ..lineTo(size.width, size.height)
+    ..lineTo(0, size.height)
+    ..close();
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+class _DiagonalActionBorderPainter extends CustomPainter {
+  const _DiagonalActionBorderPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFD3A44F)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Offset.zero & size,
+        const Radius.circular(8),
+      ).deflate(0.7),
+      paint,
+    );
+    canvas.drawLine(Offset(size.width, 0), Offset(0, size.height), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _RackPerSummary extends StatelessWidget {
@@ -3743,7 +3922,7 @@ class _SceneActionButton extends StatelessWidget {
                     Text(
                       action.label,
                       maxLines: 1,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
@@ -3828,10 +4007,22 @@ class _TileWidget extends StatelessWidget {
                       _label,
                       style: TextStyle(
                         color: tile.displayColor,
-                        fontSize: h * (tile.isFakeOkey ? 0.43 : 0.40),
-                        fontWeight: FontWeight.bold,
+                        fontSize: h * (tile.isFakeOkey ? 0.47 : 0.44),
+                        fontWeight: FontWeight.w900,
                         height: 1,
-                        letterSpacing: -0.5,
+                        letterSpacing: -0.25,
+                        shadows: [
+                          Shadow(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            blurRadius: 0.8,
+                            offset: const Offset(0, -0.35),
+                          ),
+                          Shadow(
+                            color: Colors.black.withValues(alpha: 0.36),
+                            blurRadius: 1.1,
+                            offset: const Offset(0, 0.7),
+                          ),
+                        ],
                       ),
                     ),
                   ),

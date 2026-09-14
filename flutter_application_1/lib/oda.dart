@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'game_launch.dart';
+import 'game_navigation.dart';
 import 'main.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -122,7 +124,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
     setState(() => _selectedIndex = index);
   }
 
-  void _enterRoom() {
+  Future<void> _enterRoom() async {
     final room = _rooms[_selectedIndex];
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -139,6 +141,14 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
           borderRadius: BorderRadius.circular(12),
           side: const BorderSide(color: OkeyColors.gold, width: 1),
         ),
+      ),
+    );
+    await openGameScreen<void>(
+      context,
+      config: GameLaunchConfig.room(
+        id: 'room-${room.tier}',
+        label: room.label,
+        entryFee: room.entryFee,
       ),
     );
   }

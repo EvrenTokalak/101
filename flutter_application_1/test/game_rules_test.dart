@@ -351,13 +351,42 @@ void main() {
 
     test('serideki okey yalnız bulunduğu konumun taşıyla alınır', () {
       final joker = tile(2, TileColor.blue, isOkey: true);
-      final run = Meld(
+      final endRun = Meld(
         tiles: [tile(8, TileColor.red), tile(9, TileColor.red), joker],
         type: 'seri',
       );
+      final middleRun = Meld(
+        tiles: [tile(4, TileColor.blue), joker, tile(6, TileColor.blue)],
+        type: 'seri',
+      );
+      final startRun = Meld(
+        tiles: [
+          joker,
+          tile(11, TileColor.black),
+          tile(12, TileColor.black),
+          tile(13, TileColor.black),
+        ],
+        type: 'seri',
+      );
 
-      expect(Rules.okeyReplacementIndex(run, tile(10, TileColor.red)), 2);
-      expect(Rules.okeyReplacementIndex(run, tile(7, TileColor.red)), isNull);
+      expect(Rules.okeyReplacementIndex(endRun, tile(10, TileColor.red)), 2);
+      expect(
+        Rules.okeyReplacementIndex(endRun, tile(7, TileColor.red)),
+        isNull,
+      );
+      expect(Rules.okeyReplacementIndex(middleRun, tile(5, TileColor.blue)), 1);
+      expect(
+        Rules.okeyReplacementIndex(middleRun, tile(7, TileColor.blue)),
+        isNull,
+      );
+      expect(
+        Rules.okeyReplacementIndex(startRun, tile(10, TileColor.black)),
+        0,
+      );
+      expect(
+        Rules.okeyReplacementIndex(startRun, tile(9, TileColor.black)),
+        isNull,
+      );
     });
 
     test('birden fazla okey kalan perden okey geri alınamaz', () {

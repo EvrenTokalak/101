@@ -3,7 +3,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'game.dart' as game;
+import 'game_launch.dart';
+import 'game_navigation.dart';
 import 'oda.dart' as oda;
 import 'tournament.dart';
 
@@ -556,31 +557,29 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     super.dispose();
   }
 
-  Future<void> _navigateToGame() async {
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) => const game.GameScreen(),
-        transitionDuration: const Duration(milliseconds: 600),
-        transitionsBuilder: (_, animation, _, child) => FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.95, end: 1).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            ),
-            child: child,
-          ),
-        ),
-      ),
-    );
-    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  Future<void> _navigateToGame([
+    GameLaunchConfig config = const GameLaunchConfig.quickPlay(),
+  ]) async {
+    await openGameScreen<void>(context, config: config);
   }
+
+  GameLaunchConfig _gameModeConfig(String selection) => switch (selection) {
+    'Eşli 101' => const GameLaunchConfig.gameMode(
+      mode: OkeyGameMode.paired101,
+      id: 'paired-101',
+      label: 'Eşli 101',
+    ),
+    'Katlamalı' => const GameLaunchConfig.gameMode(
+      mode: OkeyGameMode.progressive,
+      id: 'progressive',
+      label: 'Katlamalı',
+    ),
+    _ => const GameLaunchConfig.gameMode(
+      mode: OkeyGameMode.classic101,
+      id: 'classic-101',
+      label: 'Klasik 101',
+    ),
+  };
 
   Future<void> _navigateToRoomSelect() async {
     await Navigator.of(context).push(
@@ -633,15 +632,21 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     required IconData icon,
     required String title,
     required String description,
-  }) {
-    return showGeneralDialog<void>(
+  }) async {
+    final selection = await showGeneralDialog<String>(
       context: context,
       barrierDismissible: true,
       barrierLabel: '$title penceresini kapat',
       barrierColor: Colors.black.withValues(alpha: 0.7),
       transitionDuration: const Duration(milliseconds: 250),
-      pageBuilder: (_, _, _) =>
-          _FeatureDialog(icon: icon, title: title, description: description),
+      pageBuilder: (dialogContext, _, _) => _FeatureDialog(
+        icon: icon,
+        title: title,
+        description: description,
+        onEntryTap: title == 'OYUN MODLARI'
+            ? (entryTitle) => Navigator.of(dialogContext).pop(entryTitle)
+            : null,
+      ),
       transitionBuilder: (_, animation, _, child) {
         final curved = CurvedAnimation(
           parent: animation,
@@ -657,6 +662,9 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         );
       },
     );
+    if (selection != null && mounted) {
+      await _navigateToGame(_gameModeConfig(selection));
+    }
   }
 
   Future<void> _openSettings() async {
@@ -756,7 +764,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                           const SizedBox(height: 22),
                           const _MenuTileRow(),
                           const SizedBox(height: 22),
-                          _HemenOynaButton(onTap: _navigateToGame),
+                          _HemenOynaButton(onTap: () => _navigateToGame()),
                         ],
                       ),
                     ),
@@ -1018,11 +1026,13 @@ class _FeatureDialog extends StatelessWidget {
   final IconData icon;
   final String title;
   final String description;
+  final ValueChanged<String>? onEntryTap;
 
   const _FeatureDialog({
     required this.icon,
     required this.title,
     required this.description,
+    this.onEntryTap,
   });
 
   List<_FeatureEntry> get _entries => switch (title) {
@@ -1252,7 +1262,12 @@ class _FeatureDialog extends StatelessWidget {
                       ),
                       const SizedBox(height: 14),
                       ..._entries.map(
-                        (entry) => _FeatureEntryCard(entry: entry),
+                        (entry) => _FeatureEntryCard(
+                          entry: entry,
+                          onTap: onEntryTap == null
+                              ? null
+                              : () => onEntryTap!(entry.title),
+                        ),
                       ),
                     ],
                   ),
@@ -1301,65 +1316,81 @@ class _FeatureEntry {
 
 class _FeatureEntryCard extends StatelessWidget {
   final _FeatureEntry entry;
+  final VoidCallback? onTap;
 
-  const _FeatureEntryCard({required this.entry});
+  const _FeatureEntryCard({required this.entry, this.onTap});
 
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 9),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.055),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.2)),
-    ),
-    child: Row(
-      children: [
-        Icon(entry.icon, color: OkeyColors.goldLight, size: 22),
-        const SizedBox(width: 11),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                entry.title,
-                style: const TextStyle(
-                  color: OkeyColors.cream,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                entry.subtitle,
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 10.5,
-                  height: 1.3,
-                ),
-              ),
-            ],
-          ),
+  Widget build(BuildContext context) => GestureDetector(
+    key: ValueKey('feature-entry-${entry.title}'),
+    behavior: HitTestBehavior.opaque,
+    onTap: onTap,
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: onTap == null ? 0.055 : 0.085),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: OkeyColors.gold.withValues(alpha: onTap == null ? 0.2 : 0.5),
         ),
-        if (entry.badge != null) ...[
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(
-              color: OkeyColors.gold.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              entry.badge!,
-              style: const TextStyle(
-                color: OkeyColors.goldLight,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-              ),
+      ),
+      child: Row(
+        children: [
+          Icon(entry.icon, color: OkeyColors.goldLight, size: 22),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.title,
+                  style: const TextStyle(
+                    color: OkeyColors.cream,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  entry.subtitle,
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
             ),
           ),
+          if (entry.badge != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: OkeyColors.gold.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                entry.badge!,
+                style: const TextStyle(
+                  color: OkeyColors.goldLight,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+          if (onTap != null) ...[
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.play_arrow_rounded,
+              color: OkeyColors.goldLight,
+              size: 22,
+            ),
+          ],
         ],
-      ],
+      ),
     ),
   );
 }

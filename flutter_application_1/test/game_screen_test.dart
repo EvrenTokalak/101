@@ -30,6 +30,7 @@ void main() {
 
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
       expect(find.text('İŞLE'), findsOneWidget);
+      expect(find.text('GERİ AL'), findsNothing);
       expect(find.text('ÇİFT AÇ'), findsOneWidget);
       expect(find.text('SERİ AÇ'), findsOneWidget);
       expect(find.text('SERİ DİZ'), findsOneWidget);
