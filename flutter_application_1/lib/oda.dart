@@ -178,7 +178,8 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
             child: Image.asset(
               'images/anamenu/menubg.png',
               fit: BoxFit.cover,
-              filterQuality: FilterQuality.high,
+              cacheWidth: 1440,
+              filterQuality: FilterQuality.medium,
             ),
           ),
           Positioned.fill(

@@ -20,6 +20,10 @@ void main() {
       expect(find.text('ÇEYREK FİNAL'), findsOneWidget);
       expect(find.text('YARI FİNAL'), findsOneWidget);
       expect(find.text('FİNAL'), findsOneWidget);
+      expect(find.text('OYUNCU 2'), findsNWidgets(3));
+      expect(find.text('OYUNCU 3'), findsNWidgets(3));
+      expect(find.text('OYUNCU 4'), findsNWidgets(3));
+      expect(find.textContaining('Rakip'), findsNothing);
       expect(find.byKey(const ValueKey('tournament-action')), findsOneWidget);
     }
   });

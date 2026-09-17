@@ -1,6 +1,6 @@
 enum GameEntryPoint { quickPlay, gameMode, room, tournament }
 
-enum OkeyGameMode { classic101, paired101, progressive }
+enum OkeyGameMode { standard, classic101, paired101, progressive }
 
 /// Bir oyun masasının hangi ekrandan ve hangi seçimle açıldığını taşır.
 /// Moda/odaya özel kurallar ileride bu nesne üzerinden ayrıştırılabilir.
@@ -26,7 +26,7 @@ class GameLaunchConfig {
   const GameLaunchConfig.quickPlay()
     : this._(
         entryPoint: GameEntryPoint.quickPlay,
-        mode: OkeyGameMode.classic101,
+        mode: OkeyGameMode.standard,
         selectionId: 'quick-play',
         selectionLabel: 'Hemen Oyna',
       );
@@ -57,7 +57,7 @@ class GameLaunchConfig {
   const GameLaunchConfig.tournament({
     required int round,
     required String roundLabel,
-    required String opponent,
+    String? opponent,
   }) : this._(
          entryPoint: GameEntryPoint.tournament,
          mode: OkeyGameMode.classic101,
@@ -70,7 +70,8 @@ class GameLaunchConfig {
   bool get isTournament => entryPoint == GameEntryPoint.tournament;
 
   String get modeLabel => switch (mode) {
-    OkeyGameMode.classic101 => 'Klasik 101',
+    OkeyGameMode.standard => 'Sıradan',
+    OkeyGameMode.classic101 => 'Eliminasyon 101',
     OkeyGameMode.paired101 => 'Eşli 101',
     OkeyGameMode.progressive => 'Katlamalı',
   };

@@ -14,7 +14,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
 
     expect(find.byKey(const ValueKey('main-xp-chip')), findsOneWidget);
-    expect(find.textContaining('SV. 9'), findsOneWidget);
+    expect(find.textContaining('SV. 0'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pump();
@@ -60,7 +60,7 @@ void main() {
     await tester.tap(find.text('Evren'));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('PROFİLİM'), findsOneWidget);
-    expect(find.textContaining('Seviye 9'), findsOneWidget);
+    expect(find.textContaining('Seviye 0'), findsOneWidget);
     expect(find.text('Kazanma Oranı'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.close_rounded).last);

@@ -17,7 +17,7 @@ class LevelBand {
 }
 
 const levelBands = <LevelBand>[
-  LevelBand(1, 2, 'Beginner', 30),
+  LevelBand(0, 2, 'Beginner', 30),
   LevelBand(3, 4, 'Rookie', 30),
   LevelBand(5, 9, 'Learner', 50),
   LevelBand(10, 14, 'Novice', 50),
@@ -67,7 +67,7 @@ class PlayerProgressController extends ChangeNotifier {
   SharedPreferencesAsync? _preferences;
 
   int _coins = 25600;
-  int _level = 9;
+  int _level = 0;
   int _levelXp = 0;
   int _gamesPlayed = 0;
   int _gamesWon = 0;
@@ -102,7 +102,7 @@ class PlayerProgressController extends ChangeNotifier {
     final preferences = _preferences ??= SharedPreferencesAsync();
 
     _coins = (await preferences.getInt(_coinsKey) ?? _coins).clamp(0, 1 << 31);
-    _level = (await preferences.getInt(_levelKey) ?? _level).clamp(1, 99);
+    _level = (await preferences.getInt(_levelKey) ?? _level).clamp(0, 99);
     _levelXp = (await preferences.getInt(_levelXpKey) ?? _levelXp).clamp(
       0,
       1 << 31,
@@ -122,6 +122,14 @@ class PlayerProgressController extends ChangeNotifier {
         );
     _totalXpEarned = (await preferences.getInt(_totalXpKey) ?? _totalXpEarned)
         .clamp(0, 1 << 31);
+
+    // Eski geliştirme sürümünde boş profiller seviye 9 ile başlıyordu.
+    if (_level == 9 &&
+        _levelXp == 0 &&
+        _gamesPlayed == 0 &&
+        _totalXpEarned == 0) {
+      _level = 0;
+    }
 
     while (!isMaxLevel && _levelXp >= xpForNextLevel) {
       _levelXp -= xpForNextLevel;
@@ -231,9 +239,9 @@ class PlayerProgressController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  void reset({int coins = 25600, int level = 9, int levelXp = 0}) {
+  void reset({int coins = 25600, int level = 0, int levelXp = 0}) {
     _coins = coins;
-    _level = level.clamp(1, 99);
+    _level = level.clamp(0, 99);
     _levelXp = levelXp;
     _gamesPlayed = 0;
     _gamesWon = 0;

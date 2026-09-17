@@ -39,6 +39,8 @@ class _DeckDrawHandle extends StatelessWidget {
   final VoidCallback onDraw;
   final double feedbackWidth;
   final double feedbackHeight;
+  final double displayWidth;
+  final double displayHeight;
 
   const _DeckDrawHandle({
     required this.enabled,
@@ -46,11 +48,17 @@ class _DeckDrawHandle extends StatelessWidget {
     required this.onDraw,
     required this.feedbackWidth,
     required this.feedbackHeight,
+    required this.displayWidth,
+    required this.displayHeight,
   });
 
   @override
   Widget build(BuildContext context) {
-    final stack = _DeckStack(count: count);
+    final stack = _DeckStack(
+      count: count,
+      tileWidth: displayWidth,
+      tileHeight: displayHeight,
+    );
     if (!enabled) return Opacity(opacity: 0.72, child: stack);
     return Tooltip(
       message: 'Dokun veya ıstakaya sürükleyerek taş çek',
@@ -66,7 +74,11 @@ class _DeckDrawHandle extends StatelessWidget {
         ),
         childWhenDragging: Opacity(
           opacity: 0.78,
-          child: _DeckStack(count: max(0, count - 1)),
+          child: _DeckStack(
+            count: max(0, count - 1),
+            tileWidth: displayWidth,
+            tileHeight: displayHeight,
+          ),
         ),
         child: _PressScale(
           child: GestureDetector(onTap: onDraw, child: stack),
@@ -81,7 +93,12 @@ class _TileBack extends StatelessWidget {
   final double height;
   final bool showBorder;
 
-  const _TileBack({this.width = 40, this.height = 52, this.showBorder = true});
+  const _TileBack({
+    super.key,
+    this.width = 40,
+    this.height = 52,
+    this.showBorder = true,
+  });
 
   @override
   Widget build(BuildContext context) => Container(

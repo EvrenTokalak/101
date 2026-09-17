@@ -25,10 +25,7 @@ void main() {
     expect(find.text('Grid Büyüteci'), findsOneWidget);
     expect(find.text('Yazı Boyutu'), findsOneWidget);
     expect(find.text('Müzik'), findsNothing);
-    expect(
-      find.textContaining('Klasik 101', findRichText: true),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Sıradan', findRichText: true), findsOneWidget);
     expect(
       find.textContaining('Hemen Oyna', findRichText: true),
       findsOneWidget,
@@ -73,7 +70,10 @@ void main() {
     expect(find.byKey(const ValueKey('game-match-info')), findsOneWidget);
     expect(find.textContaining('Turnuva', findRichText: true), findsOneWidget);
     expect(
-      find.textContaining('YARI FİNAL', findRichText: true),
+      find.descendant(
+        of: find.byKey(const ValueKey('game-match-info')),
+        matching: find.textContaining('YARI FİNAL', findRichText: true),
+      ),
       findsOneWidget,
     );
     expect(

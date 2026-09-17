@@ -389,6 +389,37 @@ void main() {
       );
     });
 
+    test('otomatik işlemede 1-2-okey-4 perindeki okey öncelikle alınır', () {
+      final replacement = tile(3, TileColor.red);
+      final extendableRun = Meld(
+        tiles: [
+          tile(4, TileColor.red),
+          tile(5, TileColor.red),
+          tile(6, TileColor.red),
+        ],
+        type: 'seri',
+      );
+      final okeyRun = Meld(
+        tiles: [
+          tile(1, TileColor.red),
+          tile(2, TileColor.red),
+          tile(9, TileColor.blue, isOkey: true),
+          tile(4, TileColor.red),
+        ],
+        type: 'seri',
+      );
+
+      expect(Rules.okeyReplacementIndex(okeyRun, replacement), 2);
+      expect(
+        Rules.okeyReplacementIndex(okeyRun, tile(5, TileColor.red)),
+        isNull,
+      );
+      expect(
+        Rules.preferredMeldIndexForTile([extendableRun, okeyRun], replacement),
+        1,
+      );
+    });
+
     test('birden fazla okey kalan perden okey geri alınamaz', () {
       final group = Meld(
         tiles: [

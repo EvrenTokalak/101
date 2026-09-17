@@ -11,6 +11,14 @@ void main() {
     progress.reset(level: 9);
   });
 
+  test('yeni oyuncu seviye 0 ile başlar', () {
+    final freshProgress = PlayerProgressController();
+
+    expect(freshProgress.level, 0);
+    expect(freshProgress.title, 'Beginner');
+    expect(freshProgress.xpForNextLevel, 30);
+  });
+
   test('görseldeki seviye bantları doğru unvan ve XP eşiğini verir', () {
     expect(progress.title, 'Learner');
     expect(progress.xpForNextLevel, 50);

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'game_launch.dart';
+import 'game_mode_select.dart';
 import 'game_navigation.dart';
 import 'oda.dart' as oda;
 import 'player_progress.dart';
@@ -565,28 +566,32 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     await openGameScreen<void>(context, config: config);
   }
 
-  GameLaunchConfig _gameModeConfig(String selection) => switch (selection) {
-    'Eşli 101' => const GameLaunchConfig.gameMode(
-      mode: OkeyGameMode.paired101,
-      id: 'paired-101',
-      label: 'Eşli 101',
-    ),
-    'Katlamalı' => const GameLaunchConfig.gameMode(
-      mode: OkeyGameMode.progressive,
-      id: 'progressive',
-      label: 'Katlamalı',
-    ),
-    _ => const GameLaunchConfig.gameMode(
-      mode: OkeyGameMode.classic101,
-      id: 'classic-101',
-      label: 'Klasik 101',
-    ),
-  };
-
   Future<void> _navigateToRoomSelect() async {
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
         pageBuilder: (_, _, _) => const oda.RoomSelectScreen(),
+        transitionDuration: const Duration(milliseconds: 420),
+        transitionsBuilder: (_, animation, _, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _navigateToGameModeSelect() async {
+    await Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        pageBuilder: (_, _, _) => const GameModeSelectScreen(),
         transitionDuration: const Duration(milliseconds: 420),
         transitionsBuilder: (_, animation, _, child) {
           final curved = CurvedAnimation(
@@ -635,7 +640,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     required String title,
     required String description,
   }) async {
-    final selection = await showGeneralDialog<String>(
+    await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: '$title penceresini kapat',
@@ -645,9 +650,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         icon: icon,
         title: title,
         description: description,
-        onEntryTap: title == 'OYUN MODLARI'
-            ? (entryTitle) => Navigator.of(dialogContext).pop(entryTitle)
-            : null,
+        onEntryTap: null,
       ),
       transitionBuilder: (_, animation, _, child) {
         final curved = CurvedAnimation(
@@ -664,9 +667,6 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         );
       },
     );
-    if (selection != null && mounted) {
-      await _navigateToGame(_gameModeConfig(selection));
-    }
   }
 
   Future<void> _openSettings() async {
@@ -709,7 +709,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
             child: Image.asset(
               'images/anamenu/menubg.png',
               fit: BoxFit.cover,
-              filterQuality: FilterQuality.high,
+              cacheWidth: 1440,
+              filterQuality: FilterQuality.medium,
             ),
           ),
           Positioned.fill(
@@ -780,6 +781,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                     width: 196,
                     child: _RightButtonColumn(
                       onSelectRoom: _navigateToRoomSelect,
+                      onSelectMode: _navigateToGameModeSelect,
                       onTournament: _navigateToTournament,
                       onOpen: (icon, title, description) => _openFeaturePopup(
                         icon: icon,
@@ -1178,7 +1180,7 @@ class _FeatureDialog extends StatelessWidget {
     'OYUN MODLARI' => const [
       _FeatureEntry(
         Icons.looks_one_rounded,
-        'Klasik 101',
+        'Eliminasyon 101',
         'Tekli oyun · Standart kurallar',
         null,
       ),
@@ -2082,10 +2084,12 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
 // ─── Sağ Sütun 4 Buton ───────────────────────────────────────────────────────
 class _RightButtonColumn extends StatelessWidget {
   final VoidCallback onSelectRoom;
+  final VoidCallback onSelectMode;
   final VoidCallback onTournament;
   final void Function(IconData icon, String title, String description) onOpen;
   const _RightButtonColumn({
     required this.onSelectRoom,
+    required this.onSelectMode,
     required this.onTournament,
     required this.onOpen,
   });
@@ -2101,7 +2105,7 @@ class _RightButtonColumn extends StatelessWidget {
       (
         Icons.lock_outline,
         'OYUN MODLARI',
-        'Klasik 101, eşli oyun ve farklı masa kurallarını buradan seçebilirsin.',
+        'Eliminasyon 101, eşli oyun ve farklı masa kurallarını buradan seçebilirsin.',
       ),
       (
         Icons.emoji_events_outlined,
@@ -2129,6 +2133,8 @@ class _RightButtonColumn extends StatelessWidget {
                 label: label,
                 onTap: i == 0
                     ? onSelectRoom
+                    : i == 1
+                    ? onSelectMode
                     : i == 2
                     ? onTournament
                     : () => onOpen(icon, label, description),

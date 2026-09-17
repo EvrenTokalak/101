@@ -12,22 +12,23 @@ class TournamentScreen extends StatefulWidget {
 
 class _TournamentScreenState extends State<TournamentScreen> {
   static const _roundNames = ['ÇEYREK FİNAL', 'YARI FİNAL', 'FİNAL'];
-  static const _opponents = ['Deniz', 'Efe', 'Şampiyon Ada'];
   int _round = 0;
   bool _eliminated = false;
   bool _champion = false;
+  bool _matchStarted = false;
 
   Future<void> _startMatch() async {
+    setState(() => _matchStarted = true);
     final won = await openGameScreen<bool>(
       context,
       config: GameLaunchConfig.tournament(
         round: _round,
         roundLabel: _roundNames[_round],
-        opponent: _opponents[_round],
       ),
     );
     if (!mounted || won == null) return;
     setState(() {
+      _matchStarted = false;
       if (!won) {
         _eliminated = true;
       } else if (_round == 2) {
@@ -42,7 +43,13 @@ class _TournamentScreenState extends State<TournamentScreen> {
     _round = 0;
     _eliminated = false;
     _champion = false;
+    _matchStarted = false;
   });
+
+  Future<void> _restartAndStart() async {
+    _restart();
+    await _startMatch();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -90,11 +97,12 @@ class _TournamentScreenState extends State<TournamentScreen> {
                     ),
                     child: _TournamentAction(
                       roundName: _roundNames[_round],
-                      opponent: _opponents[_round],
                       eliminated: _eliminated,
                       champion: _champion,
+                      matchStarted: _matchStarted,
                       onStart: _startMatch,
                       onRestart: _restart,
+                      onRestartAndStart: _restartAndStart,
                     ),
                   ),
                 ],
@@ -140,7 +148,7 @@ class _TournamentHeader extends StatelessWidget {
                 ),
               ),
               Text(
-                'Üç maç · Tek şampiyon',
+                '3 tur · Her masada 4 oyuncu',
                 style: TextStyle(color: Colors.white60, fontSize: 10),
               ),
             ],
@@ -250,37 +258,16 @@ class _RoundColumn extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        _MatchCard(
-          player: 'OYUNCU 1',
-          opponent: _TournamentScreenState._opponents[round],
-          reached: reached,
-          won: won,
-        ),
-        if (round == 0) ...[
-          const SizedBox(height: 10),
-          const _MatchCard(
-            player: 'Mert',
-            opponent: 'Selin',
-            reached: true,
-            won: false,
-          ),
-        ],
+        _TableCard(reached: reached, won: won),
       ],
     ),
   );
 }
 
-class _MatchCard extends StatelessWidget {
-  final String player;
-  final String opponent;
+class _TableCard extends StatelessWidget {
   final bool reached;
   final bool won;
-  const _MatchCard({
-    required this.player,
-    required this.opponent,
-    required this.reached,
-    required this.won,
-  });
+  const _TableCard({required this.reached, required this.won});
 
   @override
   Widget build(BuildContext context) => AnimatedContainer(
@@ -302,9 +289,13 @@ class _MatchCard extends StatelessWidget {
     ),
     child: Column(
       children: [
-        _Competitor(name: player, highlighted: reached),
-        const Divider(color: Colors.white12, height: 10),
-        _Competitor(name: opponent, highlighted: false),
+        _Competitor(name: 'SEN', highlighted: reached),
+        const Divider(color: Colors.white12, height: 8),
+        const _Competitor(name: 'OYUNCU 2', highlighted: false),
+        const Divider(color: Colors.white12, height: 8),
+        const _Competitor(name: 'OYUNCU 3', highlighted: false),
+        const Divider(color: Colors.white12, height: 8),
+        const _Competitor(name: 'OYUNCU 4', highlighted: false),
       ],
     ),
   );
@@ -338,18 +329,20 @@ class _Competitor extends StatelessWidget {
 
 class _TournamentAction extends StatelessWidget {
   final String roundName;
-  final String opponent;
   final bool eliminated;
   final bool champion;
+  final bool matchStarted;
   final VoidCallback onStart;
   final VoidCallback onRestart;
+  final VoidCallback onRestartAndStart;
   const _TournamentAction({
     required this.roundName,
-    required this.opponent,
     required this.eliminated,
     required this.champion,
+    required this.matchStarted,
     required this.onStart,
     required this.onRestart,
+    required this.onRestartAndStart,
   });
 
   @override
@@ -358,33 +351,71 @@ class _TournamentAction extends StatelessWidget {
         ? 'TURNUVA ŞAMPİYONU!'
         : eliminated
         ? 'TURNUVADAN ELENDİN'
-        : '$roundName · Rakip: $opponent';
+        : '$roundName · 4 KİŞİLİK MASA';
+    final titleWidget = Text(
+      title,
+      style: TextStyle(
+        color: champion ? const Color(0xFFFFD45A) : Colors.white,
+        fontWeight: FontWeight.w900,
+        fontSize: 13,
+      ),
+    );
+    final primaryButton = FilledButton.icon(
+      key: const ValueKey('tournament-action'),
+      onPressed: eliminated || champion ? onRestart : onStart,
+      style: FilledButton.styleFrom(
+        backgroundColor: eliminated || champion
+            ? const Color(0xFF8B5A17)
+            : const Color(0xFF16863C),
+        foregroundColor: Colors.white,
+      ),
+      icon: Icon(
+        eliminated || champion
+            ? Icons.refresh
+            : matchStarted
+            ? Icons.play_arrow_rounded
+            : Icons.sports_esports,
+      ),
+      label: Text(
+        eliminated || champion
+            ? 'YENİDEN BAŞLA'
+            : matchStarted
+            ? 'DEVAM ET'
+            : 'MAÇA BAŞLA',
+      ),
+    );
+
+    if (matchStarted && !eliminated && !champion) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          titleWidget,
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('tournament-restart'),
+                onPressed: onRestartAndStart,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFFFD76A),
+                  side: const BorderSide(color: Color(0xFFC99632)),
+                ),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('TEKRAR BAŞLA'),
+              ),
+              const SizedBox(width: 8),
+              primaryButton,
+            ],
+          ),
+        ],
+      );
+    }
+
     return Row(
       children: [
-        Expanded(
-          child: Text(
-            title,
-            style: TextStyle(
-              color: champion ? const Color(0xFFFFD45A) : Colors.white,
-              fontWeight: FontWeight.w900,
-              fontSize: 13,
-            ),
-          ),
-        ),
-        FilledButton.icon(
-          key: const ValueKey('tournament-action'),
-          onPressed: eliminated || champion ? onRestart : onStart,
-          style: FilledButton.styleFrom(
-            backgroundColor: eliminated || champion
-                ? const Color(0xFF8B5A17)
-                : const Color(0xFF16863C),
-            foregroundColor: Colors.white,
-          ),
-          icon: Icon(
-            eliminated || champion ? Icons.refresh : Icons.sports_esports,
-          ),
-          label: Text(eliminated || champion ? 'YENİDEN BAŞLA' : 'MAÇA BAŞLA'),
-        ),
+        Expanded(child: titleWidget),
+        primaryButton,
       ],
     );
   }

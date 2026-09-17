@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
+import 'package:flutter_application_1/game_mode_select.dart';
 import 'package:flutter_application_1/main.dart' as app;
 import 'package:flutter_application_1/oda.dart';
 import 'package:flutter_application_1/player_progress.dart';
@@ -25,6 +26,28 @@ void main() {
     playerProgress.reset();
   });
 
+  testWidgets('Eliminasyon seçimi ayrı oyun modu olarak açılır', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: GameModeSelectScreen()));
+    await tester.pump(const Duration(milliseconds: 650));
+
+    await tester.tap(
+      find.byKey(const ValueKey('game-mode-card-elimination-101')),
+    );
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.tap(find.byKey(const ValueKey('game-mode-start')));
+    await pumpRouteTransition(tester);
+
+    final game = tester.widget<GameScreen>(find.byType(GameScreen));
+    expect(game.launchConfig.mode, OkeyGameMode.classic101);
+    expect(game.launchConfig.modeLabel, 'Eliminasyon 101');
+    expect(tester.takeException(), isNull);
+    await disposeGameRoute(tester);
+  });
+
   testWidgets('Katlamalı seçimi oyun ekranını doğru modla açar', (
     tester,
   ) async {
@@ -34,8 +57,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 750));
 
     await tester.tap(find.text('OYUN MODLARI'));
+    await pumpRouteTransition(tester);
+    expect(find.byType(GameModeSelectScreen), findsOneWidget);
+    expect(find.text('Eliminasyon 101'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('game-mode-card-progressive')));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.byKey(const ValueKey('feature-entry-Katlamalı')));
+    await tester.tap(find.byKey(const ValueKey('game-mode-start')));
     await pumpRouteTransition(tester);
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
@@ -77,8 +105,28 @@ void main() {
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
     expect(game.launchConfig.entryPoint, GameEntryPoint.tournament);
     expect(game.launchConfig.tournamentRound, 0);
-    expect(game.launchConfig.opponent, 'Deniz');
+    expect(game.launchConfig.opponent, isNull);
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
   });
+
+  testWidgets(
+    'başlanmış turnuva maçı devam ve tekrar başla seçeneklerini gösterir',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(const MaterialApp(home: TournamentScreen()));
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('tournament-action')));
+      await pumpRouteTransition(tester);
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await pumpRouteTransition(tester);
+
+      expect(find.text('DEVAM ET'), findsOneWidget);
+      expect(find.text('TEKRAR BAŞLA'), findsOneWidget);
+      expect(find.textContaining('Rakip'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
