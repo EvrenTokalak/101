@@ -8,12 +8,17 @@ import 'game_mode_select.dart';
 import 'game_navigation.dart';
 import 'oda.dart' as oda;
 import 'player_progress.dart';
+import 'performance_overlay.dart';
+import 'route_activity.dart';
 import 'tournament.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await playerProgress.load();
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  await SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -55,6 +60,7 @@ class OkeyApp extends StatelessWidget {
     return MaterialApp(
       title: '101 Okey',
       debugShowCheckedModeBanner: false,
+      navigatorObservers: [appRouteObserver],
       theme: ThemeData(
         fontFamily: 'Georgia',
         scaffoldBackgroundColor: OkeyColors.tableDark,
@@ -65,11 +71,13 @@ class OkeyApp extends StatelessWidget {
           child: child,
           builder: (context, settings, appChild) {
             final mediaQuery = MediaQuery.of(context);
-            return MediaQuery(
-              data: mediaQuery.copyWith(
-                textScaler: TextScaler.linear(settings.fontScale),
+            return AppPerformanceOverlay(
+              child: MediaQuery(
+                data: mediaQuery.copyWith(
+                  textScaler: TextScaler.linear(settings.fontScale),
+                ),
+                child: appChild ?? const SizedBox.shrink(),
               ),
-              child: appChild ?? const SizedBox.shrink(),
             );
           },
         );
@@ -143,8 +151,9 @@ class _SplashScreenState extends State<SplashScreen>
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(
-          pageBuilder: (_, _, _) => const MainMenuScreen(),
-          transitionDuration: const Duration(milliseconds: 500),
+          pageBuilder: (_, _, _) =>
+              const ActiveRouteScene(child: MainMenuScreen()),
+          transitionDuration: const Duration(milliseconds: 200),
           transitionsBuilder: (_, anim, _, child) =>
               FadeTransition(opacity: anim, child: child),
         ),
@@ -569,20 +578,15 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   Future<void> _navigateToRoomSelect() async {
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) => const oda.RoomSelectScreen(),
-        transitionDuration: const Duration(milliseconds: 420),
+        pageBuilder: (_, _, _) =>
+            const ActiveRouteScene(child: oda.RoomSelectScreen()),
+        transitionDuration: const Duration(milliseconds: 180),
         transitionsBuilder: (_, animation, _, child) {
           final curved = CurvedAnimation(
             parent: animation,
             curve: Curves.easeOutCubic,
           );
-          return FadeTransition(
-            opacity: curved,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
-              child: child,
-            ),
-          );
+          return FadeTransition(opacity: curved, child: child);
         },
       ),
     );
@@ -591,20 +595,15 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   Future<void> _navigateToGameModeSelect() async {
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) => const GameModeSelectScreen(),
-        transitionDuration: const Duration(milliseconds: 420),
+        pageBuilder: (_, _, _) =>
+            const ActiveRouteScene(child: GameModeSelectScreen()),
+        transitionDuration: const Duration(milliseconds: 180),
         transitionsBuilder: (_, animation, _, child) {
           final curved = CurvedAnimation(
             parent: animation,
             curve: Curves.easeOutCubic,
           );
-          return FadeTransition(
-            opacity: curved,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
-              child: child,
-            ),
-          );
+          return FadeTransition(opacity: curved, child: child);
         },
       ),
     );
@@ -613,23 +612,15 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   Future<void> _navigateToTournament() async {
     await Navigator.of(context).push(
       PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) => const TournamentScreen(),
-        transitionDuration: const Duration(milliseconds: 480),
+        pageBuilder: (_, _, _) =>
+            const ActiveRouteScene(child: TournamentScreen()),
+        transitionDuration: const Duration(milliseconds: 200),
         transitionsBuilder: (_, animation, _, child) {
           final curved = CurvedAnimation(
             parent: animation,
             curve: Curves.easeOutCubic,
           );
-          return FadeTransition(
-            opacity: curved,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.06, 0),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            ),
-          );
+          return FadeTransition(opacity: curved, child: child);
         },
       ),
     );
@@ -760,15 +751,20 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                   Positioned.fill(
                     child: Padding(
                       padding: const EdgeInsets.only(right: 200),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _BigLogo(),
-                          const SizedBox(height: 22),
-                          const _MenuTileRow(),
-                          const SizedBox(height: 22),
-                          _HemenOynaButton(onTap: () => _navigateToGame()),
-                        ],
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _BigLogo(),
+                              const SizedBox(height: 22),
+                              const _MenuTileRow(),
+                              const SizedBox(height: 22),
+                              _HemenOynaButton(onTap: () => _navigateToGame()),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -879,9 +875,9 @@ class _ProfileChip extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text(
-                        'Evren',
-                        style: TextStyle(
+                      Text(
+                        playerProgress.playerName,
+                        style: const TextStyle(
                           color: OkeyColors.cream,
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
@@ -1093,6 +1089,103 @@ class _IconBtn extends StatelessWidget {
 }
 
 // ─── Büyük 101 OKEY Logosu ────────────────────────────────────────────────────
+class _ProfileNameEditor extends StatefulWidget {
+  const _ProfileNameEditor();
+
+  @override
+  State<_ProfileNameEditor> createState() => _ProfileNameEditorState();
+}
+
+class _ProfileNameEditorState extends State<_ProfileNameEditor> {
+  late final TextEditingController _controller;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: playerProgress.playerName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final saved = playerProgress.updatePlayerName(_controller.text);
+    setState(() {
+      _errorText = saved ? null : 'İsim 1-18 karakter arasında olmalı.';
+    });
+    if (saved) {
+      _controller.text = playerProgress.playerName;
+      _controller.selection = TextSelection.collapsed(
+        offset: _controller.text.length,
+      );
+      FocusScope.of(context).unfocus();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('profile-name-editor'),
+    padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.06),
+      borderRadius: BorderRadius.circular(11),
+      border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.45)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: TextField(
+            key: const ValueKey('profile-name-field'),
+            controller: _controller,
+            maxLength: 18,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _save(),
+            style: const TextStyle(
+              color: OkeyColors.cream,
+              fontWeight: FontWeight.bold,
+            ),
+            decoration: InputDecoration(
+              labelText: 'Oyuncu adı',
+              labelStyle: const TextStyle(color: OkeyColors.goldLight),
+              errorText: _errorText,
+              counterStyle: const TextStyle(color: Colors.white38),
+              isDense: true,
+              enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white30),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: OkeyColors.goldLight, width: 2),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: FilledButton(
+            key: const ValueKey('profile-name-save'),
+            onPressed: _save,
+            style: FilledButton.styleFrom(
+              backgroundColor: OkeyColors.gold,
+              foregroundColor: OkeyColors.buttonBrown,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            ),
+            child: const Text(
+              'KAYDET',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _FeatureDialog extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -1336,6 +1429,10 @@ class _FeatureDialog extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 14),
+                      if (title == 'PROFİLİM') ...[
+                        const _ProfileNameEditor(),
+                        const SizedBox(height: 12),
+                      ],
                       ..._entries.map(
                         (entry) => _FeatureEntryCard(
                           entry: entry,
@@ -2122,25 +2219,30 @@ class _RightButtonColumn extends StatelessWidget {
     return Center(
       child: Padding(
         padding: const EdgeInsets.only(right: 14, left: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(buttons.length, (i) {
-            final (icon, label, description) = buttons[i];
-            return Padding(
-              padding: EdgeInsets.only(bottom: i < buttons.length - 1 ? 10 : 0),
-              child: _RightSideButton(
-                icon: icon,
-                label: label,
-                onTap: i == 0
-                    ? onSelectRoom
-                    : i == 1
-                    ? onSelectMode
-                    : i == 2
-                    ? onTournament
-                    : () => onOpen(icon, label, description),
-              ),
-            );
-          }),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(buttons.length, (i) {
+              final (icon, label, description) = buttons[i];
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: i < buttons.length - 1 ? 10 : 0,
+                ),
+                child: _RightSideButton(
+                  icon: icon,
+                  label: label,
+                  onTap: i == 0
+                      ? onSelectRoom
+                      : i == 1
+                      ? onSelectMode
+                      : i == 2
+                      ? onTournament
+                      : () => onOpen(icon, label, description),
+                ),
+              );
+            }),
+          ),
         ),
       ),
     );

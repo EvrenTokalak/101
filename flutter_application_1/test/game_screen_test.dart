@@ -120,7 +120,8 @@ void main() {
         );
         expect(player3Discard.dy, closeTo(player2Discard.dy, 0.1));
         expect(player3Discard.dx, closeTo(player4Discard.dx, 0.1));
-        expect(player1Discard.dx, closeTo(player2Discard.dx, 0.1));
+        expect(player1Discard.dx, greaterThan(player2Discard.dx));
+        expect(player1Discard.dx - player2Discard.dx, lessThanOrEqualTo(10));
 
         final runGridRect = tester.getRect(
           find.byKey(const ValueKey('run-meld-grid')),
@@ -142,6 +143,13 @@ void main() {
           modeCaptionCenter.dx,
           inInclusiveRange(groupGridRect.left, groupGridRect.right),
         );
+        final playerDiscardZone = tester.getRect(
+          find.byKey(const ValueKey('discard-target-Oyuncu 1')),
+        );
+        expect(playerDiscardZone.top, greaterThan(player2.dy));
+        expect(playerDiscardZone.left, lessThan(groupGridRect.right));
+        expect(playerDiscardZone.right, greaterThan(groupGridRect.right));
+        expect(playerDiscardZone.height, greaterThan(66));
         for (final label in const [
           'Oyuncu 1',
           'Oyuncu 2',
@@ -151,6 +159,10 @@ void main() {
           final discardRect = tester.getRect(
             find.byKey(ValueKey('discard-$label')),
           );
+          final discardTargetRect = tester.getRect(
+            find.byKey(ValueKey('discard-target-$label')),
+          );
+          expect(discardTargetRect.width, greaterThan(discardRect.width + 40));
           expect(discardRect.overlaps(runGridRect), isFalse);
           expect(discardRect.overlaps(groupGridRect), isFalse);
         }
@@ -190,7 +202,16 @@ void main() {
           expect(gridViewer.scaleEnabled, isTrue);
           expect(gridViewer.minScale, 1);
           expect(gridViewer.maxScale, 3.4);
+          expect(gridViewer.boundaryMargin, EdgeInsets.zero);
         }
+        final firstController = gridViewers.first.transformationController!;
+        firstController.value = Matrix4.diagonal3Values(2, 2, 1);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('grid-reset-button')), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('grid-reset-button')));
+        await tester.pumpAndSettle();
+        expect(firstController.value.getMaxScaleOnAxis(), closeTo(1, 0.001));
+        expect(find.byKey(const ValueKey('grid-reset-button')), findsNothing);
         expect(find.byTooltip('Gridi yakınlaştır'), findsNothing);
         expect(find.byTooltip('Gridi uzaklaştır'), findsNothing);
         expect(tester.takeException(), isNull);
@@ -199,7 +220,7 @@ void main() {
     }
   });
 
-  testWidgets('cift diz sonrasi ozet kutusu cift sayisini gosterir', (
+  testWidgets('cift diz sonrasi ozet kutusu toplam etiketini gosterir', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
@@ -214,7 +235,7 @@ void main() {
     await tester.tap(find.text('ÇİFT DİZ'));
     await tester.pump();
 
-    expect(find.text('ÇİFT SAYISI'), findsOneWidget);
+    expect(find.text('TOPLAM'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(seconds: 3));
   });
@@ -245,8 +266,15 @@ void main() {
     expect(find.descendant(of: drawArea, matching: perSummary), findsOneWidget);
     expect(find.descendant(of: drawArea, matching: indicator), findsOneWidget);
     expect(find.descendant(of: drawArea, matching: deckSlot), findsOneWidget);
-    expect(tester.getSize(perSummary), tester.getSize(indicator));
-    expect(tester.getSize(perSummary), tester.getSize(deckSlot));
+    expect(
+      tester.getSize(perSummary).width,
+      greaterThan(tester.getSize(indicator).width),
+    );
+    expect(tester.getSize(indicator).width, tester.getSize(deckSlot).width);
+    expect(
+      tester.getSize(perSummary).height,
+      greaterThan(tester.getSize(indicator).height),
+    );
     final drawAreaRect = tester.getRect(drawArea);
     final perSummaryRect = tester.getRect(perSummary);
     expect(perSummaryRect.left - drawAreaRect.left, lessThan(8));

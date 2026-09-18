@@ -37,12 +37,14 @@ class GameSettings {
 class GameSettingsDialog extends StatefulWidget {
   final GameSettings initial;
   final GameLaunchConfig launchConfig;
+  final ValueChanged<GameSettings> onRestart;
   final VoidCallback onExitToMenu;
 
   const GameSettingsDialog({
     super.key,
     required this.initial,
     required this.launchConfig,
+    required this.onRestart,
     required this.onExitToMenu,
   });
 
@@ -162,29 +164,47 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
-                child: OverflowBar(
-                  alignment: MainAxisAlignment.spaceBetween,
-                  overflowSpacing: 8,
+                child: Row(
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: widget.onExitToMenu,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: OC.numRed,
-                        side: const BorderSide(color: OC.numRed),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onExitToMenu,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: OC.numRed,
+                          side: const BorderSide(color: OC.numRed),
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                        ),
+                        icon: const Icon(Icons.logout_rounded, size: 17),
+                        label: const FittedBox(child: Text('ANA MENÜ')),
                       ),
-                      icon: const Icon(Icons.logout_rounded),
-                      label: const Text('ANA MENÜYE DÖN'),
                     ),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(
-                        context,
-                        rootNavigator: true,
-                      ).pop(settings),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: OC.btnBrown,
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => widget.onRestart(settings),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: OC.btnBrown,
+                          side: const BorderSide(color: OC.gold),
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                        ),
+                        icon: const Icon(Icons.restart_alt_rounded, size: 17),
+                        label: const FittedBox(child: Text('RESTART')),
                       ),
-                      icon: const Icon(Icons.check_rounded),
-                      label: const Text('KAYDET'),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.of(
+                          context,
+                          rootNavigator: true,
+                        ).pop(settings),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: OC.btnBrown,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                        ),
+                        icon: const Icon(Icons.check_rounded, size: 17),
+                        label: const FittedBox(child: Text('KAYDET')),
+                      ),
                     ),
                   ],
                 ),

@@ -26,6 +26,8 @@ class _DiscardDrawHandle extends StatelessWidget {
     if (!enabled) return content;
     return Draggable<_DiscardDragData>(
       data: const _DiscardDragData(),
+      dragAnchorStrategy: (_, _, _) => const Offset(13.5, 51),
+      feedbackOffset: const Offset(0, -12),
       feedback: Material(color: Colors.transparent, child: content),
       childWhenDragging: const SizedBox(width: 27, height: 35),
       child: GestureDetector(onTap: onTake, child: content),
@@ -64,6 +66,9 @@ class _DeckDrawHandle extends StatelessWidget {
       message: 'Dokun veya ıstakaya sürükleyerek taş çek',
       child: Draggable<_DeckDragData>(
         data: const _DeckDragData(),
+        dragAnchorStrategy: (_, _, _) =>
+            Offset(feedbackWidth / 2, feedbackHeight + 16),
+        feedbackOffset: const Offset(0, -12),
         feedback: Material(
           color: Colors.transparent,
           child: _TileBack(
@@ -124,7 +129,11 @@ class _TableDiscardPile extends StatelessWidget {
   final bool takeEnabled;
   final VoidCallback? onTake;
   final bool showReturnButton;
+  final int? returnTileId;
   final VoidCallback? onReturn;
+  final double hitWidth;
+  final double? hitHeight;
+  final Alignment visualAlignment;
 
   const _TableDiscardPile({
     required this.tiles,
@@ -134,104 +143,149 @@ class _TableDiscardPile extends StatelessWidget {
     this.takeEnabled = false,
     this.onTake,
     this.showReturnButton = false,
+    this.returnTileId,
     this.onReturn,
+    this.hitWidth = 102,
+    this.hitHeight,
+    this.visualAlignment = Alignment.center,
   });
 
   @override
-  Widget build(BuildContext context) => DragTarget<_RackDragData>(
-    onWillAcceptWithDetails: (_) => active && onDrop != null,
-    onAcceptWithDetails: (details) => onDrop?.call(details.data),
-    builder: (context, candidates, rejected) {
-      final highlighted = active || candidates.isNotEmpty;
-      return SizedBox(
-        key: ValueKey('discard-$label'),
-        width: 34,
-        height: 46,
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
+  Widget build(BuildContext context) => SizedBox(
+    key: ValueKey('discard-target-$label'),
+    width: hitWidth,
+    height: hitHeight ?? 66,
+    child: DragTarget<_RackDragData>(
+      onWillAcceptWithDetails: (details) {
+        final returningTakenTile =
+            returnTileId != null &&
+            details.data.tileIds.length == 1 &&
+            details.data.tileIds.contains(returnTileId);
+        return returningTakenTile || (active && onDrop != null);
+      },
+      onAcceptWithDetails: (details) {
+        final returningTakenTile =
+            returnTileId != null &&
+            details.data.tileIds.length == 1 &&
+            details.data.tileIds.contains(returnTileId);
+        if (returningTakenTile) {
+          onReturn?.call();
+        } else {
+          onDrop?.call(details.data);
+        }
+      },
+      builder: (context, candidates, rejected) {
+        final highlighted = active || candidates.isNotEmpty;
+        return Align(
+          alignment: visualAlignment,
           child: SizedBox(
-            width: 34,
+            key: ValueKey('discard-$label'),
+            width: 38,
             height: 46,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: highlighted
-                    ? OC.numRed.withValues(alpha: 0.22)
-                    : Colors.black.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(9),
-                border: Border.all(
-                  color: highlighted ? OC.gold : Colors.white24,
-                  width: highlighted ? 2 : 1,
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 220),
-                    child: showReturnButton && onReturn != null
-                        ? SizedBox(
-                            key: const ValueKey('return-taken-discard'),
-                            width: 27,
-                            height: 35,
-                            child: FilledButton(
-                              onPressed: onReturn,
-                              style: FilledButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 2,
-                                ),
-                                backgroundColor: const Color(0xFF9A650E),
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(6),
-                                  side: const BorderSide(color: OC.gold),
-                                ),
-                              ),
-                              child: const FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  'TAŞI\nGERİ BIRAK',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 7,
-                                    fontWeight: FontWeight.w900,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: SizedBox(
+                width: 38,
+                height: 46,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: highlighted
+                        ? OC.numRed.withValues(alpha: 0.22)
+                        : Colors.black.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                      color: highlighted ? OC.gold : Colors.white24,
+                      width: highlighted ? 2 : 1,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: showReturnButton && onReturn != null
+                            ? Material(
+                                key: const ValueKey('return-taken-discard'),
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: onReturn,
+                                  borderRadius: BorderRadius.circular(7),
+                                  child: Ink(
+                                    width: 32,
+                                    height: 39,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [
+                                          Color(0xFFBE8325),
+                                          Color(0xFF714308),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(7),
+                                      border: Border.all(
+                                        color: const Color(0xFFFFD47A),
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    child: const Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.undo_rounded,
+                                          color: Colors.white,
+                                          size: 17,
+                                        ),
+                                        Text(
+                                          'GERİ BIRAK',
+                                          maxLines: 1,
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 5.5,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
+                              )
+                            : tiles.isEmpty
+                            ? const SizedBox(
+                                key: ValueKey('empty-discard'),
+                                width: 27,
+                                height: 35,
+                                child: Icon(
+                                  Icons.arrow_downward_rounded,
+                                  color: Colors.white24,
+                                ),
+                              )
+                            : takeEnabled && onTake != null
+                            ? _DiscardDrawHandle(
+                                key: ValueKey('take-discard-${tiles.last.id}'),
+                                tile: tiles.last,
+                                enabled: true,
+                                onTake: onTake!,
+                              )
+                            : _TileWidget(
+                                key: ValueKey(tiles.last.id),
+                                tile: tiles.last,
+                                w: 27,
+                                h: 35,
+                                onTap: null,
                               ),
-                            ),
-                          )
-                        : tiles.isEmpty
-                        ? const SizedBox(
-                            key: ValueKey('empty-discard'),
-                            width: 27,
-                            height: 35,
-                            child: Icon(
-                              Icons.arrow_downward_rounded,
-                              color: Colors.white24,
-                            ),
-                          )
-                        : takeEnabled && onTake != null
-                        ? _DiscardDrawHandle(
-                            key: ValueKey('take-discard-${tiles.last.id}'),
-                            tile: tiles.last,
-                            enabled: true,
-                            onTake: onTake!,
-                          )
-                        : _TileWidget(
-                            key: ValueKey(tiles.last.id),
-                            tile: tiles.last,
-                            w: 27,
-                            h: 35,
-                            onTap: null,
-                          ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
-        ),
-      );
-    },
+        );
+      },
+    ),
   );
 }

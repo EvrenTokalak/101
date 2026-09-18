@@ -28,6 +28,7 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  audioplayers: 6.5.1
   flutter:
     sdk: flutter
 
@@ -56,7 +57,8 @@ flutter:
   uses-material-design: true
 
   assets:
-    - images/ıstaka2.png
+    - assets/sounds/
+    - images/rack2.png
     - images/tas_ters.png
     - images/anamenu/menubg.png
 

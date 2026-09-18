@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_launch.dart';
 
+const defaultPlayerProfileName = 'Evren';
+
 class LevelBand {
   final int minLevel;
   final int maxLevel;
@@ -55,6 +57,7 @@ class GameReward {
 }
 
 class PlayerProgressController extends ChangeNotifier {
+  static const _playerNameKey = 'profile.player_name';
   static const _coinsKey = 'progress.coins';
   static const _levelKey = 'progress.level';
   static const _levelXpKey = 'progress.level_xp';
@@ -74,6 +77,7 @@ class PlayerProgressController extends ChangeNotifier {
   int _handsOpened = 0;
   int _handsFinished = 0;
   int _totalXpEarned = 0;
+  String _playerName = defaultPlayerProfileName;
 
   int get coins => _coins;
   int get level => _level;
@@ -83,6 +87,7 @@ class PlayerProgressController extends ChangeNotifier {
   int get handsOpened => _handsOpened;
   int get handsFinished => _handsFinished;
   int get totalXpEarned => _totalXpEarned;
+  String get playerName => _playerName;
   bool get isMaxLevel => _level >= 99;
 
   LevelBand get levelBand => levelBands.firstWhere(
@@ -122,6 +127,11 @@ class PlayerProgressController extends ChangeNotifier {
         );
     _totalXpEarned = (await preferences.getInt(_totalXpKey) ?? _totalXpEarned)
         .clamp(0, 1 << 31);
+    final savedPlayerName = (await preferences.getString(_playerNameKey))
+        ?.trim();
+    if (savedPlayerName != null && savedPlayerName.isNotEmpty) {
+      _playerName = savedPlayerName;
+    }
 
     // Eski geliştirme sürümünde boş profiller seviye 9 ile başlıyordu.
     if (_level == 9 &&
@@ -150,9 +160,20 @@ class PlayerProgressController extends ChangeNotifier {
     await preferences.setInt(_handsOpenedKey, _handsOpened);
     await preferences.setInt(_handsFinishedKey, _handsFinished);
     await preferences.setInt(_totalXpKey, _totalXpEarned);
+    await preferences.setString(_playerNameKey, _playerName);
   }
 
   void _schedulePersist() => unawaited(_persist());
+
+  bool updatePlayerName(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty || normalized.length > 18) return false;
+    if (_playerName == normalized) return true;
+    _playerName = normalized;
+    notifyListeners();
+    _schedulePersist();
+    return true;
+  }
 
   bool trySpendCoins(int amount) {
     if (!canAfford(amount)) return false;
@@ -248,6 +269,7 @@ class PlayerProgressController extends ChangeNotifier {
     _handsOpened = 0;
     _handsFinished = 0;
     _totalXpEarned = 0;
+    _playerName = defaultPlayerProfileName;
     notifyListeners();
   }
 }

@@ -61,6 +61,11 @@ class RackSolver {
           melds: [candidate, ...tail.melds],
           score: (pairsOnly ? 0 : Rules.meldValue(ordered)) + tail.score,
           tileCount: ordered.length + tail.tileCount,
+          jokerScore:
+              (ordered.any((tile) => tile.isOkey)
+                  ? Rules.meldValue(ordered)
+                  : 0) +
+              tail.jokerScore,
         );
         if (plan.isBetterThan(best)) best = plan;
       }
@@ -200,10 +205,12 @@ class RackSolver {
       final usedIds = <int>{};
       var score = 0;
       var usedTileCount = 0;
+      var jokerScore = 0;
       final melds = <_RackMeldCandidate>[];
       if (seed != null) {
         usedIds.addAll(seed.tiles.map((tile) => tile.id));
         score = Rules.meldValue(seed.tiles);
+        if (seed.tiles.any((tile) => tile.isOkey)) jokerScore = score;
         usedTileCount = seed.tiles.length;
         melds.add(seed);
       }
@@ -211,14 +218,30 @@ class RackSolver {
         if (candidate.tiles.any((tile) => usedIds.contains(tile.id))) continue;
         usedIds.addAll(candidate.tiles.map((tile) => tile.id));
         score += Rules.meldValue(candidate.tiles);
+        if (candidate.tiles.any((tile) => tile.isOkey)) {
+          jokerScore += Rules.meldValue(candidate.tiles);
+        }
         usedTileCount += candidate.tiles.length;
         melds.add(candidate);
       }
-      return _RackPlan(melds: melds, score: score, tileCount: usedTileCount);
+      return _RackPlan(
+        melds: melds,
+        score: score,
+        tileCount: usedTileCount,
+        jokerScore: jokerScore,
+      );
     }
 
     final ordered = List<_RackMeldCandidate>.from(candidates)
       ..sort((a, b) {
+        final aUsesOkey = a.tiles.any((tile) => tile.isOkey);
+        final bUsesOkey = b.tiles.any((tile) => tile.isOkey);
+        if (aUsesOkey != bUsesOkey) return aUsesOkey ? -1 : 1;
+        if (aUsesOkey) {
+          final okeyValue = Rules.meldValue(b.tiles)
+              .compareTo(Rules.meldValue(a.tiles));
+          if (okeyValue != 0) return okeyValue;
+        }
         final length = b.tiles.length.compareTo(a.tiles.length);
         return length != 0
             ? length
@@ -261,13 +284,23 @@ class _RackPlan {
   final List<_RackMeldCandidate> melds;
   final int score;
   final int tileCount;
+  final int jokerScore;
 
-  const _RackPlan({this.melds = const [], this.score = 0, this.tileCount = 0});
+  const _RackPlan({
+    this.melds = const [],
+    this.score = 0,
+    this.tileCount = 0,
+    this.jokerScore = 0,
+  });
 
   bool isBetterThan(_RackPlan other) =>
-      tileCount > other.tileCount ||
-      (tileCount == other.tileCount && score > other.score) ||
-      (tileCount == other.tileCount &&
+      jokerScore > other.jokerScore ||
+      (jokerScore == other.jokerScore && tileCount > other.tileCount) ||
+      (jokerScore == other.jokerScore &&
+          tileCount == other.tileCount &&
+          score > other.score) ||
+      (jokerScore == other.jokerScore &&
+          tileCount == other.tileCount &&
           score == other.score &&
           melds.length < other.melds.length);
 }

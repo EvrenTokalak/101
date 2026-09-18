@@ -49,6 +49,26 @@ void main() {
     expect(Rules.isValidRun(melds.single), isTrue);
   });
 
+  test('tek okeyi kullanılabileceği en yüksek değerli pere ayırır', () {
+    final joker = tile(7, TileColor.yellow, isOkey: true);
+    final rack = [
+      tile(2, TileColor.red),
+      tile(3, TileColor.red),
+      tile(11, TileColor.blue),
+      tile(12, TileColor.blue),
+      joker,
+    ];
+
+    final melds = RackSolver.standardMelds(rack);
+    final jokerMeld = melds.singleWhere((meld) => meld.contains(joker));
+
+    expect(Rules.meldValue(jokerMeld), 36);
+    expect(
+      jokerMeld.where((tile) => !tile.isOkey).map((tile) => tile.number),
+      containsAll([11, 12]),
+    );
+  });
+
   test(
     'per diz sahte okeyi kendi renk ve sayısında normal taş olarak kullanır',
     () {

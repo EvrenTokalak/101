@@ -19,6 +19,14 @@ void main() {
     expect(freshProgress.xpForNextLevel, 30);
   });
 
+  test('profil adı düzenlenir ve geçersiz değerler reddedilir', () {
+    expect(progress.playerName, defaultPlayerProfileName);
+    expect(progress.updatePlayerName('  Gökde  '), isTrue);
+    expect(progress.playerName, 'Gökde');
+    expect(progress.updatePlayerName('   '), isFalse);
+    expect(progress.playerName, 'Gökde');
+  });
+
   test('görseldeki seviye bantları doğru unvan ve XP eşiğini verir', () {
     expect(progress.title, 'Learner');
     expect(progress.xpForNextLevel, 50);

@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import 'game_launch.dart';
 import 'player_progress.dart';
@@ -16,7 +17,10 @@ part 'game_table_widgets.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await playerProgress.load();
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  await SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -487,21 +491,9 @@ class _BotDiscardMotion {
   });
 }
 
-class _BotDrawMotion {
-  final Tile tile;
-  final int botIndex;
-  final bool fromDiscard;
-  final int serial;
-
-  const _BotDrawMotion({
-    required this.tile,
-    required this.botIndex,
-    required this.fromDiscard,
-    required this.serial,
-  });
-}
-
 enum _TableTileMotionKind { drawDeck, drawDiscard, open, process }
+
+enum _GameSound { pick, place, arrange }
 
 class _TableTileMotion {
   final List<Tile> tiles;
@@ -538,7 +530,7 @@ class _GameScreenState extends State<GameScreen> {
   static const int _rackRowLength = 15;
   static const int _rackSlotCount = _rackRowLength * 2;
   // Gerçek oyuncu temposu; testlerde gerektiğinde bu sabit açılabilir.
-  static const bool _instantBotTurns = true;
+  static const bool _instantBotTurns = false;
 
   bool get _isTournamentGame =>
       widget.tournamentMode || widget.launchConfig.isTournament;
@@ -562,9 +554,7 @@ class _GameScreenState extends State<GameScreen> {
   bool _botBusy = false;
   _BotDiscardMotion? _botDiscardMotion;
   int _botDiscardMotionSerial = 0;
-  _BotDrawMotion? _botDrawMotion;
-  int _botDrawMotionSerial = 0;
-  _TableTileMotion? _tableTileMotion;
+  final ValueNotifier<_TableTileMotion?> _tableTileMotion = ValueNotifier(null);
   int _tableTileMotionSerial = 0;
   int? _dealAnimationSerial;
   int _dealAnimationCounter = 0;
@@ -592,14 +582,33 @@ class _GameScreenState extends State<GameScreen> {
   final GlobalKey _meldGridKey = GlobalKey();
   final ValueNotifier<Offset?> _gridDragPosition = ValueNotifier(null);
   final ValueNotifier<double> _rackDragTilt = ValueNotifier(0);
+  final ValueNotifier<double> _rackDragLift = ValueNotifier(0);
   bool _draggingProcessableTile = false;
   Offset? _pendingGridDragPosition;
   double _pendingRackDragTilt = 0;
+  double _pendingRackDragLift = 0;
   bool _dragVisualFrameScheduled = false;
+  final Stopwatch _dragVisualUpdateClock = Stopwatch()..start();
+  int _lastDragVisualUpdateMicros = -33000;
+  int? _rackAnalysisSignature;
+  int _cachedRackPerPoints = 0;
+  int _cachedRackPairCount = 0;
+  int? _drawAttentionTileId;
+  int _drawAttentionSerial = 0;
+  int? _processableSignature;
+  Set<int> _cachedProcessableTileIds = const {};
 
   String? _msg;
+  String? _warningMsg;
+  int _warningSerial = 0;
+  bool _showFinishCelebration = false;
+  int _finishCelebrationSerial = 0;
+  bool _endDialogVisible = false;
   bool _gameOverShown = false;
   GameSettings _gameSettings = const GameSettings();
+  final Map<_GameSound, AudioPlayer> _soundPlayers = {
+    for (final sound in _GameSound.values) sound: AudioPlayer(),
+  };
 
   Future<void> _openGameSettings() async {
     final updated = await showGeneralDialog<GameSettings>(
@@ -611,6 +620,18 @@ class _GameScreenState extends State<GameScreen> {
       pageBuilder: (_, _, _) => GameSettingsDialog(
         initial: _gameSettings,
         launchConfig: widget.launchConfig,
+        onRestart: (settings) {
+          Navigator.of(context, rootNavigator: true).pop();
+          setState(() {
+            _gameSettings = settings;
+            _totalPenalty = 0;
+            _elCount = 0;
+            for (final bot in _bots) {
+              bot.penalty = 0;
+            }
+            _startNewRound();
+          });
+        },
         onExitToMenu: () => Navigator.of(
           context,
           rootNavigator: true,
@@ -639,8 +660,13 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _dealTimer?.cancel();
+    for (final player in _soundPlayers.values) {
+      unawaited(player.dispose());
+    }
     _gridDragPosition.dispose();
     _rackDragTilt.dispose();
+    _rackDragLift.dispose();
+    _tableTileMotion.dispose();
     super.dispose();
   }
 
@@ -704,12 +730,15 @@ class _GameScreenState extends State<GameScreen> {
     _gridDragPosition.value = null;
     _rackDragTilt.value = 0;
     _draggingProcessableTile = false;
-    _botDrawMotion = null;
+    _drawAttentionTileId = null;
     _botDiscardMotion = null;
-    _tableTileMotion = null;
+    _tableTileMotion.value = null;
     _uiMode = 'normal';
     _processedMoves.clear();
     _gameOverShown = false;
+    _showFinishCelebration = false;
+    _finishCelebrationSerial++;
+    _endDialogVisible = false;
 
     // Her el rastgele bir koltuktan başlar; başlayan oyuncu zaten 22 taşlıdır.
     _turn = _startingPlayer;
@@ -751,19 +780,42 @@ class _GameScreenState extends State<GameScreen> {
     Iterable<Tile> tiles, {
     int playerIndex = 0,
   }) {
-    if (!_gameSettings.animations) return;
-    final visibleTiles = tiles.take(7).toList();
+    final isBotMotion = playerIndex > 0;
+    final visibleTileLimit = switch (kind) {
+      _TableTileMotionKind.drawDeck || _TableTileMotionKind.drawDiscard => 1,
+      _TableTileMotionKind.process => isBotMotion ? 1 : 2,
+      _TableTileMotionKind.open => isBotMotion ? 3 : 4,
+    };
+    final visibleTiles = tiles.take(visibleTileLimit).toList();
     if (visibleTiles.isEmpty) return;
+    if (kind == _TableTileMotionKind.open ||
+        kind == _TableTileMotionKind.process) {
+      _playInteractionFeedback(
+        strong: kind == _TableTileMotionKind.open,
+        sound: _GameSound.arrange,
+      );
+    }
+    if (!_gameSettings.animations) return;
     final serial = ++_tableTileMotionSerial;
-    _tableTileMotion = _TableTileMotion(
+    _tableTileMotion.value = _TableTileMotion(
       tiles: visibleTiles,
       kind: kind,
       playerIndex: playerIndex,
       serial: serial,
     );
-    Future.delayed(const Duration(milliseconds: 620), () {
-      if (!mounted || _tableTileMotion?.serial != serial) return;
-      setState(() => _tableTileMotion = null);
+    final clearDelay = switch (kind) {
+      _TableTileMotionKind.drawDeck ||
+      _TableTileMotionKind.drawDiscard => const Duration(milliseconds: 240),
+      _TableTileMotionKind.process => Duration(
+        milliseconds: isBotMotion ? 200 : 250,
+      ),
+      _TableTileMotionKind.open => Duration(
+        milliseconds: isBotMotion ? 270 : 330,
+      ),
+    };
+    Future.delayed(clearDelay, () {
+      if (!mounted || _tableTileMotion.value?.serial != serial) return;
+      _tableTileMotion.value = null;
     });
   }
 
@@ -779,6 +831,15 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  void _warn_(String message) {
+    final serial = ++_warningSerial;
+    setState(() => _warningMsg = message);
+    Future.delayed(const Duration(milliseconds: 1900), () {
+      if (!mounted || serial != _warningSerial) return;
+      setState(() => _warningMsg = null);
+    });
+  }
+
   // ── Taş Seç / Seçimi Kaldır ───────────────────────────────────────────
   void _compactRackSlots() {
     _rackSlots = List<int?>.filled(_rackSlotCount, null);
@@ -791,14 +852,32 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  void _placeInRackSlot(Tile tile, [int? requestedSlot]) {
-    final targetSlot =
+  bool _placeInRackSlot(Tile tile, [int? requestedSlot]) {
+    final hasRequestedSlot =
         requestedSlot != null &&
-            requestedSlot >= 0 &&
-            requestedSlot < _rackSlots.length
-        ? requestedSlot
-        : _rackSlots.indexOf(null);
+        requestedSlot >= 0 &&
+        requestedSlot < _rackSlots.length;
+    final edgeSlot = hasRequestedSlot ? requestedSlot : _emptyRackEdgeSlot();
+    final targetSlot = edgeSlot ?? _rackSlots.indexOf(null);
     if (targetSlot >= 0) _insertRackTileAt(tile.id, targetSlot);
+    return !hasRequestedSlot && edgeSlot == null;
+  }
+
+  int? _emptyRackEdgeSlot() {
+    final edgeSlots = <int>[
+      _rackSlotCount - 1,
+      _rackRowLength - 1,
+      _rackRowLength,
+      0,
+      _rackSlotCount - 2,
+      _rackRowLength - 2,
+      _rackRowLength + 1,
+      1,
+    ];
+    for (final slot in edgeSlots) {
+      if (_rackSlots[slot] == null) return slot;
+    }
+    return null;
   }
 
   void _insertRackTileAt(int tileId, int targetIndex) {
@@ -846,9 +925,29 @@ class _GameScreenState extends State<GameScreen> {
     return null;
   }
 
-  void _playInteractionFeedback({bool strong = false}) {
+  void _playInteractionFeedback({
+    bool strong = false,
+    _GameSound sound = _GameSound.place,
+  }) {
     if (_gameSettings.sound) {
-      SystemSound.play(SystemSoundType.click);
+      final asset = switch (sound) {
+        _GameSound.pick => 'sounds/tile_pick.wav',
+        _GameSound.place => 'sounds/tile_place.wav',
+        _GameSound.arrange => 'sounds/tile_arrange.wav',
+      };
+      final player = _soundPlayers[sound]!;
+      unawaited(() async {
+        try {
+          await player.stop();
+          await player.play(
+            AssetSource(asset),
+            volume: strong ? 0.78 : 0.62,
+            mode: PlayerMode.lowLatency,
+          );
+        } catch (_) {
+          // Ses desteği olmayan test ortamlarında oyun akışını sürdür.
+        }
+      }());
     }
     if (_gameSettings.vibration) {
       if (strong) {
@@ -861,18 +960,27 @@ class _GameScreenState extends State<GameScreen> {
 
   void _tapTile(int tileId) {
     if (_turn != 0) {
-      _msg_('Sıra sende değil.');
+      _warn_('Sıra sende değil.');
       return;
     }
     if (!_drawnThisTurn) {
-      _msg_('Önce taş çekmelisin.');
+      _warn_('Taş atmadan önce taş çekmelisin.');
       return;
     }
     final tile = _rackTileById(tileId);
     if (tile != null) {
-      _playInteractionFeedback();
+      _playInteractionFeedback(sound: _GameSound.pick);
       setState(() => tile.selected = !tile.selected);
     }
+  }
+
+  void _clearRackSelection() {
+    if (!_rack.any((tile) => tile.selected)) return;
+    setState(() {
+      for (final tile in _rack) {
+        tile.selected = false;
+      }
+    });
   }
 
   Set<int> get _selectedTileIds =>
@@ -906,20 +1014,43 @@ class _GameScreenState extends State<GameScreen> {
   void _reorderRack(int tileId, int targetIndex) {
     final from = _rackSlots.indexOf(tileId);
     if (from == -1) return;
+    final target = targetIndex.clamp(0, _rackSlotCount - 1);
+    if (from == target) return;
     setState(() {
-      final target = targetIndex.clamp(0, _rackSlotCount - 1);
-      if (from == target) return;
       _rackSlots[from] = null;
       _insertRackTileAt(tileId, target);
+      _rackAnalysisSignature = null;
     });
+    _playInteractionFeedback(sound: _GameSound.place);
+  }
+
+  int get _currentRackSignature => Object.hash(
+    Object.hashAll(
+      _rack.map(
+        (tile) => Object.hash(tile.id, tile.number, tile.color, tile.isOkey),
+      ),
+    ),
+    Object.hashAll(_rackSlots),
+  );
+
+  void _ensureRackAnalysis() {
+    final signature = _currentRackSignature;
+    if (_rackAnalysisSignature == signature) return;
+    final allIds = _rack.map((tile) => tile.id).toSet();
+    _cachedRackPerPoints = Rules.validMeldTotal(_rackGroups(allIds));
+    _cachedRackPairCount = RackSolver.pairs(_rack).length;
+    _rackAnalysisSignature = signature;
   }
 
   int get _rackPerPoints {
-    final allIds = _rack.map((tile) => tile.id).toSet();
-    return Rules.validMeldTotal(_rackGroups(allIds));
+    _ensureRackAnalysis();
+    return _cachedRackPerPoints;
   }
 
-  int get _rackPairCount => RackSolver.pairs(_rack).length;
+  int get _rackPairCount {
+    _ensureRackAnalysis();
+    return _cachedRackPairCount;
+  }
 
   int get _currentOkeyNumber =>
       Rules.okeyNumberForIndicator(_indicator!.number);
@@ -945,12 +1076,14 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       final tile = _deck.removeLast();
       _rack.add(tile);
-      _placeInRackSlot(tile, targetSlot);
+      final usedInnerGap = _placeInRackSlot(tile, targetSlot);
+      _drawAttentionTileId = usedInnerGap ? tile.id : null;
+      if (usedInnerGap) _drawAttentionSerial++;
       _drawnThisTurn = true;
       _tookDiscard = false;
       _beginTableTileMotion(_TableTileMotionKind.drawDeck, [tile]);
     });
-    _playInteractionFeedback();
+    _playInteractionFeedback(sound: _GameSound.pick);
   }
 
   // ── Atılan Taşı Al (soldan çek) ───────────────────────────────────────
@@ -977,7 +1110,9 @@ class _GameScreenState extends State<GameScreen> {
       _takenDiscardTile = _discarded;
       final tile = _discarded!;
       _rack.add(tile);
-      _placeInRackSlot(tile, targetSlot);
+      final usedInnerGap = _placeInRackSlot(tile, targetSlot);
+      _drawAttentionTileId = usedInnerGap ? tile.id : null;
+      if (usedInnerGap) _drawAttentionSerial++;
       if (_discardPiles[3].isNotEmpty && _discardPiles[3].last.id == tile.id) {
         _discardPiles[3].removeLast();
       }
@@ -986,7 +1121,7 @@ class _GameScreenState extends State<GameScreen> {
       _tookDiscard = true;
       _beginTableTileMotion(_TableTileMotionKind.drawDiscard, [tile]);
     });
-    _playInteractionFeedback();
+    _playInteractionFeedback(sound: _GameSound.pick);
   }
 
   void _returnTakenDiscard() {
@@ -1016,13 +1151,13 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // ── Taş At ────────────────────────────────────────────────────────────
-  void _discardTile() {
+  void _discardTile({bool celebrateCenterFinish = false}) {
     if (_turn != 0) {
-      _msg_('Sıra sende değil.');
+      _warn_('Sıra sende değil.');
       return;
     }
     if (!_drawnThisTurn) {
-      _msg_('Önce taş çekmelisin.');
+      _warn_('Taş atmadan önce taş çekmelisin.');
       return;
     }
     if (_tookDiscard && !_playerOpened) {
@@ -1039,7 +1174,7 @@ class _GameScreenState extends State<GameScreen> {
     final tile = sel.first;
 
     // Atılan taş işleme cezası kontrolü
-    if (_checkDiscardPenalty(tile)) {
+    if (_rack.length > 1 && _checkDiscardPenalty(tile)) {
       _totalPenalty += 101;
       _msg_('101 CEZA! Atılan taş masaya işlenebilirdi.');
     }
@@ -1061,6 +1196,19 @@ class _GameScreenState extends State<GameScreen> {
     _playInteractionFeedback(strong: true);
 
     if (_rack.isEmpty) {
+      if (celebrateCenterFinish && _gameSettings.animations) {
+        final serial = ++_finishCelebrationSerial;
+        setState(() {
+          _showFinishCelebration = true;
+          _botBusy = true;
+        });
+        Future.delayed(const Duration(milliseconds: 920), () {
+          if (!mounted || serial != _finishCelebrationSerial) return;
+          setState(() => _showFinishCelebration = false);
+          _endRoundPlayerWins();
+        });
+        return;
+      }
       _endRoundPlayerWins();
       return;
     }
@@ -1282,18 +1430,38 @@ class _GameScreenState extends State<GameScreen> {
     };
   }
 
-  Set<int> get _processableTileIds => {
-    for (final tile in _rack)
-      if (_tableMetds.any((meld) => _meldCanUseTiles(meld, [tile]))) tile.id,
-  };
+  Set<int> get _processableTileIds {
+    if (_rack.isEmpty || _tableMetds.isEmpty) return const <int>{};
+    final signature = Object.hash(
+      _currentRackSignature,
+      Object.hashAll(
+        _tableMetds.map(
+          (meld) => Object.hash(
+            meld.type,
+            Object.hashAll(meld.tiles.map((tile) => tile.id)),
+          ),
+        ),
+      ),
+    );
+    if (_processableSignature == signature) return _cachedProcessableTileIds;
+    _cachedProcessableTileIds = Set<int>.unmodifiable({
+      for (final tile in _rack)
+        if (_tableMetds.any((meld) => _meldCanUseTiles(meld, [tile]))) tile.id,
+    });
+    _processableSignature = signature;
+    return _cachedProcessableTileIds;
+  }
 
   int _automaticTargetMeldIndex(Tile tile) {
     return Rules.preferredMeldIndexForTile(_tableMetds, tile);
   }
 
   void _startGridDragZoom(_RackDragData data) {
+    _playInteractionFeedback(sound: _GameSound.pick);
     _rackDragTilt.value = 0;
+    _rackDragLift.value = 0;
     _pendingRackDragTilt = 0;
+    _pendingRackDragLift = 0;
     final draggedIds = data.tileIds.isEmpty ? {data.tileId} : data.tileIds;
     _draggingProcessableTile =
         _gameSettings.gridMagnifier &&
@@ -1308,24 +1476,40 @@ class _GameScreenState extends State<GameScreen> {
     final targetTilt = (details.delta.dx * 0.035).clamp(-0.18, 0.18);
     final tilt = _pendingRackDragTilt * 0.55 + targetTilt.toDouble() * 0.45;
     Offset? localPosition;
-    final renderObject = _draggingProcessableTile
-        ? _meldGridKey.currentContext?.findRenderObject()
-        : null;
+    var lift = 0.0;
+    final renderObject = _meldGridKey.currentContext?.findRenderObject();
     if (renderObject is RenderBox && renderObject.hasSize) {
       final local = renderObject.globalToLocal(details.globalPosition);
+      final discardZoneTop = renderObject.size.height * 0.60;
+      lift = ((discardZoneTop - local.dy) * 0.18).clamp(0.0, 28.0).toDouble();
       final inside =
           local.dx >= 0 &&
           local.dy >= 0 &&
           local.dx <= renderObject.size.width &&
           local.dy <= renderObject.size.height;
-      if (inside) localPosition = local;
+      if (_draggingProcessableTile && inside) {
+        const positionStep = 8.0;
+        localPosition = Offset(
+          (local.dx / positionStep).round() * positionStep,
+          (local.dy / positionStep).round() * positionStep,
+        );
+      }
     }
-    _scheduleDragVisualFrame(localPosition, tilt);
+    final steppedTilt = (tilt / 0.025).round() * 0.025;
+    _scheduleDragVisualFrame(localPosition, steppedTilt, lift);
   }
 
-  void _scheduleDragVisualFrame(Offset? gridPosition, double rackTilt) {
+  void _scheduleDragVisualFrame(
+    Offset? gridPosition,
+    double rackTilt,
+    double rackLift,
+  ) {
     _pendingGridDragPosition = gridPosition;
     _pendingRackDragTilt = rackTilt;
+    _pendingRackDragLift = rackLift;
+    final nowMicros = _dragVisualUpdateClock.elapsedMicroseconds;
+    if (nowMicros - _lastDragVisualUpdateMicros < 33000) return;
+    _lastDragVisualUpdateMicros = nowMicros;
     if (_dragVisualFrameScheduled) return;
     _dragVisualFrameScheduled = true;
     WidgetsBinding.instance.scheduleFrameCallback((_) {
@@ -1337,6 +1521,9 @@ class _GameScreenState extends State<GameScreen> {
       if (_rackDragTilt.value != _pendingRackDragTilt) {
         _rackDragTilt.value = _pendingRackDragTilt;
       }
+      if (_rackDragLift.value != _pendingRackDragLift) {
+        _rackDragLift.value = _pendingRackDragLift;
+      }
     });
   }
 
@@ -1344,8 +1531,10 @@ class _GameScreenState extends State<GameScreen> {
     _draggingProcessableTile = false;
     _pendingGridDragPosition = null;
     _pendingRackDragTilt = 0;
+    _pendingRackDragLift = 0;
     _gridDragPosition.value = null;
     _rackDragTilt.value = 0;
+    _rackDragLift.value = 0;
   }
 
   bool get _canLayPairsAfterStandard =>
@@ -1519,7 +1708,7 @@ class _GameScreenState extends State<GameScreen> {
     okey.selected = false;
     final changed = List<Tile>.from(meld.tiles)
       ..[replacementIndex] = replacement;
-    meld.tiles = Rules.orderedMeld(changed, meld.type);
+    meld.tiles = changed;
     _clearRackSlots({replacement.id});
     _rack.removeWhere((tile) => tile.id == replacement.id);
     _rack.add(okey);
@@ -1629,6 +1818,13 @@ class _GameScreenState extends State<GameScreen> {
     _discardTile();
   }
 
+  void _finishByCenterDrop(_RackDragData data) {
+    if (_turn != 0 || !_drawnThisTurn || _rack.length != 1) return;
+    if (_rack.single.id != data.tileId || data.tileIds.length != 1) return;
+    setState(() => _rack.single.selected = true);
+    _discardTile(celebrateCenterFinish: true);
+  }
+
   Set<int> _layoutRackGroups(List<List<Tile>> groups) {
     final placedIds = <int>{};
     final reservedSeparators = <int>{};
@@ -1664,22 +1860,25 @@ class _GameScreenState extends State<GameScreen> {
       final remaining =
           _rack.where((tile) => !placedIds.contains(tile.id)).toList()
             ..sort((a, b) {
-              final byNumber = a.number.compareTo(b.number);
+              final byNumber = b.number.compareTo(a.number);
               if (byNumber != 0) return byNumber;
-              final byColor = a.color.index.compareTo(b.color.index);
+              final byColor = b.color.index.compareTo(a.color.index);
               if (byColor != 0) return byColor;
-              return a.id.compareTo(b.id);
+              return b.id.compareTo(a.id);
             });
-      for (final tile in remaining) {
-        final emptySlot = List.generate(_rackSlotCount, (index) => index)
-            .firstWhere(
-              (index) =>
-                  _rackSlots[index] == null &&
-                  !reservedSeparators.contains(index),
-              orElse: () => -1,
-            );
-        if (emptySlot != -1) _rackSlots[emptySlot] = tile.id;
+      final trailingSlots = [
+        for (var index = _rackSlotCount - 1; index >= 0; index--)
+          if (_rackSlots[index] == null && !reservedSeparators.contains(index))
+            index,
+      ];
+      for (
+        var index = 0;
+        index < remaining.length && index < trailingSlots.length;
+        index++
+      ) {
+        _rackSlots[trailingSlots[index]] = remaining[index].id;
       }
+      _rackAnalysisSignature = null;
     });
     return placedIds;
   }
@@ -1693,6 +1892,7 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     _layoutRackGroups(groups);
+    _playInteractionFeedback(sound: _GameSound.arrange);
   }
 
   void _arrangePairs() {
@@ -1704,6 +1904,7 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     _layoutRackGroups(pairs);
+    _playInteractionFeedback(sound: _GameSound.arrange);
   }
 
   void _autoOpenStandardMelds() {
@@ -1734,27 +1935,38 @@ class _GameScreenState extends State<GameScreen> {
 
   // ── Sıra Geçişi ───────────────────────────────────────────────────────
   void _nextTurn() {
-    _turn = (_turn + 1) % 4;
-    if (_turn == 0) {
-      // Oyuncunun sırası
-      setState(() {
-        _drawnThisTurn = false;
+    final nextTurn = (_turn + 1) % 4;
+    setState(() {
+      _turn = nextTurn;
+      _botBusy = nextTurn != 0;
+      _botDiscardMotion = null;
+      if (nextTurn == 0) _drawnThisTurn = false;
+    });
+    if (nextTurn != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _turn == nextTurn && _botBusy) {
+          _runBot(nextTurn - 1, alreadyMarkedBusy: true);
+        }
       });
-    } else {
-      _runBot(_turn - 1);
     }
   }
 
   // ── Bot Oynaması ──────────────────────────────────────────────────────
-  void _runBot(int botIdx, {bool alreadyHasExtraTile = false}) {
-    if (_gameOverShown) return;
-    setState(() => _botBusy = true);
+  void _runBot(
+    int botIdx, {
+    bool alreadyHasExtraTile = false,
+    bool alreadyMarkedBusy = false,
+  }) {
+    if (_gameOverShown || _turn == 0 || _turn != botIdx + 1) return;
+    if (!alreadyMarkedBusy) setState(() => _botBusy = true);
 
     final botThinkTime = _instantBotTurns
         ? const Duration(milliseconds: 25)
-        : Duration(milliseconds: 3000 + Random().nextInt(2001));
+        : Duration(milliseconds: 650 + Random().nextInt(651));
     Future.delayed(botThinkTime, () {
-      if (!mounted || _gameOverShown) return;
+      if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+        return;
+      }
 
       final bot = _bots[botIdx];
       const earliestOpeningTurns = [3, 4, 3];
@@ -1780,12 +1992,11 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       Tile? drawnTile;
-      var drewFromDiscard = false;
+      var animatedDraw = false;
       if (!alreadyHasExtraTile) {
         setState(() {
           if (canTakeDiscard) {
             drawnTile = _discarded!;
-            drewFromDiscard = true;
             final previousSeat = botIdx;
             if (_discardPiles[previousSeat].isNotEmpty &&
                 _discardPiles[previousSeat].last.id == drawnTile!.id) {
@@ -1797,27 +2008,29 @@ class _GameScreenState extends State<GameScreen> {
           }
           bot.hand.add(drawnTile!);
           bot.tileCount = bot.hand.length;
-          if (_gameSettings.animations) {
-            _botDrawMotion = _BotDrawMotion(
-              tile: drawnTile!,
-              botIndex: botIdx,
-              fromDiscard: drewFromDiscard,
-              serial: ++_botDrawMotionSerial,
-            );
-          }
+          _beginTableTileMotion(
+            canTakeDiscard
+                ? _TableTileMotionKind.drawDiscard
+                : _TableTileMotionKind.drawDeck,
+            [drawnTile!],
+            playerIndex: botIdx + 1,
+          );
+          animatedDraw = _gameSettings.animations;
         });
       }
 
       void playAndDiscard() {
-        if (!mounted || _gameOverShown) return;
+        if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+          return;
+        }
         late final BotTurnResult result;
+        final tableTileIdsBefore = _tableMetds
+            .expand((meld) => meld.tiles)
+            .map((tile) => tile.id)
+            .toSet();
+        var movedToTable = <Tile>[];
         setState(() {
-          _botDrawMotion = null;
           bot.turnsPlayed++;
-          final tableTileIdsBefore = _tableMetds
-              .expand((meld) => meld.tiles)
-              .map((tile) => tile.id)
-              .toSet();
           result = BotEngine.play(
             bot,
             _tableMetds,
@@ -1825,7 +2038,7 @@ class _GameScreenState extends State<GameScreen> {
             minimumStandardScore: standardOpeningTargets[botIdx],
             minimumPairCount: pairOpeningTargets[botIdx],
           );
-          final movedToTable = _tableMetds
+          movedToTable = _tableMetds
               .expand((meld) => meld.tiles)
               .where((tile) => !tableTileIdsBefore.contains(tile.id))
               .toList();
@@ -1839,19 +2052,14 @@ class _GameScreenState extends State<GameScreen> {
             );
           }
           _discarded = result.discarded;
-          if (result.discarded != null && _gameSettings.animations) {
-            _botDiscardMotion = _BotDiscardMotion(
-              tile: result.discarded!,
-              botIndex: botIdx,
-              serial: ++_botDiscardMotionSerial,
-            );
-          }
-          _botBusy = false;
         });
 
         void finishTurn() {
-          if (!mounted || _gameOverShown) return;
+          if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+            return;
+          }
           setState(() {
+            _botBusy = false;
             if (result.discarded != null) {
               _discardPiles[botIdx + 1].add(result.discarded!);
             }
@@ -1868,15 +2076,35 @@ class _GameScreenState extends State<GameScreen> {
           }
         }
 
-        if (result.discarded != null && _gameSettings.animations) {
-          Future.delayed(const Duration(milliseconds: 480), finishTurn);
+        void startDiscard() {
+          if (!mounted || _gameOverShown || _turn != botIdx + 1) return;
+          if (result.discarded != null && _gameSettings.animations) {
+            setState(() {
+              _botDiscardMotion = _BotDiscardMotion(
+                tile: result.discarded!,
+                botIndex: botIdx,
+                serial: ++_botDiscardMotionSerial,
+              );
+            });
+            Future.delayed(const Duration(milliseconds: 320), finishTurn);
+          } else {
+            finishTurn();
+          }
+        }
+
+        final tableMotionDelay =
+            _gameSettings.animations && movedToTable.isNotEmpty
+            ? Duration(milliseconds: result.openedMeldCount > 0 ? 270 : 200)
+            : Duration.zero;
+        if (tableMotionDelay == Duration.zero) {
+          startDiscard();
         } else {
-          finishTurn();
+          Future.delayed(tableMotionDelay, startDiscard);
         }
       }
 
-      if (drawnTile != null && _gameSettings.animations) {
-        Future.delayed(const Duration(milliseconds: 420), playAndDiscard);
+      if (animatedDraw) {
+        Future.delayed(const Duration(milliseconds: 220), playAndDiscard);
       } else {
         playAndDiscard();
       }
@@ -1963,6 +2191,9 @@ class _GameScreenState extends State<GameScreen> {
     required int playerPen,
     required List<int> botPens,
   }) {
+    if (mounted && !_endDialogVisible) {
+      setState(() => _endDialogVisible = true);
+    }
     final playerWon = winner == 'Oyuncu 1' || winner == 'Sen';
     final reward = playerProgress.recordCompletedGame(
       config: widget.launchConfig,
@@ -1970,11 +2201,15 @@ class _GameScreenState extends State<GameScreen> {
       openedHand: _playerOpened,
       finishedHand: playerWon,
     );
-    showDialog(
+    showGeneralDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => GameEndDialog(
+      barrierLabel: 'El sonu',
+      barrierColor: const Color(0x73000000),
+      transitionDuration: Duration.zero,
+      pageBuilder: (_, _, _) => GameEndDialog(
         winner: winner,
+        playerName: playerProgress.playerName,
         playerPen: playerPen,
         bots: _bots,
         botPens: botPens,
@@ -2020,295 +2255,389 @@ class _GameScreenState extends State<GameScreen> {
     final sel = _rack.where((t) => t.selected).length;
     final myTurn = _turn == 0 && !_botBusy && !_dealInProgress;
     final canAct = myTurn && _drawnThisTurn;
-    final eligibleMeldIndexes = _eligibleMeldIndexes;
+    final eligibleMeldIndexes = myTurn && _uiMode == 'addMeld'
+        ? _eligibleMeldIndexes
+        : const <int>{};
     final processableTileIds = _gameSettings.moveHints
         ? _processableTileIds
         : const <int>{};
 
     return Scaffold(
       backgroundColor: const Color(0xFF003E2A),
-      body: MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: TextScaler.linear(_gameSettings.fontScale)),
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, viewport) {
-              final sceneWidth = viewport.maxWidth;
-              final sceneHeight = viewport.maxHeight;
-              final edgeInset = sceneWidth * 0.012;
-              final actionPanelWidth = sceneWidth * 0.115;
-              final controlGap = sceneWidth * 0.008;
-              final rackHeight = sceneHeight * 0.29;
-              final infoPanelHeight = sceneHeight * 0.11;
-              final rackContentWidth =
-                  sceneWidth -
-                  edgeInset * 2 -
-                  actionPanelWidth * 2 -
-                  controlGap * 2 -
-                  24;
-              final normalRackTileWidth = max(
-                1.0,
-                rackContentWidth / _rackRowLength - 6,
-              );
-              final normalRackTileHeight = min(
-                normalRackTileWidth * 1.28,
-                max(1.0, (rackHeight - 17) / 2),
-              );
-              final gridTileWidth = normalRackTileWidth * 0.85;
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _clearRackSelection,
+        child: MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(_gameSettings.fontScale)),
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, viewport) {
+                final sceneWidth = viewport.maxWidth;
+                final sceneHeight = viewport.maxHeight;
+                final edgeInset = sceneWidth * 0.012;
+                final actionPanelWidth = sceneWidth * 0.115;
+                final controlGap = max(3.0, sceneWidth * 0.003);
+                final rackHeight = sceneHeight * 0.29;
+                final infoPanelHeight = sceneHeight * 0.11;
+                final rackContentWidth =
+                    sceneWidth -
+                    edgeInset * 2 -
+                    actionPanelWidth * 2 -
+                    controlGap * 2 -
+                    8;
+                final normalRackTileWidth = max(
+                  1.0,
+                  rackContentWidth / _rackRowLength - 3.2,
+                );
+                final rackVisualTileWidth = max(
+                  1.0,
+                  ((rackContentWidth - 4) * 0.852) / _rackRowLength - 1.6,
+                );
+                final rackVisualTileHeight = min(
+                  rackVisualTileWidth * 1.58,
+                  max(1.0, (rackHeight - 6) / 2),
+                );
+                final gridTileWidth = normalRackTileWidth * 0.85;
 
-              return SizedBox.expand(
-                child: Stack(
-                  children: [
-                    _GameSceneEntrance(
-                      enabled: _gameSettings.animations,
-                      child: Stack(
-                        children: [
-                          // ── Büyük oyun masası ───────────────────────────────────
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            bottom: rackHeight,
-                            child: Padding(
-                              padding: EdgeInsets.fromLTRB(
-                                edgeInset,
-                                sceneHeight * 0.012,
-                                edgeInset,
-                                sceneHeight * 0.008,
-                              ),
-                              child: _TableArea(
-                                melds: _tableMetds,
-                                bots: _bots,
-                                activeTurn: _turn,
-                                discardPiles: _discardPiles,
-                                uiMode: _uiMode,
-                                eligibleMeldIndexes: eligibleMeldIndexes,
-                                onMeldTap: _addToMeld,
-                                onMeldDrop: _dropOnMeld,
-                                canAcceptMeldDrop: _canDropOnMeld,
-                                onPairDrop: _dropOnPairArea,
-                                canAcceptPairDrop: _canDropOnPairArea,
-                                myTurn: myTurn,
-                                drawnThisTurn: _drawnThisTurn,
-                                onPlayerDiscardDrop: _dropToDiscard,
-                                canTakeDiscard:
-                                    myTurn &&
-                                    !_drawnThisTurn &&
-                                    _discarded != null,
-                                onTakeDiscard: _takeDiscarded,
-                                canReturnDiscard:
-                                    _tookDiscard &&
-                                    _takenDiscardTile != null &&
-                                    _rack.any(
-                                      (tile) =>
-                                          tile.id == _takenDiscardTile!.id,
+                return SizedBox.expand(
+                  child: Stack(
+                    children: [
+                      TickerMode(
+                        enabled: !_endDialogVisible,
+                        child: RepaintBoundary(
+                          child: _GameSceneEntrance(
+                            enabled: _gameSettings.animations,
+                            child: Stack(
+                              children: [
+                                // ── Büyük oyun masası ───────────────────────────────────
+                                Positioned(
+                                  top: 0,
+                                  left: 0,
+                                  right: 0,
+                                  bottom: rackHeight,
+                                  child: Padding(
+                                    padding: EdgeInsets.fromLTRB(
+                                      edgeInset,
+                                      sceneHeight * 0.012,
+                                      edgeInset,
+                                      sceneHeight * 0.008,
                                     ),
-                                onReturnDiscard: _returnTakenDiscard,
-                                gridTileWidth: gridTileWidth,
-                                gridKey: _meldGridKey,
-                                gridDragPosition: _gridDragPosition,
-                                botDrawMotion: _botDrawMotion,
-                                botDiscardMotion: _botDiscardMotion,
-                                tableTileMotion: _tableTileMotion,
-                                bottomReservedSpace: infoPanelHeight,
-                                gameModeLabel: widget.launchConfig.modeLabel,
-                                deckCount: _deck.length,
-                                indicator: _indicator,
-                                perPoints: _playerOpened
-                                    ? _rackRemainingPoints
-                                    : _rackPerPoints,
-                                showRemainingPoints: _playerOpened,
-                                pairCount: !_playerOpened && _showRackPairCount
-                                    ? _rackPairCount
-                                    : null,
-                                canDraw: myTurn && !_drawnThisTurn,
-                                onDraw: _drawFromDeck,
-                                dragTileWidth: normalRackTileWidth,
-                                dragTileHeight: normalRackTileHeight,
-                              ),
-                            ),
-                          ),
-
-                          // ── Referanstaki gibi: kontroller + ahşap ıstaka ─────────
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            height: rackHeight,
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: edgeInset,
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  SizedBox(
-                                    width: actionPanelWidth,
-                                    child: _RackActionPanel(
-                                      actions: [
-                                        _RackAction(
-                                          label: 'ÇİFT AÇ',
-                                          active:
-                                              canAct &&
-                                              (!(_playerOpened &&
-                                                      _playerOpenType ==
-                                                          'seri') ||
-                                                  _canLayPairsAfterStandard),
-                                          color: const Color(0xFF9A650E),
-                                          onTap: _autoOpenPairs,
-                                        ),
-                                        _RackAction(
-                                          label: 'SERİ AÇ',
-                                          active:
-                                              canAct &&
-                                              !(_playerOpened &&
-                                                  _playerOpenType == 'cift'),
-                                          color: const Color(0xFF19862B),
-                                          onTap: _autoOpenStandardMelds,
-                                        ),
-                                        _RackAction(
-                                          label: 'İŞLE',
-                                          active: !_dealInProgress,
-                                          color: const Color(0xFF08658F),
-                                          onTap: _enterAddMode,
-                                          secondaryLabel:
-                                              _processedMoves.isNotEmpty
-                                              ? 'GERİ AL'
-                                              : null,
-                                          secondaryActive:
-                                              !_dealInProgress &&
-                                              _processedMoves.isNotEmpty,
-                                          secondaryColor: const Color(
-                                            0xFF9A650E,
+                                    child: _TableArea(
+                                      melds: _tableMetds,
+                                      bots: _bots,
+                                      activeTurn: _turn,
+                                      discardPiles: _discardPiles,
+                                      uiMode: _uiMode,
+                                      eligibleMeldIndexes: eligibleMeldIndexes,
+                                      onMeldTap: _addToMeld,
+                                      onMeldDrop: _dropOnMeld,
+                                      canAcceptMeldDrop: _canDropOnMeld,
+                                      onPairDrop: _dropOnPairArea,
+                                      canAcceptPairDrop: _canDropOnPairArea,
+                                      myTurn: myTurn,
+                                      drawnThisTurn: _drawnThisTurn,
+                                      onPlayerDiscardDrop: _dropToDiscard,
+                                      canTakeDiscard:
+                                          myTurn &&
+                                          !_drawnThisTurn &&
+                                          _discarded != null,
+                                      onTakeDiscard: _takeDiscarded,
+                                      canReturnDiscard:
+                                          _tookDiscard &&
+                                          _takenDiscardTile != null &&
+                                          _rack.any(
+                                            (tile) =>
+                                                tile.id ==
+                                                _takenDiscardTile!.id,
                                           ),
-                                          secondaryOnTap: _undoProcessedMoves,
+                                      returnDiscardTileId:
+                                          _takenDiscardTile?.id,
+                                      onReturnDiscard: _returnTakenDiscard,
+                                      gridTileWidth: gridTileWidth,
+                                      gridKey: _meldGridKey,
+                                      gridDragPosition: _gridDragPosition,
+                                      botDiscardMotion: _botDiscardMotion,
+                                      tableTileMotion: _tableTileMotion,
+                                      bottomReservedSpace: infoPanelHeight,
+                                      gameModeLabel:
+                                          widget.launchConfig.modeLabel,
+                                      deckCount: _deck.length,
+                                      indicator: _indicator,
+                                      perPoints: _playerOpened
+                                          ? _rackRemainingPoints
+                                          : _rackPerPoints,
+                                      showRemainingPoints: _playerOpened,
+                                      pairCount:
+                                          !_playerOpened && _showRackPairCount
+                                          ? _rackPairCount
+                                          : null,
+                                      canDraw: myTurn && !_drawnThisTurn,
+                                      onDraw: _drawFromDeck,
+                                      canFinishByCenterDrop:
+                                          canAct && _rack.length == 1,
+                                      onFinishByCenterDrop: _finishByCenterDrop,
+                                      dragTileWidth: rackVisualTileWidth,
+                                      dragTileHeight: rackVisualTileHeight,
+                                    ),
+                                  ),
+                                ),
+
+                                // ── Referanstaki gibi: kontroller + ahşap ıstaka ─────────
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  height: rackHeight,
+                                  child: Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: edgeInset,
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        SizedBox(
+                                          width: actionPanelWidth,
+                                          child: _RackActionPanel(
+                                            actions: [
+                                              _RackAction(
+                                                label: 'ÇİFT AÇ',
+                                                active:
+                                                    canAct &&
+                                                    (!(_playerOpened &&
+                                                            _playerOpenType ==
+                                                                'seri') ||
+                                                        _canLayPairsAfterStandard),
+                                                color: const Color(0xFF9A650E),
+                                                onTap: _autoOpenPairs,
+                                              ),
+                                              _RackAction(
+                                                label: 'SERİ AÇ',
+                                                active:
+                                                    canAct &&
+                                                    !(_playerOpened &&
+                                                        _playerOpenType ==
+                                                            'cift'),
+                                                color: const Color(0xFF19862B),
+                                                onTap: _autoOpenStandardMelds,
+                                              ),
+                                              _RackAction(
+                                                label: 'İŞLE',
+                                                active: !_dealInProgress,
+                                                color: const Color(0xFF08658F),
+                                                onTap: _enterAddMode,
+                                                secondaryLabel:
+                                                    _processedMoves.isNotEmpty
+                                                    ? 'GERİ AL'
+                                                    : null,
+                                                secondaryActive:
+                                                    !_dealInProgress &&
+                                                    _processedMoves.isNotEmpty,
+                                                secondaryColor: const Color(
+                                                  0xFF9A650E,
+                                                ),
+                                                secondaryOnTap:
+                                                    _undoProcessedMoves,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        SizedBox(width: controlGap),
+                                        Expanded(
+                                          child: IgnorePointer(
+                                            ignoring: _dealInProgress,
+                                            child: RepaintBoundary(
+                                              child: _RackArea(
+                                                rack: _rack,
+                                                slots: _rackSlots,
+                                                dealAnimationSerial:
+                                                    _dealAnimationSerial,
+                                                onTileTap: _tapTile,
+                                                onReorder: _reorderRack,
+                                                onTileDragStart:
+                                                    _startGridDragZoom,
+                                                onTileDragUpdate:
+                                                    _updateGridDragZoom,
+                                                onTileDragEnd: _endGridDragZoom,
+                                                dragTilt: _rackDragTilt,
+                                                dragLift: _rackDragLift,
+                                                gridDragPosition:
+                                                    _gridDragPosition,
+                                                processableTileIds:
+                                                    processableTileIds,
+                                                drawAttentionTileId:
+                                                    _drawAttentionTileId,
+                                                drawAttentionSerial:
+                                                    _drawAttentionSerial,
+                                                canAcceptDeckDrop:
+                                                    myTurn && !_drawnThisTurn,
+                                                canAcceptDiscardDrop:
+                                                    myTurn &&
+                                                    !_drawnThisTurn &&
+                                                    _discarded != null,
+                                                onDeckDropAt: _drawFromDeck,
+                                                onDiscardDropAt: _takeDiscarded,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(width: controlGap),
+                                        SizedBox(
+                                          width: actionPanelWidth,
+                                          child: _RackActionPanel(
+                                            actions: [
+                                              _RackAction(
+                                                label: 'SERİ DİZ',
+                                                active:
+                                                    !_dealInProgress &&
+                                                    _rack.length >= 3,
+                                                color: const Color(0xFF19862B),
+                                                onTap: _arrangeStandardMelds,
+                                              ),
+                                              _RackAction(
+                                                label: 'ÇİFT DİZ',
+                                                active:
+                                                    !_dealInProgress &&
+                                                    _rack.length >= 2,
+                                                color: const Color(0xFF9A650E),
+                                                onTap: _arrangePairs,
+                                              ),
+                                              _RackAction(
+                                                label: _drawnThisTurn
+                                                    ? 'TAŞ AT'
+                                                    : 'TAŞ ÇEK',
+                                                icon: _drawnThisTurn
+                                                    ? Icons.check_rounded
+                                                    : null,
+                                                active: _drawnThisTurn
+                                                    ? canAct && sel == 1
+                                                    : myTurn &&
+                                                          _deck.isNotEmpty,
+                                                color: const Color(0xFF08658F),
+                                                onTap: _drawnThisTurn
+                                                    ? _discardTile
+                                                    : _drawFromDeck,
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  SizedBox(width: controlGap),
-                                  Expanded(
-                                    child: IgnorePointer(
-                                      ignoring: _dealInProgress,
-                                      child: RepaintBoundary(
-                                        child: _RackArea(
-                                          rack: _rack,
-                                          slots: _rackSlots,
-                                          dealAnimationSerial:
-                                              _dealAnimationSerial,
-                                          onTileTap: _tapTile,
-                                          onReorder: _reorderRack,
-                                          onTileDragStart: _startGridDragZoom,
-                                          onTileDragUpdate: _updateGridDragZoom,
-                                          onTileDragEnd: _endGridDragZoom,
-                                          dragTilt: _rackDragTilt,
-                                          gridDragPosition: _gridDragPosition,
-                                          processableTileIds:
-                                              processableTileIds,
-                                          canAcceptDeckDrop:
-                                              myTurn && !_drawnThisTurn,
-                                          canAcceptDiscardDrop:
-                                              myTurn &&
-                                              !_drawnThisTurn &&
-                                              _discarded != null,
-                                          onDeckDropAt: _drawFromDeck,
-                                          onDiscardDropAt: _takeDiscarded,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(width: controlGap),
-                                  SizedBox(
-                                    width: actionPanelWidth,
-                                    child: _RackActionPanel(
-                                      actions: [
-                                        _RackAction(
-                                          label: 'SERİ DİZ',
-                                          active:
-                                              !_dealInProgress &&
-                                              _rack.length >= 3,
-                                          color: const Color(0xFF19862B),
-                                          onTap: _arrangeStandardMelds,
-                                        ),
-                                        _RackAction(
-                                          label: 'ÇİFT DİZ',
-                                          active:
-                                              !_dealInProgress &&
-                                              _rack.length >= 2,
-                                          color: const Color(0xFF9A650E),
-                                          onTap: _arrangePairs,
-                                        ),
-                                        _RackAction(
-                                          label: _drawnThisTurn
-                                              ? 'TAŞ AT'
-                                              : 'TAŞ ÇEK',
-                                          icon: _drawnThisTurn
-                                              ? Icons.check_rounded
-                                              : null,
-                                          active: _drawnThisTurn
-                                              ? canAct && sel == 1
-                                              : myTurn && _deck.isNotEmpty,
-                                          color: const Color(0xFF08658F),
-                                          onTap: _drawnThisTurn
-                                              ? _discardTile
-                                              : _drawFromDeck,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    Positioned(
-                      top: 0,
-                      right: 0,
-                      child: _TopBar(onSettings: _openGameSettings),
-                    ),
-
-                    // ── Overlay Mesajı ─────────────────────────────────────────
-                    if (_msg != null)
-                      Positioned(
-                        top: 56,
-                        left: 16,
-                        right: 16,
-                        child: Center(child: _MsgBanner(text: _msg!)),
-                      ),
-
-                    // ── İşleme modu ipucu ─────────────────────────────────────
-                    if (_uiMode == 'addMeld')
-                      Positioned(
-                        top: 52,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 18,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              color: OC.numBlue.withValues(alpha: 0.9),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Text(
-                              'İşlemek istediğin perdeye dokun',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                              ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
                       ),
-                  ],
-                ),
-              );
-            },
+
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        child: _TopBar(onSettings: _openGameSettings),
+                      ),
+
+                      // ── Overlay Mesajı ─────────────────────────────────────────
+                      if (_msg != null)
+                        Positioned(
+                          top: 56,
+                          left: 16,
+                          right: 16,
+                          child: Center(child: _MsgBanner(text: _msg!)),
+                        ),
+
+                      if (_warningMsg != null)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: Center(
+                              child: RepaintBoundary(
+                                child: Container(
+                                  key: const ValueKey('game-warning-popup'),
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 310,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                    vertical: 13,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xF22B1608),
+                                    borderRadius: BorderRadius.circular(13),
+                                    border: Border.all(
+                                      color: const Color(0xFFFFC04D),
+                                      width: 2,
+                                    ),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Colors.black54,
+                                        blurRadius: 10,
+                                        offset: Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.warning_amber_rounded,
+                                        color: Color(0xFFFFC04D),
+                                        size: 25,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Flexible(
+                                        child: Text(
+                                          _warningMsg!,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                      if (_showFinishCelebration)
+                        const Positioned.fill(child: _FinishCelebration()),
+
+                      // ── İşleme modu ipucu ─────────────────────────────────────
+                      if (_uiMode == 'addMeld')
+                        Positioned(
+                          top: 52,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: OC.numBlue.withValues(alpha: 0.9),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Text(
+                                'İşlemek istediğin perdeye dokun',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -2478,13 +2807,13 @@ class _TableArea extends StatelessWidget {
   final bool canTakeDiscard;
   final VoidCallback onTakeDiscard;
   final bool canReturnDiscard;
+  final int? returnDiscardTileId;
   final VoidCallback onReturnDiscard;
   final double gridTileWidth;
   final GlobalKey gridKey;
   final ValueNotifier<Offset?> gridDragPosition;
-  final _BotDrawMotion? botDrawMotion;
   final _BotDiscardMotion? botDiscardMotion;
-  final _TableTileMotion? tableTileMotion;
+  final ValueNotifier<_TableTileMotion?> tableTileMotion;
   final double bottomReservedSpace;
   final String gameModeLabel;
   final int deckCount;
@@ -2494,6 +2823,8 @@ class _TableArea extends StatelessWidget {
   final int? pairCount;
   final bool canDraw;
   final VoidCallback onDraw;
+  final bool canFinishByCenterDrop;
+  final ValueChanged<_RackDragData> onFinishByCenterDrop;
   final double dragTileWidth;
   final double dragTileHeight;
 
@@ -2515,11 +2846,11 @@ class _TableArea extends StatelessWidget {
     required this.canTakeDiscard,
     required this.onTakeDiscard,
     required this.canReturnDiscard,
+    required this.returnDiscardTileId,
     required this.onReturnDiscard,
     required this.gridTileWidth,
     required this.gridKey,
     required this.gridDragPosition,
-    required this.botDrawMotion,
     required this.botDiscardMotion,
     required this.tableTileMotion,
     required this.bottomReservedSpace,
@@ -2531,192 +2862,228 @@ class _TableArea extends StatelessWidget {
     required this.pairCount,
     required this.canDraw,
     required this.onDraw,
+    required this.canFinishByCenterDrop,
+    required this.onFinishByCenterDrop,
     required this.dragTileWidth,
     required this.dragTileHeight,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        // Ana yeşil masa
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: const RadialGradient(
-                center: Alignment.center,
-                radius: 1.05,
-                colors: [Color(0xFF08703B), Color(0xFF004526)],
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(5),
-              child: Stack(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(58, 20, 58, 8),
-                    child: SizedBox.expand(
-                      key: gridKey,
-                      child: Stack(
-                        clipBehavior: Clip.hardEdge,
-                        children: [
-                          Positioned.fill(
-                            child: RepaintBoundary(
-                              child: _MeldGridBoard(
-                                tileWidth: gridTileWidth,
-                                melds: melds,
-                                uiMode: uiMode,
-                                eligibleMeldIndexes: eligibleMeldIndexes,
-                                onMeldTap: onMeldTap,
-                                onMeldDrop: onMeldDrop,
-                                canAcceptMeldDrop: canAcceptMeldDrop,
-                                onPairDrop: onPairDrop,
-                                canAcceptPairDrop: canAcceptPairDrop,
-                                deckCount: deckCount,
-                                indicator: indicator,
-                                perPoints: perPoints,
-                                showRemainingPoints: showRemainingPoints,
-                                pairCount: pairCount,
-                                canDraw: canDraw,
-                                onDraw: onDraw,
-                                dragTileWidth: dragTileWidth,
-                                dragTileHeight: dragTileHeight,
+    return LayoutBuilder(
+      builder: (context, tableBox) {
+        final playerTwoBottom =
+            (tableBox.maxHeight + 112 - bottomReservedSpace) / 2 + 32;
+        final discardZoneTop = min(
+          tableBox.maxHeight - 72,
+          max(96.0, playerTwoBottom),
+        );
+        return Row(
+          children: [
+            // Ana yeşil masa
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: const RadialGradient(
+                    center: Alignment.center,
+                    radius: 1.05,
+                    colors: [Color(0xFF08703B), Color(0xFF004526)],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: Stack(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(58, 20, 58, 8),
+                        child: SizedBox.expand(
+                          key: gridKey,
+                          child: Stack(
+                            clipBehavior: Clip.hardEdge,
+                            children: [
+                              Positioned.fill(
+                                child: RepaintBoundary(
+                                  child: _MeldGridBoard(
+                                    tileWidth: gridTileWidth,
+                                    melds: melds,
+                                    uiMode: uiMode,
+                                    eligibleMeldIndexes: eligibleMeldIndexes,
+                                    onMeldTap: onMeldTap,
+                                    onMeldDrop: onMeldDrop,
+                                    canAcceptMeldDrop: canAcceptMeldDrop,
+                                    onPairDrop: onPairDrop,
+                                    canAcceptPairDrop: canAcceptPairDrop,
+                                    deckCount: deckCount,
+                                    indicator: indicator,
+                                    perPoints: perPoints,
+                                    showRemainingPoints: showRemainingPoints,
+                                    pairCount: pairCount,
+                                    canDraw: canDraw,
+                                    onDraw: onDraw,
+                                    canFinishByCenterDrop:
+                                        canFinishByCenterDrop,
+                                    onFinishByCenterDrop: onFinishByCenterDrop,
+                                    dragTileWidth: dragTileWidth,
+                                    dragTileHeight: dragTileHeight,
+                                  ),
+                                ),
+                              ),
+                              Positioned.fill(
+                                child: ValueListenableBuilder<Offset?>(
+                                  valueListenable: gridDragPosition,
+                                  builder: (context, position, _) {
+                                    if (position == null) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return _GridDragMagnifier(
+                                      position: position,
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 2,
+                        left: 58,
+                        right: 58,
+                        height: 16,
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              flex: 13,
+                              child: _GridTopCaption(
+                                key: ValueKey('opening-rule-caption'),
+                                text: 'EL AÇMA: 101 PER • 5 ÇİFT',
+                                alignment: Alignment.centerLeft,
                               ),
                             ),
+                            const Spacer(flex: 8),
+                            Expanded(
+                              flex: 13,
+                              child: _GridTopCaption(
+                                key: const ValueKey('game-mode-caption'),
+                                text: gameModeLabel.toUpperCase(),
+                                alignment: Alignment.centerRight,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Positioned(
+                        top: 6,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: _PlayerInfo(
+                            bot: bots[1],
+                            active: activeTurn == 2,
+                            horizontal: true,
                           ),
-                          Positioned.fill(
-                            child: ValueListenableBuilder<Offset?>(
-                              valueListenable: gridDragPosition,
-                              builder: (context, position, _) {
-                                if (position == null) {
-                                  return const SizedBox.shrink();
-                                }
-                                return _GridDragMagnifier(position: position);
-                              },
+                        ),
+                      ),
+                      Positioned(
+                        left: 10,
+                        top: 56,
+                        bottom: max(0, bottomReservedSpace - 56),
+                        child: Center(
+                          child: _PlayerInfo(
+                            bot: bots[2],
+                            active: activeTurn == 3,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: 10,
+                        top: 56,
+                        bottom: max(0, bottomReservedSpace - 56),
+                        child: Center(
+                          child: _PlayerInfo(
+                            bot: bots[0],
+                            active: activeTurn == 1,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 64,
+                        right: 8,
+                        child: _TableDiscardPile(
+                          tiles: discardPiles[1],
+                          label: bots[0].name,
+                          hitWidth: 38 + gridTileWidth * 2,
+                          visualAlignment: Alignment.topRight,
+                        ),
+                      ),
+                      Positioned(
+                        top: discardZoneTop,
+                        bottom: 0,
+                        right: 0,
+                        width: 58 + gridTileWidth * 1.5,
+                        child: _TableDiscardPile(
+                          tiles: discardPiles[0],
+                          label: 'Oyuncu 1',
+                          active: myTurn && drawnThisTurn,
+                          onDrop: onPlayerDiscardDrop,
+                          hitWidth: 38 + gridTileWidth * 2,
+                          hitHeight: tableBox.maxHeight - discardZoneTop,
+                          visualAlignment: Alignment.bottomRight,
+                        ),
+                      ),
+                      Positioned(
+                        top: 64,
+                        left: 8,
+                        child: _TableDiscardPile(
+                          tiles: discardPiles[2],
+                          label: bots[1].name,
+                          hitWidth: 38 + gridTileWidth * 2,
+                          visualAlignment: Alignment.topLeft,
+                        ),
+                      ),
+                      Positioned(
+                        bottom: max(8, bottomReservedSpace - 48),
+                        left: 8,
+                        child: _TableDiscardPile(
+                          tiles: discardPiles[3],
+                          label: bots[2].name,
+                          takeEnabled: canTakeDiscard,
+                          onTake: onTakeDiscard,
+                          showReturnButton: canReturnDiscard,
+                          returnTileId: returnDiscardTileId,
+                          onReturn: onReturnDiscard,
+                          hitWidth: 38 + gridTileWidth * 2,
+                          visualAlignment: Alignment.bottomLeft,
+                        ),
+                      ),
+                      if (botDiscardMotion != null)
+                        Positioned.fill(
+                          child: RepaintBoundary(
+                            child: _FlyingBotDiscard(
+                              motion: botDiscardMotion!,
+                              bottomReservedSpace: bottomReservedSpace,
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 2,
-                    left: 58,
-                    right: 58,
-                    height: 16,
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          flex: 13,
-                          child: _GridTopCaption(
-                            key: ValueKey('opening-rule-caption'),
-                            text: 'EL AÇMA: 101 PER • 5 ÇİFT',
-                            alignment: Alignment.centerLeft,
-                          ),
                         ),
-                        const Spacer(flex: 8),
-                        Expanded(
-                          flex: 13,
-                          child: _GridTopCaption(
-                            key: const ValueKey('game-mode-caption'),
-                            text: gameModeLabel.toUpperCase(),
-                            alignment: Alignment.centerRight,
-                          ),
+                      Positioned.fill(
+                        child: ValueListenableBuilder<_TableTileMotion?>(
+                          valueListenable: tableTileMotion,
+                          builder: (context, motion, _) => motion == null
+                              ? const SizedBox.shrink()
+                              : RepaintBoundary(
+                                  child: _FlyingTableTiles(motion: motion),
+                                ),
                         ),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    top: 6,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: _PlayerInfo(
-                        bot: bots[1],
-                        active: activeTurn == 2,
-                        horizontal: true,
                       ),
-                    ),
+                    ],
                   ),
-                  Positioned(
-                    left: 10,
-                    top: 56,
-                    bottom: max(0, bottomReservedSpace - 56),
-                    child: Center(
-                      child: _PlayerInfo(bot: bots[2], active: activeTurn == 3),
-                    ),
-                  ),
-                  Positioned(
-                    right: 10,
-                    top: 56,
-                    bottom: max(0, bottomReservedSpace - 56),
-                    child: Center(
-                      child: _PlayerInfo(bot: bots[0], active: activeTurn == 1),
-                    ),
-                  ),
-                  Positioned(
-                    top: 64,
-                    right: 8,
-                    child: _TableDiscardPile(
-                      tiles: discardPiles[1],
-                      label: bots[0].name,
-                    ),
-                  ),
-                  Positioned(
-                    bottom: max(8, bottomReservedSpace - 48),
-                    right: 8,
-                    child: _TableDiscardPile(
-                      tiles: discardPiles[0],
-                      label: 'Oyuncu 1',
-                      active: myTurn && drawnThisTurn,
-                      onDrop: onPlayerDiscardDrop,
-                    ),
-                  ),
-                  Positioned(
-                    top: 64,
-                    left: 8,
-                    child: _TableDiscardPile(
-                      tiles: discardPiles[2],
-                      label: bots[1].name,
-                    ),
-                  ),
-                  Positioned(
-                    bottom: max(8, bottomReservedSpace - 48),
-                    left: 8,
-                    child: _TableDiscardPile(
-                      tiles: discardPiles[3],
-                      label: bots[2].name,
-                      takeEnabled: canTakeDiscard,
-                      onTake: onTakeDiscard,
-                      showReturnButton: canReturnDiscard,
-                      onReturn: onReturnDiscard,
-                    ),
-                  ),
-                  if (botDrawMotion != null)
-                    Positioned.fill(
-                      child: RepaintBoundary(
-                        child: _FlyingBotDraw(motion: botDrawMotion!),
-                      ),
-                    ),
-                  if (botDiscardMotion != null)
-                    Positioned.fill(
-                      child: RepaintBoundary(
-                        child: _FlyingBotDiscard(motion: botDiscardMotion!),
-                      ),
-                    ),
-                  if (tableTileMotion != null)
-                    Positioned.fill(
-                      child: RepaintBoundary(
-                        child: _FlyingTableTiles(motion: tableTileMotion!),
-                      ),
-                    ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -2786,13 +3153,26 @@ class _CenteredGridViewerState extends State<_CenteredGridViewer>
         if (animation != null) _transformation.value = animation.value;
       });
   Animation<Matrix4>? _centeringAnimation;
-  Size _viewportSize = Size.zero;
   bool _lockingBasePan = false;
+  bool _showResetButton = false;
 
   @override
   void initState() {
     super.initState();
-    _transformation.addListener(_lockPanAtBaseScale);
+    _transformation.addListener(_handleTransformChanged);
+  }
+
+  void _handleTransformChanged() {
+    _lockPanAtBaseScale();
+    final matrix = _transformation.value;
+    final translation = matrix.getTranslation();
+    final shouldShow =
+        matrix.getMaxScaleOnAxis() > 1.002 ||
+        translation.x.abs() > 0.5 ||
+        translation.y.abs() > 0.5;
+    if (shouldShow != _showResetButton && mounted) {
+      setState(() => _showResetButton = shouldShow);
+    }
   }
 
   void _lockPanAtBaseScale() {
@@ -2808,7 +3188,7 @@ class _CenteredGridViewerState extends State<_CenteredGridViewer>
 
   @override
   void dispose() {
-    _transformation.removeListener(_lockPanAtBaseScale);
+    _transformation.removeListener(_handleTransformChanged);
     _centeringController.dispose();
     _transformation.dispose();
     super.dispose();
@@ -2818,39 +3198,12 @@ class _CenteredGridViewerState extends State<_CenteredGridViewer>
     _centeringController.stop();
   }
 
-  void _onInteractionEnd(ScaleEndDetails _) {
-    final scale = _transformation.value.getMaxScaleOnAxis().clamp(1.0, 3.4);
-    final translation = _transformation.value.getTranslation();
-    if (scale <= 1.002 &&
-        translation.x.abs() < 0.5 &&
-        translation.y.abs() < 0.5) {
-      return;
-    }
-    final cornerTransform = Matrix4.identity()
-      ..translateByDouble(
-        widget.alignRight ? _viewportSize.width * (1 - scale) : 0,
-        _viewportSize.height * (1 - scale),
-        0,
-        1,
-      )
-      ..scaleByDouble(scale, scale, 1, 1);
+  void _resetView() {
     _centeringAnimation =
-        TweenSequence<Matrix4>([
-          TweenSequenceItem(
-            tween: Matrix4Tween(
-              begin: _transformation.value.clone(),
-              end: cornerTransform,
-            ),
-            weight: 32,
-          ),
-          TweenSequenceItem(
-            tween: Matrix4Tween(
-              begin: cornerTransform,
-              end: Matrix4.identity(),
-            ),
-            weight: 68,
-          ),
-        ]).animate(
+        Matrix4Tween(
+          begin: _transformation.value.clone(),
+          end: Matrix4.identity(),
+        ).animate(
           CurvedAnimation(
             parent: _centeringController,
             curve: Curves.easeOutCubic,
@@ -2862,21 +3215,71 @@ class _CenteredGridViewerState extends State<_CenteredGridViewer>
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, box) {
-      _viewportSize = box.biggest;
-      return InteractiveViewer(
-        transformationController: _transformation,
-        minScale: 1,
-        maxScale: 3.4,
-        panEnabled: true,
-        scaleEnabled: true,
-        panAxis: PanAxis.free,
-        boundaryMargin: const EdgeInsets.all(160),
-        clipBehavior: Clip.hardEdge,
-        onInteractionStart: _onInteractionStart,
-        onInteractionEnd: _onInteractionEnd,
-        child: widget.child,
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              transformationController: _transformation,
+              minScale: 1,
+              maxScale: 3.4,
+              panEnabled: true,
+              scaleEnabled: true,
+              panAxis: PanAxis.free,
+              boundaryMargin: EdgeInsets.zero,
+              clipBehavior: Clip.hardEdge,
+              onInteractionStart: _onInteractionStart,
+              child: widget.child,
+            ),
+          ),
+          if (_showResetButton)
+            Positioned(
+              left: widget.alignRight ? null : 5,
+              right: widget.alignRight ? 5 : null,
+              bottom: 5,
+              child: _GridResetButton(onPressed: _resetView),
+            ),
+        ],
       );
     },
+  );
+}
+
+class _GridResetButton extends StatelessWidget {
+  final VoidCallback onPressed;
+
+  const _GridResetButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xE615211E),
+    borderRadius: BorderRadius.circular(7),
+    child: InkWell(
+      key: const ValueKey('grid-reset-button'),
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+        decoration: BoxDecoration(
+          border: Border.all(color: OC.gold.withValues(alpha: 0.8)),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.fit_screen_rounded, size: 13, color: OC.okeyGold),
+            SizedBox(width: 4),
+            Text(
+              'TAM GÖRÜNÜM',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 7,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 }
 
@@ -2891,11 +3294,11 @@ class _GridDragMagnifier extends StatelessWidget {
       builder: (context, box) {
         final lensWidth = min(
           box.maxWidth,
-          min(230.0, max(128.0, box.maxWidth * 0.30)),
+          min(180.0, max(112.0, box.maxWidth * 0.24)),
         );
         final lensHeight = min(
           box.maxHeight,
-          min(152.0, max(88.0, box.maxHeight * 0.40)),
+          min(112.0, max(74.0, box.maxHeight * 0.31)),
         );
         final left = (position.dx - lensWidth / 2)
             .clamp(0.0, max(0.0, box.maxWidth - lensWidth))
@@ -2914,7 +3317,7 @@ class _GridDragMagnifier extends StatelessWidget {
               top: top,
               child: RawMagnifier(
                 size: Size(lensWidth, lensHeight),
-                magnificationScale: 1.64,
+                magnificationScale: 1.45,
                 focalPointOffset: position - lensCenter,
                 clipBehavior: Clip.hardEdge,
                 decoration: MagnifierDecoration(
@@ -2925,17 +3328,6 @@ class _GridDragMagnifier extends StatelessWidget {
                       width: 1.4,
                     ),
                   ),
-                  shadows: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.48),
-                      blurRadius: 13,
-                      spreadRadius: 2,
-                    ),
-                    BoxShadow(
-                      color: OC.numGreen.withValues(alpha: 0.24),
-                      blurRadius: 8,
-                    ),
-                  ],
                 ),
               ),
             ),
@@ -2946,80 +3338,72 @@ class _GridDragMagnifier extends StatelessWidget {
   );
 }
 
-class _FlyingBotDraw extends StatelessWidget {
-  final _BotDrawMotion motion;
-
-  const _FlyingBotDraw({required this.motion});
-
-  @override
-  Widget build(BuildContext context) {
-    final target = switch (motion.botIndex) {
-      0 => const Alignment(0.88, 0),
-      1 => const Alignment(0, -0.9),
-      _ => const Alignment(-0.88, 0),
-    };
-    final discardSource = switch (motion.botIndex) {
-      0 => const Alignment(0.84, 0.76),
-      1 => const Alignment(0.84, -0.76),
-      _ => const Alignment(-0.84, -0.76),
-    };
-    final source = motion.fromDiscard
-        ? discardSource
-        : const Alignment(0, 0.82);
-
-    return IgnorePointer(
-      child: TweenAnimationBuilder<double>(
-        key: ValueKey('bot-draw-motion-${motion.serial}'),
-        tween: Tween(begin: 0, end: 1),
-        duration: const Duration(milliseconds: 420),
-        curve: Curves.easeInOutCubic,
-        builder: (context, value, child) => Align(
-          alignment: Alignment.lerp(source, target, value)!,
-          child: Transform.rotate(
-            angle: (0.5 - value) * 0.12,
-            child: Transform.scale(
-              scale: 1 + sin(value * pi) * 0.16,
-              child: Opacity(opacity: 0.65 + value * 0.35, child: child),
-            ),
-          ),
-        ),
-        child: motion.fromDiscard
-            ? _TileWidget(tile: motion.tile, w: 27, h: 35, onTap: null)
-            : const _TileBack(),
-      ),
-    );
-  }
-}
-
 class _FlyingBotDiscard extends StatelessWidget {
   final _BotDiscardMotion motion;
+  final double bottomReservedSpace;
 
-  const _FlyingBotDiscard({required this.motion});
+  const _FlyingBotDiscard({
+    required this.motion,
+    required this.bottomReservedSpace,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final (start, end) = switch (motion.botIndex) {
-      0 => (const Alignment(0.88, 0), const Alignment(0.84, -0.76)),
-      1 => (const Alignment(0, -0.9), const Alignment(-0.84, -0.76)),
-      _ => (const Alignment(-0.88, 0), const Alignment(-0.84, 0.76)),
-    };
     return IgnorePointer(
-      child: TweenAnimationBuilder<double>(
-        key: ValueKey('bot-discard-motion-${motion.serial}'),
-        tween: Tween(begin: 0, end: 1),
-        duration: const Duration(milliseconds: 650),
-        curve: Curves.easeInOutCubic,
-        builder: (context, value, child) => Align(
-          alignment: Alignment.lerp(start, end, value)!,
-          child: Transform.rotate(
-            angle: (value - 0.5) * 0.16,
-            child: Transform.scale(
-              scale: 1.12 - value * 0.12,
-              child: Opacity(opacity: (0.55 + value * 0.45), child: child),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          const tileWidth = 27.0;
+          const tileHeight = 35.0;
+          final startCenter = switch (motion.botIndex) {
+            0 => Offset(box.maxWidth - 28, box.maxHeight / 2),
+            1 => Offset(box.maxWidth / 2, 24),
+            _ => Offset(28, box.maxHeight / 2),
+          };
+          final endTop = switch (motion.botIndex) {
+            0 => const Offset(0, 64),
+            1 => const Offset(8, 64),
+            _ => Offset(
+              8,
+              box.maxHeight - max(8, bottomReservedSpace - 48) - tileHeight,
             ),
-          ),
-        ),
-        child: _TileWidget(tile: motion.tile, w: 27, h: 35, onTap: null),
+          };
+          final targetLeft = motion.botIndex == 0
+              ? box.maxWidth - 8 - tileWidth
+              : endTop.dx;
+          final targetTop = endTop.dy;
+          final targetCenter = Offset(
+            targetLeft + tileWidth / 2,
+            targetTop + tileHeight / 2,
+          );
+          final travel = startCenter - targetCenter;
+          return Stack(
+            children: [
+              Positioned(
+                left: targetLeft,
+                top: targetTop,
+                child: TweenAnimationBuilder<double>(
+                  key: ValueKey('bot-discard-motion-${motion.serial}'),
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, value, child) => Transform.translate(
+                    offset: travel * (1 - value),
+                    child: child,
+                  ),
+                  child: RepaintBoundary(
+                    child: _TileWidget(
+                      tile: motion.tile,
+                      w: tileWidth,
+                      h: tileHeight,
+                      onTap: null,
+                      showShadow: false,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -3127,8 +3511,13 @@ class _DeckStack extends StatelessWidget {
 class _GridPainter extends CustomPainter {
   final double cellWidth;
   final double cellHeight;
+  final int majorColumnInterval;
 
-  const _GridPainter({required this.cellWidth, required this.cellHeight});
+  const _GridPainter({
+    required this.cellWidth,
+    required this.cellHeight,
+    this.majorColumnInterval = 0,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -3141,12 +3530,22 @@ class _GridPainter extends CustomPainter {
     for (double y = 0; y <= size.height; y += cellHeight) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
     }
+    if (majorColumnInterval > 0) {
+      final divider = Paint()
+        ..color = const Color(0xB8C59B52)
+        ..strokeWidth = 2.2;
+      final step = cellWidth * majorColumnInterval;
+      for (double x = step; x < size.width - 0.5; x += step) {
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), divider);
+      }
+    }
   }
 
   @override
   bool shouldRepaint(_GridPainter oldDelegate) =>
       oldDelegate.cellWidth != cellWidth ||
-      oldDelegate.cellHeight != cellHeight;
+      oldDelegate.cellHeight != cellHeight ||
+      oldDelegate.majorColumnInterval != majorColumnInterval;
 }
 
 class _MeldGridBoard extends StatelessWidget {
@@ -3166,6 +3565,8 @@ class _MeldGridBoard extends StatelessWidget {
   final int? pairCount;
   final bool canDraw;
   final VoidCallback onDraw;
+  final bool canFinishByCenterDrop;
+  final ValueChanged<_RackDragData> onFinishByCenterDrop;
   final double dragTileWidth;
   final double dragTileHeight;
 
@@ -3186,6 +3587,8 @@ class _MeldGridBoard extends StatelessWidget {
     required this.pairCount,
     required this.canDraw,
     required this.onDraw,
+    required this.canFinishByCenterDrop,
+    required this.onFinishByCenterDrop,
     required this.dragTileWidth,
     required this.dragTileHeight,
   });
@@ -3266,6 +3669,7 @@ class _MeldGridBoard extends StatelessWidget {
                       onMeldTap: onMeldTap,
                       onMeldDrop: onMeldDrop,
                       canAcceptMeldDrop: canAcceptMeldDrop,
+                      meldGapColumns: 1,
                     ),
                   ),
                 ),
@@ -3286,6 +3690,11 @@ class _MeldGridBoard extends StatelessWidget {
                           cellHeight: cellHeight * 0.86,
                           frameWidth: frameWidth,
                           entries: pairEntries,
+                          uiMode: uiMode,
+                          eligibleMeldIndexes: eligibleMeldIndexes,
+                          onMeldTap: onMeldTap,
+                          onMeldDrop: onMeldDrop,
+                          canAcceptMeldDrop: canAcceptMeldDrop,
                           onPairDrop: onPairDrop,
                           canAcceptPairDrop: canAcceptPairDrop,
                         ),
@@ -3305,6 +3714,8 @@ class _MeldGridBoard extends StatelessWidget {
                           pairCount: pairCount,
                           canDraw: canDraw,
                           onDraw: onDraw,
+                          canFinishByCenterDrop: canFinishByCenterDrop,
+                          onFinishByCenterDrop: onFinishByCenterDrop,
                           dragTileWidth: dragTileWidth,
                           dragTileHeight: dragTileHeight,
                         ),
@@ -3354,6 +3765,8 @@ class _GridDrawColumn extends StatelessWidget {
   final int? pairCount;
   final bool canDraw;
   final VoidCallback onDraw;
+  final bool canFinishByCenterDrop;
+  final ValueChanged<_RackDragData> onFinishByCenterDrop;
   final double dragTileWidth;
   final double dragTileHeight;
 
@@ -3367,6 +3780,8 @@ class _GridDrawColumn extends StatelessWidget {
     required this.pairCount,
     required this.canDraw,
     required this.onDraw,
+    required this.canFinishByCenterDrop,
+    required this.onFinishByCenterDrop,
     required this.dragTileWidth,
     required this.dragTileHeight,
   });
@@ -3375,70 +3790,93 @@ class _GridDrawColumn extends StatelessWidget {
   Widget build(BuildContext context) {
     final displayTileWidth = dragTileWidth;
     final displayTileHeight = dragTileHeight;
-    final itemWidth = displayTileWidth + 4;
+    final itemWidth = displayTileWidth;
     return Container(
       key: const ValueKey('table-draw-column'),
       width: width,
       height: height,
-      alignment: Alignment.bottomLeft,
       decoration: const BoxDecoration(
         color: Color(0xD90B403B),
         border: Border(bottom: BorderSide(color: Color(0xFFC48A31), width: 2)),
       ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 4, top: 1),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              SizedBox(
+      child: LayoutBuilder(
+        builder: (context, area) => Stack(
+          children: [
+            Positioned(
+              left: 2,
+              bottom: 2,
+              child: SizedBox(
                 key: const ValueKey('grid-per-summary'),
-                width: itemWidth,
-                height: displayTileHeight,
+                width: (area.maxWidth - 4) / 4,
+                height: min(displayTileHeight * 1.22, area.maxHeight - 4),
                 child: _RackPerSummary(
                   points: perPoints,
                   showRemaining: showRemainingPoints,
                   pairCount: pairCount,
                 ),
               ),
-              const SizedBox(width: 3),
-              if (indicator != null)
-                SizedBox(
-                  key: const ValueKey('grid-indicator'),
-                  width: itemWidth,
-                  height: displayTileHeight,
-                  child: Center(
-                    child: _TileWidget(
-                      tile: indicator!,
-                      w: displayTileWidth,
-                      h: displayTileHeight,
-                      onTap: null,
-                    ),
+            ),
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: DragTarget<_RackDragData>(
+                key: const ValueKey('center-finish-drop-target'),
+                onWillAcceptWithDetails: (details) =>
+                    canFinishByCenterDrop && details.data.tileIds.length == 1,
+                onAcceptWithDetails: (details) =>
+                    onFinishByCenterDrop(details.data),
+                builder: (context, candidates, rejected) => Container(
+                  padding: const EdgeInsets.all(1),
+                  decoration: BoxDecoration(
+                    color: candidates.isNotEmpty
+                        ? OC.okeyGold.withValues(alpha: 0.20)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(7),
+                    border: candidates.isNotEmpty
+                        ? Border.all(color: OC.okeyGold, width: 2)
+                        : null,
                   ),
-                ),
-              const SizedBox(width: 3),
-              SizedBox(
-                key: const ValueKey('grid-deck-slot'),
-                width: itemWidth,
-                height: displayTileHeight,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: _DeckDrawHandle(
-                    enabled: canDraw,
-                    count: deckCount,
-                    onDraw: onDraw,
-                    feedbackWidth: dragTileWidth,
-                    feedbackHeight: dragTileHeight,
-                    displayWidth: displayTileWidth,
-                    displayHeight: displayTileHeight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (indicator != null)
+                        SizedBox(
+                          key: const ValueKey('grid-indicator'),
+                          width: itemWidth,
+                          height: displayTileHeight,
+                          child: _TileWidget(
+                            tile: indicator!,
+                            w: displayTileWidth,
+                            h: displayTileHeight,
+                            onTap: null,
+                          ),
+                        ),
+                      const SizedBox(width: 2),
+                      SizedBox(
+                        key: const ValueKey('grid-deck-slot'),
+                        width: itemWidth,
+                        height: displayTileHeight,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: canDraw ? onDraw : null,
+                          child: _DeckDrawHandle(
+                            enabled: canDraw,
+                            count: deckCount,
+                            onDraw: onDraw,
+                            feedbackWidth: dragTileWidth,
+                            feedbackHeight: dragTileHeight,
+                            displayWidth: displayTileWidth,
+                            displayHeight: displayTileHeight,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -3452,6 +3890,11 @@ class _PairMeldGrid extends StatelessWidget {
   final double cellHeight;
   final double frameWidth;
   final List<MapEntry<int, Meld>> entries;
+  final String uiMode;
+  final Set<int> eligibleMeldIndexes;
+  final Function(int) onMeldTap;
+  final void Function(int, _RackDragData) onMeldDrop;
+  final bool Function(int, _RackDragData) canAcceptMeldDrop;
   final ValueChanged<_RackDragData> onPairDrop;
   final bool Function(_RackDragData) canAcceptPairDrop;
 
@@ -3463,6 +3906,11 @@ class _PairMeldGrid extends StatelessWidget {
     required this.cellHeight,
     required this.frameWidth,
     required this.entries,
+    required this.uiMode,
+    required this.eligibleMeldIndexes,
+    required this.onMeldTap,
+    required this.onMeldDrop,
+    required this.canAcceptMeldDrop,
     required this.onPairDrop,
     required this.canAcceptPairDrop,
   });
@@ -3480,26 +3928,14 @@ class _PairMeldGrid extends StatelessWidget {
     child: Stack(
       children: [
         Positioned.fill(
-          child: CustomPaint(
-            painter: _GridPainter(cellWidth: cellWidth, cellHeight: cellHeight),
-          ),
-        ),
-        Positioned.fill(
-          child: Wrap(
-            spacing: 0,
-            runSpacing: 0,
-            children: [
-              for (final entry in entries)
-                SizedBox(
-                  width: cellWidth * 2,
-                  height: cellHeight,
-                  child: _MeldRow(
-                    meld: entry.value,
-                    cellWidth: cellWidth,
-                    cellHeight: cellHeight,
-                  ),
-                ),
-            ],
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _GridPainter(
+                cellWidth: cellWidth,
+                cellHeight: cellHeight,
+                majorColumnInterval: 2,
+              ),
+            ),
           ),
         ),
         Positioned.fill(
@@ -3512,8 +3948,7 @@ class _PairMeldGrid extends StatelessWidget {
               final acceptedHover = candidates.isNotEmpty;
               final rejectedHover = rejected.isNotEmpty;
               return IgnorePointer(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 140),
+                child: Container(
                   decoration: BoxDecoration(
                     color: acceptedHover
                         ? OC.numGreen.withValues(alpha: 0.22)
@@ -3545,6 +3980,65 @@ class _PairMeldGrid extends StatelessWidget {
                 ),
               );
             },
+          ),
+        ),
+        Positioned.fill(
+          child: Wrap(
+            spacing: 0,
+            runSpacing: 0,
+            children: [
+              for (final entry in entries)
+                SizedBox(
+                  width: cellWidth * 2,
+                  height: cellHeight,
+                  child: DragTarget<_RackDragData>(
+                    key: ValueKey('pair-meld-target-${entry.key}'),
+                    onWillAcceptWithDetails: (details) =>
+                        canAcceptMeldDrop(entry.key, details.data),
+                    onAcceptWithDetails: (details) =>
+                        onMeldDrop(entry.key, details.data),
+                    builder: (context, candidates, rejected) {
+                      final isEligible =
+                          uiMode == 'addMeld' &&
+                          eligibleMeldIndexes.contains(entry.key);
+                      final acceptedHover = candidates.isNotEmpty;
+                      final rejectedHover = rejected.isNotEmpty;
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: isEligible ? () => onMeldTap(entry.key) : null,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: acceptedHover
+                                ? OC.gold.withValues(alpha: 0.30)
+                                : isEligible
+                                ? OC.numGreen.withValues(alpha: 0.25)
+                                : Colors.transparent,
+                            border: acceptedHover || rejectedHover
+                                ? Border.all(
+                                    color: acceptedHover
+                                        ? OC.okeyGold
+                                        : OC.numRed,
+                                    width: 2,
+                                  )
+                                : null,
+                          ),
+                          child: LayoutBuilder(
+                            builder: (context, pairBox) => RepaintBoundary(
+                              child: _MeldRow(
+                                meld: entry.value,
+                                cellWidth:
+                                    pairBox.maxWidth /
+                                    max(1, entry.value.tiles.length),
+                                cellHeight: pairBox.maxHeight,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -3583,6 +4077,27 @@ class _RunMeldGrid extends StatelessWidget {
   });
 
   List<({MapEntry<int, Meld> entry, int row, int column})> _placements() {
+    if (entries.isNotEmpty && entries.first.value.type == 'grup') {
+      final result = <({MapEntry<int, Meld> entry, int row, int column})>[];
+      var row = 0;
+      var column = 0;
+      for (final entry in entries) {
+        final length = min(columns, entry.value.tiles.length);
+        if (column > 0 && column + length > columns) {
+          row++;
+          column = 0;
+        }
+        if (row >= rows) break;
+        result.add((entry: entry, row: row, column: column));
+        column += length + meldGapColumns;
+        if (column >= columns) {
+          row++;
+          column = 0;
+        }
+      }
+      return result;
+    }
+
     final occupied = <int, Set<int>>{};
     final rowsByColor = <TileColor, List<int>>{
       for (final color in TileColor.values) color: [min(color.index, rows - 1)],
@@ -3658,83 +4173,91 @@ class _RunMeldGrid extends StatelessWidget {
   Widget _meldWidget(MapEntry<int, Meld> entry) {
     final isEligible =
         uiMode == 'addMeld' && eligibleMeldIndexes.contains(entry.key);
-    return SizedBox(
-      width: cellWidth * entry.value.tiles.length,
-      height: cellHeight,
-      child: DragTarget<_RackDragData>(
-        onWillAcceptWithDetails: (details) =>
-            canAcceptMeldDrop(entry.key, details.data),
-        onAcceptWithDetails: (details) => onMeldDrop(entry.key, details.data),
-        builder: (context, candidates, rejected) {
-          final acceptedCandidates = candidates
-              .whereType<_RackDragData>()
-              .toList();
-          final acceptedHover = acceptedCandidates.isNotEmpty;
-          final hovering = acceptedHover || rejected.isNotEmpty;
-          final focusColor = acceptedHover ? OC.okeyGold : OC.numRed;
-          final placement = acceptedHover
-              ? _placementFor(entry.value, acceptedCandidates.last)
-              : null;
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 130),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(5),
-              boxShadow: hovering
-                  ? [
-                      BoxShadow(
-                        color: focusColor.withValues(alpha: 0.38),
-                        blurRadius: 6,
-                      ),
-                    ]
-                  : null,
-            ),
-            child: GestureDetector(
-              onTap: isEligible ? () => onMeldTap(entry.key) : null,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  if (hovering || isEligible)
-                    Positioned.fill(
-                      child: ColoredBox(
-                        color: hovering
-                            ? (acceptedHover ? OC.gold : OC.numRed).withValues(
-                                alpha: 0.30,
-                              )
-                            : OC.numGreen.withValues(alpha: 0.25),
-                      ),
-                    ),
-                  Positioned.fill(
-                    child: _MeldRow(
-                      meld: entry.value,
-                      cellWidth: cellWidth,
-                      cellHeight: cellHeight,
-                    ),
-                  ),
-                  if (placement != null)
-                    _MeldPlacementPreview(
-                      tile: acceptedCandidates.last.tile,
-                      index: placement.index,
-                      currentTileCount: entry.value.tiles.length,
-                      replacesOkey: placement.replacesOkey,
-                      cellWidth: cellWidth,
-                      cellHeight: cellHeight,
-                    ),
-                  if (hovering)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(5),
-                            border: Border.all(color: focusColor, width: 2),
+    const hitPadding = 8.0;
+    return Transform.translate(
+      offset: const Offset(-hitPadding, -hitPadding),
+      child: SizedBox(
+        width: cellWidth * entry.value.tiles.length + hitPadding * 2,
+        height: cellHeight + hitPadding * 2,
+        child: DragTarget<_RackDragData>(
+          onWillAcceptWithDetails: (details) =>
+              canAcceptMeldDrop(entry.key, details.data),
+          onAcceptWithDetails: (details) => onMeldDrop(entry.key, details.data),
+          builder: (context, candidates, rejected) {
+            final acceptedCandidates = candidates
+                .whereType<_RackDragData>()
+                .toList();
+            final acceptedHover = acceptedCandidates.isNotEmpty;
+            final hovering = acceptedHover || rejected.isNotEmpty;
+            final focusColor = acceptedHover ? OC.okeyGold : OC.numRed;
+            final placement = acceptedHover
+                ? _placementFor(entry.value, acceptedCandidates.last)
+                : null;
+            return Padding(
+              padding: const EdgeInsets.all(hitPadding),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(5),
+                  boxShadow: hovering
+                      ? [
+                          BoxShadow(
+                            color: focusColor.withValues(alpha: 0.38),
+                            blurRadius: 6,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: isEligible ? () => onMeldTap(entry.key) : null,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      if (hovering || isEligible)
+                        Positioned.fill(
+                          child: ColoredBox(
+                            color: hovering
+                                ? (acceptedHover ? OC.gold : OC.numRed)
+                                      .withValues(alpha: 0.30)
+                                : OC.numGreen.withValues(alpha: 0.25),
+                          ),
+                        ),
+                      Positioned.fill(
+                        child: RepaintBoundary(
+                          child: _MeldRow(
+                            meld: entry.value,
+                            cellWidth: cellWidth,
+                            cellHeight: cellHeight,
                           ),
                         ),
                       ),
-                    ),
-                ],
+                      if (placement != null)
+                        _MeldPlacementPreview(
+                          tile: acceptedCandidates.last.tile,
+                          index: placement.index,
+                          currentTileCount: entry.value.tiles.length,
+                          replacesOkey: placement.replacesOkey,
+                          cellWidth: cellWidth,
+                          cellHeight: cellHeight,
+                        ),
+                      if (hovering)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(color: focusColor, width: 2),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -3751,8 +4274,13 @@ class _RunMeldGrid extends StatelessWidget {
     child: Stack(
       children: [
         Positioned.fill(
-          child: CustomPaint(
-            painter: _GridPainter(cellWidth: cellWidth, cellHeight: cellHeight),
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _GridPainter(
+                cellWidth: cellWidth,
+                cellHeight: cellHeight,
+              ),
+            ),
           ),
         ),
         for (final placement in _placements())
@@ -3874,7 +4402,8 @@ class _MeldRow extends StatelessWidget {
                   hideOkey: true,
                   allowOkeyFaceToggle: false,
                   emphasized: true,
-                  cornerRadius: 0,
+                  numberScale: 1.08,
+                  showShadow: false,
                 ),
               ),
             ),
@@ -3900,8 +4429,11 @@ class _RackArea extends StatelessWidget {
   final void Function(_RackDragData, DragUpdateDetails) onTileDragUpdate;
   final VoidCallback onTileDragEnd;
   final ValueNotifier<double> dragTilt;
+  final ValueNotifier<double> dragLift;
   final ValueNotifier<Offset?> gridDragPosition;
   final Set<int> processableTileIds;
+  final int? drawAttentionTileId;
+  final int drawAttentionSerial;
   final bool canAcceptDeckDrop;
   final bool canAcceptDiscardDrop;
   final ValueChanged<int> onDeckDropAt;
@@ -3917,8 +4449,11 @@ class _RackArea extends StatelessWidget {
     required this.onTileDragUpdate,
     required this.onTileDragEnd,
     required this.dragTilt,
+    required this.dragLift,
     required this.gridDragPosition,
     required this.processableTileIds,
+    required this.drawAttentionTileId,
+    required this.drawAttentionSerial,
     required this.canAcceptDeckDrop,
     required this.canAcceptDiscardDrop,
     required this.onDeckDropAt,
@@ -3928,12 +4463,14 @@ class _RackArea extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 0, 6, 0),
+      padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
       child: Container(
+        key: const ValueKey('rack-area-surface'),
         decoration: BoxDecoration(
           image: const DecorationImage(
-            image: ResizeImage(AssetImage('images/ıstaka2.png'), width: 1024),
+            image: ResizeImage(AssetImage('images/rack2.png'), width: 1920),
             fit: BoxFit.fill,
+            filterQuality: FilterQuality.low,
           ),
           boxShadow: [
             BoxShadow(
@@ -3943,63 +4480,66 @@ class _RackArea extends StatelessWidget {
             ),
           ],
         ),
-        child: Column(
-          children: [
-            const SizedBox(height: 7),
-            Expanded(
-              child: DragTarget<_DeckDragData>(
-                onWillAcceptWithDetails: (_) => false,
-                onAcceptWithDetails: (_) {},
-                builder: (context, candidates, rejected) => AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  padding: candidates.isNotEmpty
-                      ? const EdgeInsets.all(3)
-                      : EdgeInsets.zero,
-                  decoration: BoxDecoration(
-                    color: candidates.isNotEmpty
-                        ? OC.numGreen.withValues(alpha: 0.18)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    border: candidates.isNotEmpty
-                        ? Border.all(color: OC.numGreen, width: 2)
-                        : null,
-                  ),
-                  child: DragTarget<_DiscardDragData>(
-                    onWillAcceptWithDetails: (_) => false,
-                    onAcceptWithDetails: (_) {},
-                    builder: (context, discardCandidates, rejected) =>
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 160),
-                          decoration: BoxDecoration(
-                            color: discardCandidates.isNotEmpty
-                                ? OC.gold.withValues(alpha: 0.2)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(7),
-                          ),
-                          child: _RackRows(
-                            rack: rack,
-                            slots: slots,
-                            dealAnimationSerial: dealAnimationSerial,
-                            processableTileIds: processableTileIds,
-                            onTileTap: onTileTap,
-                            onReorder: onReorder,
-                            onTileDragStart: onTileDragStart,
-                            onTileDragUpdate: onTileDragUpdate,
-                            onTileDragEnd: onTileDragEnd,
-                            dragTilt: dragTilt,
-                            gridDragPosition: gridDragPosition,
-                            canAcceptDeckDrop: canAcceptDeckDrop,
-                            canAcceptDiscardDrop: canAcceptDiscardDrop,
-                            onDeckDropAt: onDeckDropAt,
-                            onDiscardDropAt: onDiscardDropAt,
-                          ),
+        child: LayoutBuilder(
+          builder: (context, rackBox) => Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: rackBox.maxWidth * 0.074,
+              vertical: 2,
+            ),
+            child: DragTarget<_DeckDragData>(
+              onWillAcceptWithDetails: (_) => false,
+              onAcceptWithDetails: (_) {},
+              builder: (context, candidates, rejected) => AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: candidates.isNotEmpty
+                    ? const EdgeInsets.all(3)
+                    : EdgeInsets.zero,
+                decoration: BoxDecoration(
+                  color: candidates.isNotEmpty
+                      ? OC.numGreen.withValues(alpha: 0.18)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: candidates.isNotEmpty
+                      ? Border.all(color: OC.numGreen, width: 2)
+                      : null,
+                ),
+                child: DragTarget<_DiscardDragData>(
+                  onWillAcceptWithDetails: (_) => false,
+                  onAcceptWithDetails: (_) {},
+                  builder: (context, discardCandidates, rejected) =>
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        decoration: BoxDecoration(
+                          color: discardCandidates.isNotEmpty
+                              ? OC.gold.withValues(alpha: 0.2)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(7),
                         ),
-                  ),
+                        child: _RackRows(
+                          rack: rack,
+                          slots: slots,
+                          dealAnimationSerial: dealAnimationSerial,
+                          processableTileIds: processableTileIds,
+                          drawAttentionTileId: drawAttentionTileId,
+                          drawAttentionSerial: drawAttentionSerial,
+                          onTileTap: onTileTap,
+                          onReorder: onReorder,
+                          onTileDragStart: onTileDragStart,
+                          onTileDragUpdate: onTileDragUpdate,
+                          onTileDragEnd: onTileDragEnd,
+                          dragTilt: dragTilt,
+                          dragLift: dragLift,
+                          gridDragPosition: gridDragPosition,
+                          canAcceptDeckDrop: canAcceptDeckDrop,
+                          canAcceptDiscardDrop: canAcceptDiscardDrop,
+                          onDeckDropAt: onDeckDropAt,
+                          onDiscardDropAt: onDiscardDropAt,
+                        ),
+                      ),
                 ),
               ),
             ),
-            const SizedBox(height: 7),
-          ],
+          ),
         ),
       ),
     );
@@ -4011,12 +4551,15 @@ class _RackRows extends StatelessWidget {
   final List<int?> slots;
   final int? dealAnimationSerial;
   final Set<int> processableTileIds;
+  final int? drawAttentionTileId;
+  final int drawAttentionSerial;
   final Function(int) onTileTap;
   final void Function(int, int) onReorder;
   final ValueChanged<_RackDragData> onTileDragStart;
   final void Function(_RackDragData, DragUpdateDetails) onTileDragUpdate;
   final VoidCallback onTileDragEnd;
   final ValueNotifier<double> dragTilt;
+  final ValueNotifier<double> dragLift;
   final ValueNotifier<Offset?> gridDragPosition;
   final bool canAcceptDeckDrop;
   final bool canAcceptDiscardDrop;
@@ -4027,12 +4570,15 @@ class _RackRows extends StatelessWidget {
     required this.slots,
     required this.dealAnimationSerial,
     required this.processableTileIds,
+    required this.drawAttentionTileId,
+    required this.drawAttentionSerial,
     required this.onTileTap,
     required this.onReorder,
     required this.onTileDragStart,
     required this.onTileDragUpdate,
     required this.onTileDragEnd,
     required this.dragTilt,
+    required this.dragLift,
     required this.gridDragPosition,
     required this.canAcceptDeckDrop,
     required this.canAcceptDiscardDrop,
@@ -4044,28 +4590,36 @@ class _RackRows extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (_, box) {
-        final avail = box.maxWidth - 12;
+        final avail = box.maxWidth;
         // Sürükleme sırasında hedef yuvalar 3'er piksel yatay vurgu alır.
         // En dar web görünümünde dahi satırın taşmaması için bu payı baştan ayır.
-        final widthBasedTile = avail / _GameScreenState._rackRowLength - 6;
+        final widthBasedTile = avail / _GameScreenState._rackRowLength - 1.6;
         final tw = max(1.0, widthBasedTile);
-        final rowHeight = max(1.0, (box.maxHeight - 3) / 2);
-        final th = min(tw * 1.28, rowHeight);
+        final rowHeight = max(1.0, (box.maxHeight - 2) / 2);
+        final th = min(tw * 1.58, rowHeight);
         return Column(
           children: [
             SizedBox(
               height: rowHeight,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: _buildRow(0, tw, th),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.bottomCenter,
+                  child: _buildRow(0, tw, th),
+                ),
               ),
             ),
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             SizedBox(
               height: rowHeight,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: _buildRow(_GameScreenState._rackRowLength, tw, th),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.bottomCenter,
+                  child: _buildRow(_GameScreenState._rackRowLength, tw, th),
+                ),
               ),
             ),
           ],
@@ -4091,6 +4645,7 @@ class _RackRows extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         ...List.generate(_GameScreenState._rackRowLength, (rowIndex) {
           final slotIndex = offset + rowIndex;
@@ -4114,7 +4669,7 @@ class _RackRows extends StatelessWidget {
                               width: tw,
                               height: th,
                               margin: const EdgeInsets.symmetric(
-                                horizontal: 1.2,
+                                horizontal: 0.6,
                               ),
                             );
                           },
@@ -4144,7 +4699,7 @@ class _RackRows extends StatelessWidget {
           );
           final dealIndex =
               slots.take(slotIndex + 1).whereType<int>().length - 1;
-          final tileWidget = dealAnimationSerial == null
+          final baseTileWidget = dealAnimationSerial == null
               ? visibleTile
               : _DealtRackTile(
                   key: ValueKey('rack-deal-$dealAnimationSerial-${tile.id}'),
@@ -4153,6 +4708,12 @@ class _RackRows extends StatelessWidget {
                   height: th,
                   front: visibleTile,
                 );
+          final tileWidget = tile.id == drawAttentionTileId
+              ? _DrawnTileAttention(
+                  key: ValueKey('draw-attention-$drawAttentionSerial'),
+                  child: baseTileWidget,
+                )
+              : baseTileWidget;
 
           return DragTarget<_DeckDragData>(
             key: ValueKey('rack-slot-$slotIndex'),
@@ -4169,7 +4730,7 @@ class _RackRows extends StatelessWidget {
                         onAcceptWithDetails: (details) =>
                             onReorder(details.data.tileId, slotIndex),
                         builder: (context, candidates, rejected) => Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 1.2),
+                          padding: const EdgeInsets.symmetric(horizontal: 0.6),
                           child: AnimatedSlide(
                             duration: const Duration(milliseconds: 85),
                             curve: Curves.easeOutCubic,
@@ -4181,38 +4742,54 @@ class _RackRows extends StatelessWidget {
                                 : Offset.zero,
                             child: Draggable<_RackDragData>(
                               data: dragData,
+                              dragAnchorStrategy: (_, _, _) =>
+                                  Offset(tw / 2, th / 2),
                               onDragStarted: () => onTileDragStart(dragData),
                               onDragUpdate: (details) =>
                                   onTileDragUpdate(dragData, details),
                               onDragEnd: (_) => onTileDragEnd(),
-                              feedback: Material(
-                                color: Colors.transparent,
-                                child: ValueListenableBuilder<double>(
-                                  valueListenable: dragTilt,
-                                  child: _TileWidget(
-                                    tile: tile,
-                                    w: tw,
-                                    h: th,
-                                    onTap: null,
-                                    hideOkey: true,
-                                    emphasized: true,
-                                  ),
-                                  builder: (context, tilt, child) =>
-                                      ValueListenableBuilder<Offset?>(
-                                        valueListenable: gridDragPosition,
-                                        builder: (context, position, _) =>
-                                            Transform.rotate(
-                                              angle: tilt,
-                                              alignment: Alignment.bottomCenter,
-                                              child: Transform.scale(
-                                                scale: position == null
-                                                    ? 1
-                                                    : 1.64,
-                                                child: child,
+                              feedback: ValueListenableBuilder<double>(
+                                valueListenable: dragLift,
+                                builder: (context, lift, _) =>
+                                    Transform.translate(
+                                      offset: Offset(0, -lift),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: ValueListenableBuilder<double>(
+                                          valueListenable: dragTilt,
+                                          child: _TileWidget(
+                                            tile: tile,
+                                            w: tw,
+                                            h: th,
+                                            onTap: null,
+                                            hideOkey: true,
+                                            emphasized: true,
+                                            showShadow: false,
+                                          ),
+                                          builder: (context, tilt, child) =>
+                                              ValueListenableBuilder<Offset?>(
+                                                valueListenable:
+                                                    gridDragPosition,
+                                                builder:
+                                                    (
+                                                      context,
+                                                      position,
+                                                      _,
+                                                    ) => Transform.rotate(
+                                                      angle: tilt,
+                                                      alignment: Alignment
+                                                          .bottomCenter,
+                                                      child: Transform.scale(
+                                                        scale: position == null
+                                                            ? 1
+                                                            : 1.45,
+                                                        child: child,
+                                                      ),
+                                                    ),
                                               ),
-                                            ),
+                                        ),
                                       ),
-                                ),
+                                    ),
                               ),
                               childWhenDragging: SizedBox(
                                 width: tw,
@@ -4249,20 +4826,10 @@ class _ProcessableTileMarker extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
     width: width,
     height: height,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
+    child: Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(6),
         border: active ? Border.all(color: OC.numGreen, width: 2) : null,
-        boxShadow: active
-            ? [
-                BoxShadow(
-                  color: OC.numGreen.withValues(alpha: 0.65),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ]
-            : null,
       ),
       child: child,
     ),
@@ -4343,11 +4910,7 @@ class _RackPerSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = pairCount != null
-        ? 'ÇİFT SAYISI'
-        : showRemaining
-        ? 'KALAN'
-        : 'PER TOPLAMI';
+    final label = showRemaining ? 'KALAN' : 'TOPLAM';
     final value = pairCount ?? points;
     final highlighted =
         (pairCount != null && pairCount! >= 5) ||
@@ -4355,7 +4918,7 @@ class _RackPerSummary extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
       decoration: BoxDecoration(
         color: const Color(0xFF251B0D),
         borderRadius: BorderRadius.circular(7),
@@ -4366,15 +4929,16 @@ class _RackPerSummary extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Flexible(
+          Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
                 label,
-                maxLines: 1,
+                maxLines: 2,
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 9,
+                  fontSize: 11,
                   fontWeight: FontWeight.w800,
                   height: 1,
                 ),
@@ -4384,18 +4948,17 @@ class _RackPerSummary extends StatelessWidget {
           Container(
             width: double.infinity,
             height: 1,
-            margin: const EdgeInsets.symmetric(vertical: 2),
+            margin: const EdgeInsets.symmetric(vertical: 1),
             color: const Color(0xFF8A6027),
           ),
-          Flexible(
-            flex: 2,
+          Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
                 '$value',
                 style: TextStyle(
                   color: highlighted ? OC.numGreen : Colors.white,
-                  fontSize: 18,
+                  fontSize: 24,
                   fontWeight: FontWeight.w900,
                   height: 1,
                 ),
@@ -4516,14 +5079,18 @@ class _SceneActionButtonFace extends StatelessWidget {
                         const SizedBox(width: 6),
                       ],
                       Text(
-                        action.label,
-                        maxLines: 1,
-                        style: const TextStyle(
+                        action.isUndo
+                            ? action.label.replaceFirst(' ', '\n')
+                            : action.label,
+                        maxLines: action.isUndo ? 2 : 1,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: action.isUndo ? 17 : 15,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.25,
-                          shadows: [
+                          height: action.isUndo ? 0.9 : 1,
+                          shadows: const [
                             Shadow(color: Colors.black54, blurRadius: 2),
                           ],
                         ),
@@ -4550,7 +5117,8 @@ class _TileWidget extends StatefulWidget {
   final bool hideOkey;
   final bool allowOkeyFaceToggle;
   final bool emphasized;
-  final double cornerRadius;
+  final double numberScale;
+  final bool showShadow;
   const _TileWidget({
     super.key,
     required this.tile,
@@ -4560,7 +5128,8 @@ class _TileWidget extends StatefulWidget {
     this.hideOkey = false,
     this.allowOkeyFaceToggle = true,
     this.emphasized = false,
-    this.cornerRadius = 5,
+    this.numberScale = 1,
+    this.showShadow = true,
   });
 
   @override
@@ -4595,23 +5164,26 @@ class _TileWidgetState extends State<_TileWidget> {
           image: const DecorationImage(
             image: AssetImage('images/tas_ters.png'),
             fit: BoxFit.fill,
+            filterQuality: FilterQuality.low,
           ),
-          borderRadius: BorderRadius.circular(widget.cornerRadius),
+          borderRadius: BorderRadius.circular(5),
           border: Border.all(
             color: isSelected ? OC.tileSel : Colors.transparent,
             width: isSelected ? 2 : 0,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: isSelected
-                  ? OC.tileSel.withValues(alpha: 0.45)
-                  : Colors.black.withValues(
-                      alpha: widget.emphasized ? 0.38 : 0.2,
-                    ),
-              blurRadius: isSelected ? 10 : (widget.emphasized ? 5 : 3),
-              offset: Offset(0, widget.emphasized ? 2.5 : 2),
-            ),
-          ],
+          boxShadow: widget.showShadow
+              ? [
+                  BoxShadow(
+                    color: isSelected
+                        ? OC.tileSel.withValues(alpha: 0.45)
+                        : Colors.black.withValues(
+                            alpha: widget.emphasized ? 0.34 : 0.18,
+                          ),
+                    blurRadius: isSelected ? 7 : (widget.emphasized ? 3 : 2),
+                    offset: Offset(0, widget.emphasized ? 2 : 1.5),
+                  ),
+                ]
+              : null,
         ),
         child: widget.hideOkey && tile.isOkey && !tile.okeyFaceRevealed
             ? null
@@ -4625,7 +5197,8 @@ class _TileWidgetState extends State<_TileWidget> {
                         fontSize:
                             widget.h *
                             (tile.isFakeOkey ? 0.47 : 0.44) *
-                            (widget.emphasized ? 1.13 : 1),
+                            (widget.emphasized ? 1.13 : 1) *
+                            widget.numberScale,
                         fontWeight: FontWeight.w900,
                         height: 1,
                         letterSpacing: -0.25,
@@ -4711,6 +5284,7 @@ class _MsgBanner extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 class GameEndDialog extends StatelessWidget {
   final String winner;
+  final String playerName;
   final int playerPen;
   final List<BotPlayer> bots;
   final List<int> botPens;
@@ -4725,6 +5299,7 @@ class GameEndDialog extends StatelessWidget {
   const GameEndDialog({
     super.key,
     required this.winner,
+    this.playerName = defaultPlayerProfileName,
     required this.playerPen,
     required this.bots,
     required this.botPens,
@@ -4740,201 +5315,211 @@ class GameEndDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final won = winner == 'Sen' || winner == 'Oyuncu 1';
+    final displayWinner = won ? playerName : winner;
     final screenSize = MediaQuery.sizeOf(context);
     final maxDialogHeight = max(280.0, min(620.0, screenSize.height - 24));
 
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      child: Container(
-        constraints: BoxConstraints(maxWidth: 430, maxHeight: maxDialogHeight),
-        decoration: BoxDecoration(
-          color: OC.bg,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: OC.gold, width: 2),
-          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 24)],
-        ),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
-              child: Column(
-                children: [
-                  Icon(
-                    won ? Icons.emoji_events_rounded : Icons.flag_rounded,
-                    size: 34,
-                    color: won ? OC.gold : OC.numRed,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    won ? 'Kazandın!' : 'El Bitti',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: won ? OC.numGreen : OC.numRed,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$elCount. El — Kazanan: $winner',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12, color: OC.panelBrown),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: RepaintBoundary(
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 430,
+            maxHeight: maxDialogHeight,
+          ),
+          decoration: BoxDecoration(
+            color: OC.bg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: OC.gold, width: 2),
+            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
                 child: Column(
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: OC.tileBdr),
+                    Icon(
+                      won ? Icons.emoji_events_rounded : Icons.flag_rounded,
+                      size: 34,
+                      color: won ? OC.gold : OC.numRed,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      won ? 'Kazandın!' : 'El Bitti',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: won ? OC.numGreen : OC.numRed,
                       ),
-                      child: Column(
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 7,
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    'Oyuncu',
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$elCount. El — Kazanan: $displayWinner',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: OC.panelBrown,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Column(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: OC.tileBdr),
+                        ),
+                        child: Column(
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 7,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Oyuncu',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: OC.panelBrown,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Bu El',
                                     style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.bold,
                                       color: OC.panelBrown,
                                     ),
                                   ),
-                                ),
-                                Text(
-                                  'Bu El',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: OC.panelBrown,
+                                  SizedBox(width: 14),
+                                  Text(
+                                    'Toplam',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: OC.panelBrown,
+                                    ),
                                   ),
-                                ),
-                                SizedBox(width: 14),
-                                Text(
-                                  'Toplam',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: OC.panelBrown,
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          const Divider(height: 1),
-                          _ScoreRow(
-                            name: 'Oyuncu 1',
-                            elPen: playerPen,
-                            total: totalPenalty,
-                            hi: winner == 'Sen' || winner == 'Oyuncu 1',
-                          ),
-                          ...List.generate(
-                            bots.length,
-                            (i) => _ScoreRow(
-                              name: bots[i].name,
-                              elPen: botPens[i],
-                              total: bots[i].penalty + botPens[i],
-                              hi: winner == bots[i].name,
+                            const Divider(height: 1),
+                            _ScoreRow(
+                              name: playerName,
+                              elPen: playerPen,
+                              total: totalPenalty,
+                              hi: winner == 'Sen' || winner == 'Oyuncu 1',
+                              isPlayer: true,
                             ),
-                          ),
-                        ],
+                            ...List.generate(
+                              bots.length,
+                              (i) => _ScoreRow(
+                                name: bots[i].name,
+                                elPen: botPens[i],
+                                total: bots[i].penalty + botPens[i],
+                                hi: winner == bots[i].name,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (reward != null) ...[
-                      _GameRewardCard(reward: reward!),
+                      const SizedBox(height: 12),
+                      if (reward != null) ...[
+                        _GameRewardCard(reward: reward!),
+                        const SizedBox(height: 12),
+                      ],
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(11),
+                        decoration: BoxDecoration(
+                          color: OC.openedBg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: OC.openedBdr),
+                        ),
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Ceza Kuralları',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: OC.panelBrown,
+                              ),
+                            ),
+                            SizedBox(height: 5),
+                            Text(
+                              '• Eli bitiren oyuncu: -101 puan\n'
+                              '• El açmadan biterse: 202 ceza\n'
+                              '• El açıksa: elde kalan taş değerleri\n'
+                              '• Çift açanın kalan taş cezası: 2 katı\n'
+                              '• Sahte okey: o elin okey numarası\n'
+                              '• İşlenebilir taş atma: 101 ceza\n'
+                              '• Hem seri hem çift açılamaz',
+                              style: TextStyle(
+                                fontSize: 9,
+                                height: 1.45,
+                                color: OC.numBlack,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 12),
                     ],
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(11),
-                      decoration: BoxDecoration(
-                        color: OC.openedBg,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: OC.openedBdr),
-                      ),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Ceza Kuralları',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: OC.panelBrown,
-                            ),
-                          ),
-                          SizedBox(height: 5),
-                          Text(
-                            '• Eli bitiren oyuncu: -101 puan\n'
-                            '• El açmadan biterse: 202 ceza\n'
-                            '• El açıksa: elde kalan taş değerleri\n'
-                            '• Çift açanın kalan taş cezası: 2 katı\n'
-                            '• Sahte okey: o elin okey numarası\n'
-                            '• İşlenebilir taş atma: 101 ceza\n'
-                            '• Hem seri hem çift açılamaz',
-                            style: TextStyle(
-                              fontSize: 9,
-                              height: 1.45,
-                              color: OC.numBlack,
-                            ),
-                          ),
-                        ],
-                      ),
+                  ),
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.32),
+                  border: Border(
+                    top: BorderSide(color: OC.gold.withValues(alpha: 0.35)),
+                  ),
+                ),
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _EndActionButton(
+                      icon: Icons.refresh_rounded,
+                      label: 'YENİ TUR',
+                      color: OC.numGreen,
+                      onPressed: onNewRound,
                     ),
-                    const SizedBox(height: 12),
+                    _EndActionButton(
+                      icon: Icons.restart_alt_rounded,
+                      label: 'SKORU SIFIRLA',
+                      color: OC.numRed,
+                      onPressed: onResetMatch,
+                    ),
+                    _EndActionButton(
+                      icon: Icons.home_rounded,
+                      label: homeLabel,
+                      color: OC.panelBrown,
+                      onPressed: onHome,
+                    ),
                   ],
                 ),
               ),
-            ),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.32),
-                border: Border(
-                  top: BorderSide(color: OC.gold.withValues(alpha: 0.35)),
-                ),
-              ),
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _EndActionButton(
-                    icon: Icons.refresh_rounded,
-                    label: 'YENİ TUR',
-                    color: OC.numGreen,
-                    onPressed: onNewRound,
-                  ),
-                  _EndActionButton(
-                    icon: Icons.restart_alt_rounded,
-                    label: 'SKORU SIFIRLA',
-                    color: OC.numRed,
-                    onPressed: onResetMatch,
-                  ),
-                  _EndActionButton(
-                    icon: Icons.home_rounded,
-                    label: homeLabel,
-                    color: OC.panelBrown,
-                    onPressed: onHome,
-                  ),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -5035,11 +5620,13 @@ class _ScoreRow extends StatelessWidget {
   final int elPen;
   final int total;
   final bool hi;
+  final bool isPlayer;
   const _ScoreRow({
     required this.name,
     required this.elPen,
     required this.total,
     this.hi = false,
+    this.isPlayer = false,
   });
   @override
   Widget build(BuildContext context) => Container(
@@ -5054,8 +5641,8 @@ class _ScoreRow extends StatelessWidget {
             name,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: hi ? FontWeight.bold : FontWeight.normal,
-              color: OC.numBlack,
+              fontWeight: isPlayer || hi ? FontWeight.w900 : FontWeight.normal,
+              color: isPlayer ? OC.gold : OC.numBlack,
             ),
           ),
         ),

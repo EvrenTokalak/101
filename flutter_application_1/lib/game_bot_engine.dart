@@ -182,7 +182,7 @@ class BotEngine {
         .map((tile) => tile.id)
         .toSet();
 
-    int utility(Tile tile) {
+    int calculateUtility(Tile tile) {
       if (tile.isOkey) return 10000;
       var value = 0;
       if (plannedIds.contains(tile.id)) value += 160;
@@ -202,15 +202,22 @@ class BotEngine {
       return value - tile.number;
     }
 
+    // Sıralama karşılaştırıcısı aynı taşı birçok kez sorar. Özellikle masa
+    // kalabalıkken canProcess taramasını her karşılaştırmada yinelemek yerine
+    // her taşın değerini tur başına yalnız bir kez hesapla.
+    final utilities = <int, int>{
+      for (final tile in hand) tile.id: calculateUtility(tile),
+    };
+
     final sorted = List<Tile>.from(hand)
       ..sort((a, b) {
-        final byUtility = utility(a).compareTo(utility(b));
+        final byUtility = utilities[a.id]!.compareTo(utilities[b.id]!);
         return byUtility != 0 ? byUtility : b.number.compareTo(a.number);
       });
-    final weakestScore = utility(sorted.first);
+    final weakestScore = utilities[sorted.first.id]!;
     final plausible = sorted
         .take(3)
-        .where((tile) => utility(tile) <= weakestScore + 12)
+        .where((tile) => utilities[tile.id]! <= weakestScore + 12)
         .toList();
     return plausible[_random.nextInt(plausible.length)];
   }

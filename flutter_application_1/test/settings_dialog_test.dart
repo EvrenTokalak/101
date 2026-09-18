@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/main.dart';
+import 'package:flutter_application_1/player_progress.dart';
 
 void main() {
   testWidgets('settings icon opens the animated settings dialog', (
     tester,
   ) async {
+    playerProgress.reset();
+    addTearDown(playerProgress.reset);
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -57,14 +60,24 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.close_rounded).last);
     await tester.pump(const Duration(milliseconds: 260));
-    await tester.tap(find.text('Evren'));
+    await tester.tap(find.text(defaultPlayerProfileName));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('PROFİLİM'), findsOneWidget);
+    expect(find.byKey(const ValueKey('profile-name-field')), findsOneWidget);
     expect(find.textContaining('Seviye 0'), findsOneWidget);
     expect(find.text('Kazanma Oranı'), findsOneWidget);
 
+    await tester.enterText(
+      find.byKey(const ValueKey('profile-name-field')),
+      'Gökde',
+    );
+    await tester.tap(find.byKey(const ValueKey('profile-name-save')));
+    await tester.pump();
+    expect(playerProgress.playerName, 'Gökde');
+
     await tester.tap(find.byIcon(Icons.close_rounded).last);
     await tester.pump(const Duration(milliseconds: 260));
+    expect(find.text('Gökde'), findsOneWidget);
     await tester.tap(find.text('ODA SEÇ'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));

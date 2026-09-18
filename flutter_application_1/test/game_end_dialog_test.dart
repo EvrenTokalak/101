@@ -25,6 +25,7 @@ void main() {
           child: Scaffold(
             body: GameEndDialog(
               winner: 'Sen',
+              playerName: 'Gökde',
               playerPen: 0,
               bots: [
                 BotPlayer(name: 'Oyuncu 2'),
@@ -54,6 +55,9 @@ void main() {
     expect(find.text('ANA SAYFA'), findsOneWidget);
     expect(find.byKey(const ValueKey('game-reward-card')), findsOneWidget);
     expect(find.text('+95 XP'), findsOneWidget);
+    final playerNameText = tester.widget<Text>(find.text('Gökde'));
+    expect(playerNameText.style?.color, OC.gold);
+    expect(playerNameText.style?.fontWeight, FontWeight.w900);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('YENİ TUR'));
