@@ -1,19 +1,28 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_launch.dart';
+import 'game.dart' show prewarmGameAudio, prewarmGameVisuals;
 import 'game_mode_select.dart';
 import 'game_navigation.dart';
 import 'oda.dart' as oda;
-import 'player_progress.dart';
 import 'performance_overlay.dart';
+import 'player_progress.dart';
 import 'route_activity.dart';
 import 'tournament.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Büyük arka planlar ve masa görselleri arasında dolaşırken Flutter'ın resim
+  // önbelleğinin oturum boyunca büyümesini sınırla. Sık kullanılan oyun
+  // görselleri için 12 MB alan bırakırken RAM kullanımını sabit tutar.
+  PaintingBinding.instance.imageCache
+    ..maximumSize = 20
+    ..maximumSizeBytes = 12 * 1024 * 1024;
   await playerProgress.load();
   await SystemChrome.setPreferredOrientations(const [
     DeviceOrientation.landscapeLeft,
@@ -548,6 +557,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   late AnimationController _enterCtrl;
   late Animation<double> _fadeIn;
   _MenuSettings _settings = _appSettings.value;
+  bool _navigating = false;
+  bool _visualsPrewarmed = false;
 
   @override
   void initState() {
@@ -561,6 +572,19 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       curve: Curves.easeOut,
     ).drive(Tween<double>(begin: 0.0, end: 1.0));
     _enterCtrl.forward();
+    prewarmGameAudio();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_visualsPrewarmed) return;
+    _visualsPrewarmed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 800), () {
+        if (mounted && !_navigating) prewarmGameVisuals(context);
+      });
+    });
   }
 
   @override
@@ -572,56 +596,99 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   Future<void> _navigateToGame([
     GameLaunchConfig config = const GameLaunchConfig.quickPlay(),
   ]) async {
-    await openGameScreen<void>(context, config: config);
+    await _withPausedScene(() async {
+      await Future.wait<void>([
+        prewarmGameAudio(),
+        prewarmGameVisuals(context),
+      ]);
+      if (!mounted) return;
+      await openGameScreen<void>(context, config: config);
+    });
+  }
+
+  Future<void> _withPausedScene(Future<dynamic> Function() navigation) async {
+    if (_navigating) return;
+    setState(() => _navigating = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    try {
+      await navigation();
+    } finally {
+      if (mounted) setState(() => _navigating = false);
+    }
   }
 
   Future<void> _navigateToRoomSelect() async {
-    await Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) =>
-            const ActiveRouteScene(child: oda.RoomSelectScreen()),
-        transitionDuration: const Duration(milliseconds: 180),
-        transitionsBuilder: (_, animation, _, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          );
-          return FadeTransition(opacity: curved, child: child);
-        },
+    await _withPausedScene(
+      () => Navigator.of(context).push(
+        PageRouteBuilder<void>(
+          pageBuilder: (_, _, _) =>
+              const ActiveRouteScene(child: oda.RoomSelectScreen()),
+          transitionDuration: const Duration(milliseconds: 120),
+          transitionsBuilder: (_, animation, _, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.035, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
+        ),
       ),
     );
   }
 
   Future<void> _navigateToGameModeSelect() async {
-    await Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) =>
-            const ActiveRouteScene(child: GameModeSelectScreen()),
-        transitionDuration: const Duration(milliseconds: 180),
-        transitionsBuilder: (_, animation, _, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          );
-          return FadeTransition(opacity: curved, child: child);
-        },
+    await _withPausedScene(
+      () => Navigator.of(context).push(
+        PageRouteBuilder<void>(
+          pageBuilder: (_, _, _) =>
+              const ActiveRouteScene(child: GameModeSelectScreen()),
+          transitionDuration: const Duration(milliseconds: 120),
+          transitionsBuilder: (_, animation, _, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.035, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
+        ),
       ),
     );
   }
 
   Future<void> _navigateToTournament() async {
-    await Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (_, _, _) =>
-            const ActiveRouteScene(child: TournamentScreen()),
-        transitionDuration: const Duration(milliseconds: 200),
-        transitionsBuilder: (_, animation, _, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          );
-          return FadeTransition(opacity: curved, child: child);
-        },
+    await _withPausedScene(
+      () => Navigator.of(context).push(
+        PageRouteBuilder<void>(
+          pageBuilder: (_, _, _) =>
+              const ActiveRouteScene(child: TournamentScreen()),
+          transitionDuration: const Duration(milliseconds: 120),
+          transitionsBuilder: (_, animation, _, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            );
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.035, 0),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            );
+          },
+        ),
       ),
     );
   }
@@ -694,106 +761,180 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: OkeyColors.tableDark,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Image.asset(
-              'images/anamenu/menubg.png',
-              fit: BoxFit.cover,
-              cacheWidth: 1440,
-              filterQuality: FilterQuality.medium,
+      body: TickerMode(
+        enabled: !_navigating,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Image.asset(
+                'images/anamenu/menubg.png',
+                fit: BoxFit.cover,
+                cacheWidth: 1440,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
-          ),
-          Positioned.fill(
-            child: ColoredBox(color: Colors.black.withValues(alpha: 0.08)),
-          ),
+            Positioned.fill(
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.08)),
+            ),
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 18,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Color(0xFF4A2B16),
+                      Color(0xFF9A6531),
+                      Color(0xFF4A2B16),
+                    ],
+                  ),
+                  border: Border(top: BorderSide(color: OkeyColors.goldDark)),
+                ),
+              ),
+            ),
+            const Positioned(left: 24, bottom: 25, child: _TeaDecoration()),
 
-          // Ana içerik
-          SafeArea(
-            child: FadeTransition(
-              opacity: _fadeIn,
-              child: Stack(
-                children: [
-                  // ── Sol üst: Seviye rozeti + Profil ─────────────────
-                  Positioned(
-                    top: 12,
-                    left: 12,
-                    child: _ProfileChip(
-                      onTap: () => _openFeaturePopup(
-                        icon: Icons.person_rounded,
-                        title: 'PROFİLİM',
-                        description: 'Oyuncu bilgilerin, seviyen, başarıların ve istatistiklerin burada gösterilecek.',
+            // Ana içerik
+            SafeArea(
+              child: FadeTransition(
+                opacity: _fadeIn,
+                child: Stack(
+                  children: [
+                    // ── Sol üst: Seviye rozeti + Profil ─────────────────
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: _ProfileChip(
+                        onTap: () => _openFeaturePopup(
+                          icon: Icons.person_rounded,
+                          title: 'PROFİLİM',
+                          description: 'Oyuncu bilgilerin, seviyen, başarıların ve istatistiklerin burada gösterilecek.',
+                        ),
                       ),
                     ),
-                  ),
 
-                  // ── Sağ üst: Coin + İkon butonları ──────────────────
-                  Positioned(
-                    top: 12,
-                    right: 12,
-                    child: _TopRightBar(
-                      onSettings: _openSettings,
-                      onWallet: () => _openFeaturePopup(
-                        icon: Icons.monetization_on_rounded,
-                        title: 'CÜZDAN',
-                        description: 'Jeton bakiyen, günlük ödüllerin ve mağaza işlemlerin burada yer alacak.',
-                      ),
-                      onMessages: () => _openFeaturePopup(
-                        icon: Icons.mail_rounded,
-                        title: 'GELEN KUTUSU',
-                        description: 'Sistem mesajların, ödül bildirimlerin ve arkadaş mesajların burada gösterilecek.',
+                    // ── Sağ üst: Coin + İkon butonları ──────────────────
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: _TopRightBar(
+                        onSettings: _openSettings,
+                        onWallet: () => _openFeaturePopup(
+                          icon: Icons.monetization_on_rounded,
+                          title: 'CÜZDAN',
+                          description: 'Jeton bakiyen, günlük ödüllerin ve mağaza işlemlerin burada yer alacak.',
+                        ),
+                        onMessages: () => _openFeaturePopup(
+                          icon: Icons.mail_rounded,
+                          title: 'GELEN KUTUSU',
+                          description: 'Sistem mesajların, ödül bildirimlerin ve arkadaş mesajların burada gösterilecek.',
+                        ),
                       ),
                     ),
-                  ),
 
-                  // ── Merkez: Logo + Taşlar + HEMEN OYNA ──────────────
-                  // Sağ sütun için 200px yer bırak
-                  Positioned.fill(
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 200),
-                      child: Center(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _BigLogo(),
-                              const SizedBox(height: 22),
-                              const _MenuTileRow(),
-                              const SizedBox(height: 22),
-                              _HemenOynaButton(onTap: () => _navigateToGame()),
-                            ],
+                    // ── Merkez: Logo + Taşlar + HEMEN OYNA ──────────────
+                    // Sağ sütun için 200px yer bırak
+                    Positioned.fill(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 200),
+                        child: Center(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _BigLogo(),
+                                const SizedBox(height: 22),
+                                const _MenuTileRow(),
+                                const SizedBox(height: 22),
+                                _HemenOynaButton(
+                                  onTap: () => _navigateToGame(),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
 
-                  // ── Sağ sütun: 4 dikey buton ────────────────────────
-                  Positioned(
-                    top: 0,
-                    bottom: 0,
-                    right: 0,
-                    width: 196,
-                    child: _RightButtonColumn(
-                      onSelectRoom: _navigateToRoomSelect,
-                      onSelectMode: _navigateToGameModeSelect,
-                      onTournament: _navigateToTournament,
-                      onOpen: (icon, title, description) => _openFeaturePopup(
-                        icon: icon,
-                        title: title,
-                        description: description,
+                    // ── Sağ sütun: 4 dikey buton ────────────────────────
+                    Positioned(
+                      top: 0,
+                      bottom: 0,
+                      right: 0,
+                      width: 196,
+                      child: _RightButtonColumn(
+                        onSelectRoom: _navigateToRoomSelect,
+                        onSelectMode: _navigateToGameModeSelect,
+                        onTournament: _navigateToTournament,
+                        onOpen: (icon, title, description) => _openFeaturePopup(
+                          icon: icon,
+                          title: title,
+                          description: description,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeaDecoration extends StatelessWidget {
+  const _TeaDecoration();
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: Opacity(
+      opacity: 0.78,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 29,
+            height: 37,
+            decoration: BoxDecoration(
+              color: const Color(0x55E8F4EE),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(5),
+                bottom: Radius.circular(11),
+              ),
+              border: Border.all(color: Colors.white54),
+            ),
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              height: 25,
+              decoration: const BoxDecoration(
+                color: Color(0xCC9B3F16),
+                borderRadius: BorderRadius.vertical(
+                  bottom: Radius.circular(10),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: -9,
+            top: 11,
+            child: Container(
+              width: 12,
+              height: 15,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white54, width: 2),
+                borderRadius: BorderRadius.circular(8),
               ),
             ),
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
 }
 
 // ─── Sol Üst Profil Chip ──────────────────────────────────────────────────────
@@ -902,26 +1043,30 @@ class _ProfileChip extends StatelessWidget {
                           ),
                         ],
                       ),
-                      Container(
-                        margin: const EdgeInsets.only(top: 2),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: OkeyColors.gold.withValues(alpha: 0.2),
+                      const SizedBox(height: 3),
+                      SizedBox(
+                        width: 112,
+                        child: ClipRRect(
                           borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          playerProgress.isMaxLevel
-                              ? 'MAKS. SEVİYE'
-                              : 'XP ${playerProgress.levelXp}/${playerProgress.xpForNextLevel}',
-                          style: const TextStyle(
+                          child: LinearProgressIndicator(
+                            value: playerProgress.isMaxLevel
+                                ? 1
+                                : playerProgress.levelProgress,
+                            minHeight: 5,
                             color: OkeyColors.goldLight,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            fontFamily: 'Georgia',
+                            backgroundColor: Colors.white12,
                           ),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        playerProgress.isMaxLevel
+                            ? 'MAKS. SEVİYE'
+                            : '${playerProgress.levelXp} / ${playerProgress.xpForNextLevel} XP',
+                        style: const TextStyle(
+                          color: OkeyColors.creamDark,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
@@ -954,8 +1099,6 @@ class _TopRightBar extends StatelessWidget {
       builder: (context, _) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _XpProgressChip(progress: playerProgress),
-          const SizedBox(width: 8),
           // Coin chip
           GestureDetector(
             onTap: onWallet,
@@ -1003,63 +1146,6 @@ class _TopRightBar extends StatelessWidget {
       ),
     );
   }
-}
-
-class _XpProgressChip extends StatelessWidget {
-  final PlayerProgressController progress;
-
-  const _XpProgressChip({required this.progress});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    key: const ValueKey('main-xp-chip'),
-    width: 132,
-    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-    decoration: BoxDecoration(
-      color: Colors.black.withValues(alpha: 0.58),
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: const Color(0xFF65B9FF), width: 1),
-    ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.auto_awesome, color: Color(0xFF8CCBFF), size: 14),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(
-                'SV. ${progress.level} • ${progress.title}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            Text(
-              progress.isMaxLevel
-                  ? 'MAX'
-                  : '${progress.levelXp}/${progress.xpForNextLevel}',
-              style: const TextStyle(color: Color(0xFFBDE2FF), fontSize: 8.5),
-            ),
-          ],
-        ),
-        const SizedBox(height: 3),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: progress.levelProgress,
-            minHeight: 4,
-            backgroundColor: Colors.white12,
-            valueColor: const AlwaysStoppedAnimation(Color(0xFF54B7FF)),
-          ),
-        ),
-      ],
-    ),
-  );
 }
 
 class _IconBtn extends StatelessWidget {
@@ -1433,6 +1519,10 @@ class _FeatureDialog extends StatelessWidget {
                         const _ProfileNameEditor(),
                         const SizedBox(height: 12),
                       ],
+                      if (title == 'GÖREVLER') ...[
+                        const _DailyTaskCountdown(),
+                        const SizedBox(height: 12),
+                      ],
                       ..._entries.map(
                         (entry) => _FeatureEntryCard(
                           entry: entry,
@@ -1475,6 +1565,95 @@ class _FeatureDialog extends StatelessWidget {
       ),
     );
   }
+}
+
+class _DailyTaskCountdown extends StatefulWidget {
+  const _DailyTaskCountdown();
+
+  @override
+  State<_DailyTaskCountdown> createState() => _DailyTaskCountdownState();
+}
+
+class _DailyTaskCountdownState extends State<_DailyTaskCountdown> {
+  static const _key = 'tasks.deadline_ms';
+  DateTime? _deadline;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final preferences = SharedPreferencesAsync();
+    final saved = await preferences.getInt(_key);
+    var deadline = saved == null
+        ? DateTime.now().add(const Duration(hours: 24))
+        : DateTime.fromMillisecondsSinceEpoch(saved);
+    if (!deadline.isAfter(DateTime.now())) {
+      deadline = DateTime.now().add(const Duration(hours: 24));
+    }
+    await preferences.setInt(_key, deadline.millisecondsSinceEpoch);
+    if (!mounted) return;
+    setState(() => _deadline = deadline);
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!TickerMode.valuesOf(context).enabled) return;
+      if (!_deadline!.isAfter(DateTime.now())) {
+        final next = DateTime.now().add(const Duration(hours: 24));
+        _deadline = next;
+        SharedPreferencesAsync().setInt(_key, next.millisecondsSinceEpoch);
+      }
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String get _text {
+    final deadline = _deadline;
+    if (deadline == null) return '--:--:--';
+    final seconds = deadline
+        .difference(DateTime.now())
+        .inSeconds
+        .clamp(0, 86400);
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+    decoration: BoxDecoration(
+      color: OkeyColors.gold.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.45)),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.timer_outlined, color: OkeyColors.goldLight, size: 19),
+        const SizedBox(width: 8),
+        Text(
+          'YENİLENME  $_text',
+          style: const TextStyle(
+            color: OkeyColors.goldLight,
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.7,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _FeatureEntry {
@@ -2044,38 +2223,59 @@ class _MenuTileRow extends StatelessWidget {
       (OkeyColors.blueTile, '13'),
     ];
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: tiles.map((t) {
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          width: 50,
-          height: 68,
+    return Stack(
+      alignment: Alignment.bottomCenter,
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 184,
+          height: 17,
           decoration: BoxDecoration(
-            color: OkeyColors.cream,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: OkeyColors.creamDark, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.5),
-                blurRadius: 6,
-                offset: const Offset(2, 4),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Text(
-              t.$2,
-              style: TextStyle(
-                color: t.$1,
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Georgia',
-              ),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF5A351B), Color(0xFFB17D3F), Color(0xFF5A351B)],
             ),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFFD5AF70)),
+            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 5)],
           ),
-        );
-      }).toList(),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: tiles.map((t) {
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 50,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: OkeyColors.cream,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: OkeyColors.creamDark, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 6,
+                      offset: const Offset(2, 4),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    t.$2,
+                    style: TextStyle(
+                      color: t.$1,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'Georgia',
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2090,11 +2290,9 @@ class _HemenOynaButton extends StatefulWidget {
 }
 
 class _HemenOynaButtonState extends State<_HemenOynaButton>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   late AnimationController _pressController;
-  late AnimationController _pulseController;
   late Animation<double> _pressScale;
-  late Animation<double> _pulseScale;
 
   @override
   void initState() {
@@ -2104,31 +2302,20 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
       vsync: this,
     );
     _pressScale = _pressController.drive(Tween<double>(begin: 1.0, end: 0.95));
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1700),
-      vsync: this,
-    )..repeat(reverse: true);
-    _pulseScale = CurvedAnimation(
-      parent: _pulseController,
-      curve: Curves.easeInOut,
-    ).drive(Tween<double>(begin: 1.0, end: 1.03));
   }
 
   @override
   void dispose() {
     _pressController.dispose();
-    _pulseController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_pressScale, _pulseScale]),
-      builder: (_, child) => Transform.scale(
-        scale: _pressScale.value * _pulseScale.value,
-        child: child,
-      ),
+      animation: _pressScale,
+      builder: (_, child) =>
+          Transform.scale(scale: _pressScale.value, child: child),
       child: GestureDetector(
         onTapDown: (_) => _pressController.forward(),
         onTapUp: (_) async {
@@ -2142,7 +2329,7 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             gradient: const LinearGradient(
-              colors: [Color(0xFF5A260B), Color(0xFF2A0E05), Color(0xFF481A08)],
+              colors: [Color(0xFF176B3B), Color(0xFF249253), Color(0xFF176B3B)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -2196,7 +2383,7 @@ class _RightButtonColumn extends StatelessWidget {
     final buttons = [
       (
         Icons.people_alt_outlined,
-        'ODA SEÇ',
+        'MASA SEÇ',
         'Aktif masaları, oyuncu sayılarını ve giriş ücretlerini buradan inceleyebilirsin.',
       ),
       (

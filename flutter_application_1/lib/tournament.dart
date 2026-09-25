@@ -1,4 +1,7 @@
+﻿import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_launch.dart';
 import 'game_navigation.dart';
@@ -16,8 +19,83 @@ class _TournamentScreenState extends State<TournamentScreen> {
   bool _eliminated = false;
   bool _champion = false;
   bool _matchStarted = false;
+  static const _deadlineKey = 'tournament.deadline_ms';
+  DateTime? _deadline;
+  Timer? _countdownTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDeadline();
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadDeadline() async {
+    final preferences = SharedPreferencesAsync();
+    final millis = await preferences.getInt(_deadlineKey);
+    if (!mounted || millis == null) return;
+    final deadline = DateTime.fromMillisecondsSinceEpoch(millis);
+    if (deadline.isAfter(DateTime.now())) {
+      setState(() => _deadline = deadline);
+      _startTicker();
+    } else {
+      await preferences.remove(_deadlineKey);
+    }
+  }
+
+  Future<void> _activateCountdown() async {
+    if (_deadline != null && _deadline!.isAfter(DateTime.now())) return;
+    final deadline = DateTime.now().add(const Duration(hours: 24));
+    setState(() => _deadline = deadline);
+    await SharedPreferencesAsync().setInt(
+      _deadlineKey,
+      deadline.millisecondsSinceEpoch,
+    );
+    _startTicker();
+  }
+
+  void _startTicker() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || _deadline == null) return;
+      if (!TickerMode.valuesOf(context).enabled) return;
+      if (!_deadline!.isAfter(DateTime.now())) {
+        _countdownTimer?.cancel();
+        setState(() {
+          _deadline = null;
+          _round = 0;
+          _eliminated = false;
+          _champion = false;
+          _matchStarted = false;
+        });
+        SharedPreferencesAsync().remove(_deadlineKey);
+      } else {
+        setState(() {});
+      }
+    });
+  }
+
+  String get _remainingText {
+    final deadline = _deadline;
+    if (deadline == null) return 'İlk maçla 24 saat başlar';
+    final seconds = deadline
+        .difference(DateTime.now())
+        .inSeconds
+        .clamp(0, 86400);
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')} kaldı';
+  }
 
   Future<void> _startMatch() async {
+    await _activateCountdown();
+    if (!mounted) return;
     setState(() => _matchStarted = true);
     final won = await openGameScreen<bool>(
       context,
@@ -68,24 +146,44 @@ class _TournamentScreenState extends State<TournamentScreen> {
               ),
               child: Column(
                 children: [
-                  _TournamentHeader(onBack: () => Navigator.of(context).pop()),
+                  _TournamentHeader(
+                    onBack: () => Navigator.of(context).pop(),
+                    remainingText: _remainingText,
+                  ),
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: box.maxWidth * 0.04,
                         vertical: box.maxHeight * 0.025,
                       ),
-                      child: compact
-                          ? _CompactBracket(
-                              activeRound: _round,
-                              eliminated: _eliminated,
-                              champion: _champion,
-                            )
-                          : _WideBracket(
-                              activeRound: _round,
-                              eliminated: _eliminated,
-                              champion: _champion,
+                      child: Column(
+                        children: [
+                          Text(
+                            '${_round + 1}. AŞAMA · 3 EL',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
                             ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '3 el sonunda toplam puanı en düşük oyuncu ilerler.',
+                            style: TextStyle(
+                              color: Colors.white60,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const Spacer(),
+                          _StageTrack(
+                            activeRound: _round,
+                            eliminated: _eliminated,
+                            champion: _champion,
+                            compact: compact,
+                          ),
+                          const Spacer(),
+                        ],
+                      ),
                     ),
                   ),
                   Padding(
@@ -115,9 +213,103 @@ class _TournamentScreenState extends State<TournamentScreen> {
   }
 }
 
+class _StageTrack extends StatelessWidget {
+  final int activeRound;
+  final bool eliminated;
+  final bool champion;
+  final bool compact;
+
+  const _StageTrack({
+    required this.activeRound,
+    required this.eliminated,
+    required this.champion,
+    required this.compact,
+  });
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: SizedBox(
+      width: compact ? 680 : 920,
+      height: 135,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          Positioned(
+            left: 70,
+            right: 70,
+            top: 42,
+            child: Container(height: 7, color: const Color(0xFF34443C)),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(3, (index) {
+              final reached = (index <= activeRound && !eliminated) || champion;
+              return SizedBox(
+                width: 140,
+                child: Column(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 280),
+                      width: 84,
+                      height: 84,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: reached
+                            ? const Color(0xFFC99B2E)
+                            : const Color(0xFF17201C),
+                        border: Border.all(
+                          color: reached
+                              ? const Color(0xFFFFDD68)
+                              : Colors.white24,
+                          width: reached ? 5 : 3,
+                        ),
+                        boxShadow: reached
+                            ? const [
+                                BoxShadow(
+                                  color: Color(0x88F5C84A),
+                                  blurRadius: 18,
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          color: reached ? Colors.white : Colors.white38,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _TournamentScreenState._roundNames[index],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: reached
+                            ? const Color(0xFFFFD85F)
+                            : Colors.white38,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _TournamentHeader extends StatelessWidget {
   final VoidCallback onBack;
-  const _TournamentHeader({required this.onBack});
+  final String remainingText;
+  const _TournamentHeader({required this.onBack, required this.remainingText});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -134,10 +326,10 @@ class _TournamentHeader extends StatelessWidget {
           color: Colors.white,
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        const Expanded(
+        Expanded(
           child: Column(
             children: [
-              Text(
+              const Text(
                 'ALTIN ISTAKA TURNUVASI',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -148,8 +340,8 @@ class _TournamentHeader extends StatelessWidget {
                 ),
               ),
               Text(
-                '3 tur · Her masada 4 oyuncu',
-                style: TextStyle(color: Colors.white60, fontSize: 10),
+                '3 aşama · Her aşamada 3 el · $remainingText',
+                style: const TextStyle(color: Colors.white60, fontSize: 10),
               ),
             ],
           ),
@@ -160,170 +352,6 @@ class _TournamentHeader extends StatelessWidget {
         ),
       ],
     ),
-  );
-}
-
-class _WideBracket extends StatelessWidget {
-  final int activeRound;
-  final bool eliminated;
-  final bool champion;
-  const _WideBracket({
-    required this.activeRound,
-    required this.eliminated,
-    required this.champion,
-  });
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: List.generate(3, (round) {
-      final reached = round <= activeRound && !eliminated || champion;
-      final won = round < activeRound || champion;
-      return Expanded(
-        child: Row(
-          children: [
-            Expanded(
-              child: _RoundColumn(round: round, reached: reached, won: won),
-            ),
-            if (round < 2)
-              Expanded(
-                flex: 0,
-                child: Icon(
-                  Icons.chevron_right_rounded,
-                  size: 34,
-                  color: won ? const Color(0xFFFFCF52) : Colors.white24,
-                ),
-              ),
-          ],
-        ),
-      );
-    }),
-  );
-}
-
-class _CompactBracket extends StatelessWidget {
-  final int activeRound;
-  final bool eliminated;
-  final bool champion;
-  const _CompactBracket({
-    required this.activeRound,
-    required this.eliminated,
-    required this.champion,
-  });
-
-  @override
-  Widget build(BuildContext context) => Column(
-    children: List.generate(3, (round) {
-      final reached = round <= activeRound && !eliminated || champion;
-      final won = round < activeRound || champion;
-      return Expanded(
-        child: Column(
-          children: [
-            Expanded(
-              child: _RoundColumn(round: round, reached: reached, won: won),
-            ),
-            if (round < 2)
-              Icon(
-                Icons.keyboard_arrow_down_rounded,
-                color: won ? const Color(0xFFFFCF52) : Colors.white24,
-              ),
-          ],
-        ),
-      );
-    }),
-  );
-}
-
-class _RoundColumn extends StatelessWidget {
-  final int round;
-  final bool reached;
-  final bool won;
-  const _RoundColumn({
-    required this.round,
-    required this.reached,
-    required this.won,
-  });
-
-  @override
-  Widget build(BuildContext context) => FittedBox(
-    fit: BoxFit.scaleDown,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          _TournamentScreenState._roundNames[round],
-          style: TextStyle(
-            color: reached ? const Color(0xFFFFD76A) : Colors.white38,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.8,
-          ),
-        ),
-        const SizedBox(height: 12),
-        _TableCard(reached: reached, won: won),
-      ],
-    ),
-  );
-}
-
-class _TableCard extends StatelessWidget {
-  final bool reached;
-  final bool won;
-  const _TableCard({required this.reached, required this.won});
-
-  @override
-  Widget build(BuildContext context) => AnimatedContainer(
-    duration: const Duration(milliseconds: 300),
-    width: 190,
-    padding: const EdgeInsets.all(10),
-    decoration: BoxDecoration(
-      color: reached ? const Color(0xEE121A16) : const Color(0x99101412),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(
-        color: won
-            ? const Color(0xFFFFD45A)
-            : reached
-            ? const Color(0xFF55936C)
-            : Colors.white12,
-        width: won ? 2 : 1,
-      ),
-      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8)],
-    ),
-    child: Column(
-      children: [
-        _Competitor(name: 'SEN', highlighted: reached),
-        const Divider(color: Colors.white12, height: 8),
-        const _Competitor(name: 'OYUNCU 2', highlighted: false),
-        const Divider(color: Colors.white12, height: 8),
-        const _Competitor(name: 'OYUNCU 3', highlighted: false),
-        const Divider(color: Colors.white12, height: 8),
-        const _Competitor(name: 'OYUNCU 4', highlighted: false),
-      ],
-    ),
-  );
-}
-
-class _Competitor extends StatelessWidget {
-  final String name;
-  final bool highlighted;
-  const _Competitor({required this.name, required this.highlighted});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Icon(
-        Icons.person_rounded,
-        size: 17,
-        color: highlighted ? const Color(0xFFFFD45A) : Colors.white54,
-      ),
-      const SizedBox(width: 7),
-      Text(
-        name,
-        style: TextStyle(
-          color: highlighted ? Colors.white : Colors.white60,
-          fontWeight: FontWeight.w700,
-          fontSize: 11,
-        ),
-      ),
-    ],
   );
 }
 

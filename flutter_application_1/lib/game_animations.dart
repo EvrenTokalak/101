@@ -45,17 +45,6 @@ class _GameSceneEntrance extends StatelessWidget {
   Widget build(BuildContext context) => child;
 }
 
-/// Sırası gelen oyuncunun çerçevesi zaten vurgulandığı için ek kare üretmez.
-class _ActiveTurnPulse extends StatelessWidget {
-  final Widget child;
-  final bool active;
-
-  const _ActiveTurnPulse({required this.child, required this.active});
-
-  @override
-  Widget build(BuildContext context) => child;
-}
-
 /// Istakanın iki dış kenarı da doluysa yeni çekilen taşı kısa süre vurgular.
 class _DrawnTileAttention extends StatefulWidget {
   final Widget child;
@@ -68,15 +57,16 @@ class _DrawnTileAttention extends StatefulWidget {
 
 class _DrawnTileAttentionState extends State<_DrawnTileAttention>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 620),
-  )..repeat(count: 2);
-  late final Animation<double> _scale = TweenSequence<double>([
-    TweenSequenceItem(tween: Tween(begin: 1, end: 1.13), weight: 30),
-    TweenSequenceItem(tween: Tween(begin: 1.13, end: 0.97), weight: 35),
-    TweenSequenceItem(tween: Tween(begin: 0.97, end: 1), weight: 35),
-  ]).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..forward();
+  }
 
   @override
   void dispose() {
@@ -85,11 +75,17 @@ class _DrawnTileAttentionState extends State<_DrawnTileAttention>
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _scale,
-    child: RepaintBoundary(child: widget.child),
-    builder: (context, child) =>
-        Transform.scale(scale: _scale.value, child: child),
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: _controller,
+      child: widget.child,
+      builder: (_, child) {
+        final progress = _controller.value;
+        final strength = 1 - progress;
+        final scale = 1 + sin(progress * pi * 4) * 0.075 * strength;
+        return Transform.scale(scale: scale, child: child);
+      },
+    ),
   );
 }
 
@@ -100,36 +96,32 @@ class _FinishCelebration extends StatefulWidget {
   State<_FinishCelebration> createState() => _FinishCelebrationState();
 }
 
-class _FinishCelebrationState extends State<_FinishCelebration> {
-  static const _frameInterval = Duration(milliseconds: 50);
-  static const _durationMs = 850;
-  Timer? _timer;
-  int _elapsedMs = 0;
+class _FinishCelebrationState extends State<_FinishCelebration>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(_frameInterval, (timer) {
-      if (!mounted) return;
-      final next = min(_durationMs, _elapsedMs + _frameInterval.inMilliseconds);
-      if (next == _elapsedMs) return;
-      setState(() => _elapsedMs = next);
-      if (_elapsedMs >= _durationMs) timer.cancel();
-    });
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..forward();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => IgnorePointer(
     child: RepaintBoundary(
-      child: Builder(
-        builder: (context) {
-          final rawProgress = _elapsedMs / _durationMs;
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) {
+          final rawProgress = _controller.value;
           final value = Curves.easeOutCubic.transform(rawProgress);
           final badgeScale = sin(min(1, rawProgress) * pi).clamp(0, 1);
           return Stack(
@@ -274,10 +266,10 @@ class _FlyingTableTiles extends StatelessWidget {
               tween: Tween(begin: 0, end: 1),
               duration: Duration(
                 milliseconds: isDraw
-                    ? (motion.playerIndex > 0 ? 160 : 220)
+                    ? (motion.playerIndex > 0 ? 120 : 220)
                     : motion.kind == _TableTileMotionKind.process
-                    ? (motion.playerIndex > 0 ? 180 : 230)
-                    : (motion.playerIndex > 0 ? 240 : 310),
+                    ? (motion.playerIndex > 0 ? 140 : 230)
+                    : (motion.playerIndex > 0 ? 170 : 310),
               ),
               curve: Curves.easeOutCubic,
               builder: (context, value, child) => Transform.translate(
@@ -331,11 +323,12 @@ class _MotionTileFan extends StatelessWidget {
 }
 
 /// Yeni elde oyuncu taşlarını tek tek kapalı getirir, ardından sırayla çevirir.
-class _DealtRackTile extends StatefulWidget {
+class _DealtRackTile extends StatelessWidget {
   final int dealIndex;
   final double width;
   final double height;
   final Widget front;
+  final ValueListenable<double> progress;
 
   const _DealtRackTile({
     super.key,
@@ -343,64 +336,35 @@ class _DealtRackTile extends StatefulWidget {
     required this.width,
     required this.height,
     required this.front,
+    required this.progress,
   });
 
   @override
-  State<_DealtRackTile> createState() => _DealtRackTileState();
-}
-
-class _DealtRackTileState extends State<_DealtRackTile> {
-  Timer? _arrivalTimer;
-  Timer? _revealTimer;
-  int _phase = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _arrivalTimer = Timer(Duration(milliseconds: widget.dealIndex * 34), () {
-      if (mounted) setState(() => _phase = 1);
-    });
-    _revealTimer = Timer(
-      Duration(milliseconds: 820 + widget.dealIndex * 34),
-      () {
-        if (mounted) setState(() => _phase = 2);
-      },
-    );
-  }
-
-  @override
-  void dispose() {
-    _arrivalTimer?.cancel();
-    _revealTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => RepaintBoundary(
-    child: switch (_phase) {
-      0 => SizedBox(width: widget.width, height: widget.height),
-      1 => TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: 1),
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOutCubic,
-        child: _TileBack(
-          width: widget.width,
-          height: widget.height,
-          showBorder: false,
-        ),
-        builder: (context, value, child) => Transform.translate(
-          offset: Offset(0, -widget.height * 0.75 * (1 - value)),
-          child: Transform.scale(scale: 0.9 + value * 0.1, child: child),
-        ),
-      ),
-      _ => TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0.92, end: 1),
-        duration: const Duration(milliseconds: 110),
-        curve: Curves.easeOutCubic,
-        builder: (context, value, child) =>
-            Transform.scale(scaleX: value, child: child),
-        child: widget.front,
-      ),
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+    valueListenable: progress,
+    child: front,
+    builder: (context, progressValue, frontChild) {
+      const totalMs = 1650.0;
+      final elapsed = progressValue * totalMs;
+      final arrivalStart = dealIndex * 34.0;
+      final revealStart = 820.0 + arrivalStart;
+      if (elapsed < arrivalStart) {
+        return SizedBox(width: width, height: height);
+      }
+      if (elapsed < revealStart) {
+        final raw = ((elapsed - arrivalStart) / 150).clamp(0.0, 1.0);
+        final value = Curves.easeOutCubic.transform(raw);
+        return Transform.translate(
+          offset: Offset(0, -height * 0.75 * (1 - value)),
+          child: Transform.scale(
+            scale: 0.9 + value * 0.1,
+            child: _TileBack(width: width, height: height, showBorder: false),
+          ),
+        );
+      }
+      final raw = ((elapsed - revealStart) / 110).clamp(0.0, 1.0);
+      final value = Curves.easeOutCubic.transform(raw);
+      return Transform.scale(scaleX: 0.92 + value * 0.08, child: frontChild);
     },
   );
 }

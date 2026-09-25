@@ -6,7 +6,7 @@ import 'main.dart';
 import 'player_progress.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ODA SEÇ EKRANIColors.black.withOpacity(0.5
+// ODA SEÇ EKRANI
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class RoomSelectScreen extends StatefulWidget {
@@ -17,14 +17,13 @@ class RoomSelectScreen extends StatefulWidget {
 }
 
 class _RoomSelectScreenState extends State<RoomSelectScreen>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
 
   late AnimationController _enterCtrl;
   late Animation<double> _fadeIn;
 
   // Her kart için ayrı "seçim pulse" controller
-  late List<AnimationController> _pulseControllers;
 
   static const _rooms = [
     _RoomData(
@@ -102,22 +101,11 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       curve: Curves.easeOut,
     ).drive(Tween<double>(begin: 0.0, end: 1.0));
     _enterCtrl.forward();
-
-    _pulseControllers = List.generate(
-      _rooms.length,
-      (_) => AnimationController(
-        duration: const Duration(milliseconds: 1400),
-        vsync: this,
-      )..repeat(reverse: true),
-    );
   }
 
   @override
   void dispose() {
     _enterCtrl.dispose();
-    for (final c in _pulseControllers) {
-      c.dispose();
-    }
     super.dispose();
   }
 
@@ -183,7 +171,35 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
             ),
           ),
           Positioned.fill(
-            child: ColoredBox(color: Colors.black.withValues(alpha: 0.2)),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.12),
+                    const Color(0xCC071B14),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 16,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Color(0xFF4A2914),
+                    Color(0xFFA06B34),
+                    Color(0xFF4A2914),
+                  ],
+                ),
+              ),
+            ),
           ),
 
           SafeArea(
@@ -219,6 +235,8 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
                             // ── Başlık ───────────────────────────────────────────
                             const SizedBox(height: 16),
                             _SectionTitle(),
+                            const SizedBox(height: 10),
+                            const _LobbyStatusStrip(),
 
                             // ── Oda kartları ─────────────────────────────────────
                             const SizedBox(height: 16),
@@ -233,15 +251,11 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
                                   children: List.generate(_rooms.length, (i) {
                                     return Expanded(
                                       flex: i == _selectedIndex ? 5 : 4,
-                                      child: AnimatedBuilder(
-                                        animation: _pulseControllers[i],
-                                        builder: (_, _) => _RoomCard(
-                                          room: _rooms[i],
-                                          isSelected: i == _selectedIndex,
-                                          pulseValue:
-                                              _pulseControllers[i].value,
-                                          onTap: () => _selectRoom(i),
-                                        ),
+                                      child: _RoomCard(
+                                        room: _rooms[i],
+                                        isSelected: i == _selectedIndex,
+                                        pulseValue: 0.5,
+                                        onTap: () => _selectRoom(i),
                                       ),
                                     );
                                   }),
@@ -270,6 +284,48 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       ),
     );
   }
+}
+
+class _LobbyStatusStrip extends StatelessWidget {
+  const _LobbyStatusStrip();
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xB30B2119),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.35)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, color: Color(0xFF62D37B), size: 9),
+          SizedBox(width: 6),
+          Text(
+            '16 OYUNCU ÇEVRİMİÇİ',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          SizedBox(width: 18),
+          Icon(Icons.speed_rounded, color: OkeyColors.goldLight, size: 15),
+          SizedBox(width: 5),
+          Text(
+            'ORTALAMA EŞLEŞME  4 sn',
+            style: TextStyle(
+              color: OkeyColors.cream,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 // ─── Veri Modeli ──────────────────────────────────────────────────────────────

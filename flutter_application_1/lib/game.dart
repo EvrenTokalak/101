@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show ValueListenable, kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'game_launch.dart';
+import 'performance_overlay.dart';
 import 'player_progress.dart';
 
 part 'game_rack_solver.dart';
@@ -13,6 +16,42 @@ part 'game_bot_engine.dart';
 part 'game_animations.dart';
 part 'game_settings.dart';
 part 'game_table_widgets.dart';
+
+Future<void>? _gameAudioWarmup;
+
+Future<void> prewarmGameAudio() {
+  if (kIsWeb) return Future.value();
+  return _gameAudioWarmup ??= (() async {
+    try {
+      await AudioCache.instance.loadAll(const [
+        'sounds/tile_pick.wav',
+        'sounds/tile_place.wav',
+        'sounds/tile_arrange.wav',
+      ]);
+    } catch (_) {}
+  })();
+}
+
+int _rackDecodeWidth(BuildContext context) {
+  final media = MediaQuery.of(context);
+  return (media.size.width * media.devicePixelRatio * 0.76).round().clamp(
+    960,
+    1440,
+  );
+}
+
+Future<void> prewarmGameVisuals(BuildContext context) => Future.wait<void>([
+  // Oyun sahnesiyle aynı anahtarı kullan; tam boy ve 1920 px kopyaları aynı
+  // anda bellekte tutulmasın.
+  precacheImage(
+    ResizeImage(
+      const AssetImage('images/rack2.png'),
+      width: _rackDecodeWidth(context),
+    ),
+    context,
+  ),
+  precacheImage(const AssetImage('images/tas_ters.png'), context),
+]);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -110,14 +149,71 @@ class Meld {
 
 class _RackDragData {
   final int tileId;
+  final int sourceSlot;
   final Set<int> tileIds;
   final Tile tile;
 
   const _RackDragData({
     required this.tileId,
+    required this.sourceSlot,
     required this.tileIds,
     required this.tile,
   });
+}
+
+class _RackDragVisualState {
+  final Offset? gridPosition;
+  final double tilt;
+  final double lift;
+
+  const _RackDragVisualState({this.gridPosition, this.tilt = 0, this.lift = 0});
+}
+
+class _RackPushPreview {
+  final int tileId;
+  final int sourceSlot;
+  final int targetSlot;
+  final int vacancySlot;
+
+  const _RackPushPreview({
+    required this.tileId,
+    required this.sourceSlot,
+    required this.targetSlot,
+    required this.vacancySlot,
+  });
+}
+
+const int _maxRackPushTiles = 3;
+
+int _directionalRackVacancy(
+  List<int?> slots,
+  int sourceSlot,
+  int targetSlot, {
+  int approachDirection = 0,
+}) {
+  final rowLength = _GameScreenState._rackRowLength;
+  if (sourceSlot ~/ rowLength != targetSlot ~/ rowLength) {
+    return -1;
+  }
+  final rowStart = (targetSlot ~/ rowLength) * rowLength;
+  final rowEnd = rowStart + rowLength;
+  // Taş hedefe hangi yönden giriyorsa, hedefteki taşları aynı yönde iter.
+  // Çok yavaş/dikey bırakmalarda eski konum güvenli bir yedek yön sağlar.
+  final pushRight = approachDirection == 0
+      ? sourceSlot < targetSlot
+      : approachDirection > 0;
+  if (pushRight) {
+    final searchEnd = min(rowEnd, targetSlot + _maxRackPushTiles + 1);
+    for (var index = targetSlot + 1; index < searchEnd; index++) {
+      if (slots[index] == null) return index;
+    }
+  } else {
+    final searchStart = max(rowStart, targetSlot - _maxRackPushTiles);
+    for (var index = targetSlot - 1; index >= searchStart; index--) {
+      if (slots[index] == null) return index;
+    }
+  }
+  return -1;
 }
 
 class _ProcessedMove {
@@ -415,6 +511,36 @@ class Rules {
     return ordered;
   }
 
+  /// Açık bir seriye taş eklenirken mevcut taşların, özellikle de belirli bir
+  /// sayıyı temsil eden okeyin, soldan-sağa konumunu korur.
+  static List<Tile> extendMeldKeepingPositions(
+    List<Tile> current,
+    Iterable<Tile> additions,
+    String type,
+  ) {
+    var result = List<Tile>.from(current);
+    for (final addition in additions) {
+      List<Tile>? validInsertion;
+      for (var index = 0; index <= result.length; index++) {
+        final candidate = List<Tile>.from(result)..insert(index, addition);
+        final valid = type == 'seri'
+            // isValidRun sayısal kümeyi doğrular; grid sırası için ayrıca
+            // taşların soldan sağa gerçekten artan konumda olması gerekir.
+            ? isValidRun(candidate) && _positionedRunNumbers(candidate) != null
+            : isValidGroup(candidate);
+        if (valid) {
+          validInsertion = candidate;
+          break;
+        }
+      }
+      if (validInsertion == null) {
+        return orderedMeld([...current, ...additions], type);
+      }
+      result = validInsertion;
+    }
+    return result;
+  }
+
   static int validMeldTotal(Iterable<List<Tile>> groups) {
     return groups.fold(0, (total, group) {
       final type = meldType(group);
@@ -580,13 +706,16 @@ class _GameScreenState extends State<GameScreen> {
   bool _showRackPairCount = false;
   final List<_ProcessedMove> _processedMoves = [];
   final GlobalKey _meldGridKey = GlobalKey();
-  final ValueNotifier<Offset?> _gridDragPosition = ValueNotifier(null);
-  final ValueNotifier<double> _rackDragTilt = ValueNotifier(0);
-  final ValueNotifier<double> _rackDragLift = ValueNotifier(0);
+  final ValueNotifier<_RackDragVisualState> _rackDragVisual = ValueNotifier(
+    const _RackDragVisualState(),
+  );
+  final ValueNotifier<_RackPushPreview?> _rackPushPreview = ValueNotifier(null);
   bool _draggingProcessableTile = false;
   Offset? _pendingGridDragPosition;
   double _pendingRackDragTilt = 0;
   double _pendingRackDragLift = 0;
+  int _rackApproachDirection = 0;
+  double? _rackDragOriginX;
   bool _dragVisualFrameScheduled = false;
   final Stopwatch _dragVisualUpdateClock = Stopwatch()..start();
   int _lastDragVisualUpdateMicros = -33000;
@@ -596,19 +725,29 @@ class _GameScreenState extends State<GameScreen> {
   int? _drawAttentionTileId;
   int _drawAttentionSerial = 0;
   int? _processableSignature;
+  int _tableRevision = 0;
   Set<int> _cachedProcessableTileIds = const {};
 
   String? _msg;
   String? _warningMsg;
   int _warningSerial = 0;
+  int _roundGeneration = 0;
   bool _showFinishCelebration = false;
   int _finishCelebrationSerial = 0;
   bool _endDialogVisible = false;
   bool _gameOverShown = false;
+  bool _autoPlayerBusy = false;
+  int _autoPlayerGeneration = 0;
+  int _autoPlayerTurns = 0;
   GameSettings _gameSettings = const GameSettings();
-  final Map<_GameSound, AudioPlayer> _soundPlayers = {
-    for (final sound in _GameSound.values) sound: AudioPlayer(),
-  };
+  bool get _useGameplayAnimations =>
+      _gameSettings.animations && (!_gameSettings.autoPlay || _elCount <= 3);
+  // Tek native oynatıcı kullanmak, manuel taş hareketlerinde üst üste açılan
+  // düşük gecikmeli ses tamponlarının oturum boyunca birikmesini engeller.
+  final AudioPlayer _soundPlayer = AudioPlayer();
+  int _soundSerial = 0;
+  final Map<_GameSound, int> _lastSoundMicros = {};
+  final Stopwatch _soundClock = Stopwatch()..start();
 
   Future<void> _openGameSettings() async {
     final updated = await showGeneralDialog<GameSettings>(
@@ -620,6 +759,22 @@ class _GameScreenState extends State<GameScreen> {
       pageBuilder: (_, _, _) => GameSettingsDialog(
         initial: _gameSettings,
         launchConfig: widget.launchConfig,
+        onChanged: (settings) {
+          if (!mounted) return;
+          final enableAutoPlay = !_gameSettings.autoPlay && settings.autoPlay;
+          setState(() {
+            _gameSettings = settings;
+            if (!settings.autoPlay && _autoPlayerBusy) {
+              _autoPlayerGeneration++;
+              _autoPlayerBusy = false;
+              if (_turn == 0) _botBusy = false;
+            }
+          });
+          if (enableAutoPlay) {
+            setState(_arrangeAutoPlayerRack);
+            _scheduleAutoPlayer();
+          }
+        },
         onRestart: (settings) {
           Navigator.of(context, rootNavigator: true).pop();
           setState(() {
@@ -654,25 +809,54 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(prewarmGameAudio());
     _startNewRound();
   }
 
   @override
   void dispose() {
     _dealTimer?.cancel();
-    for (final player in _soundPlayers.values) {
-      unawaited(player.dispose());
-    }
-    _gridDragPosition.dispose();
-    _rackDragTilt.dispose();
-    _rackDragLift.dispose();
+    _roundGeneration++;
+    _autoPlayerGeneration++;
+    _soundSerial++;
+    unawaited(_soundPlayer.dispose());
+    unawaited(AudioCache.instance.clearAll());
+    _gameAudioWarmup = null;
+    _BotWorker.instance.shutdown();
+    BotEngine.clearCaches();
+    _RunMeldGrid.clearLayoutCache();
+    _rackDragVisual.dispose();
+    _rackPushPreview.dispose();
     _tableTileMotion.dispose();
     super.dispose();
   }
 
   // ── Yeni El Başlat ────────────────────────────────────────────────────
   void _startNewRound() {
+    final hadPreviousRound = _elCount > 0;
+    _roundGeneration++;
     _elCount++;
+    _dealTimer?.cancel();
+    _warningSerial++;
+    _msg = null;
+    _warningMsg = null;
+    _rackAnalysisSignature = null;
+    _processableSignature = null;
+    _cachedProcessableTileIds = const {};
+    _cachedRackPerPoints = 0;
+    _cachedRackPairCount = 0;
+    _pendingGridDragPosition = null;
+    _pendingRackDragTilt = 0;
+    _pendingRackDragLift = 0;
+    _rackApproachDirection = 0;
+    _rackDragOriginX = null;
+    _RunMeldGrid.clearLayoutCache();
+    BotEngine.clearCaches();
+    if (hadPreviousRound && !kIsWeb) {
+      unawaited(_BotWorker.instance.clearCaches());
+      // Keep image assets warm; only collect transient state from the old hand.
+      unawaited(requestMemoryTrim());
+    }
     _showRackPairCount = false;
     _deck = buildDeck();
 
@@ -714,11 +898,13 @@ class _GameScreenState extends State<GameScreen> {
       _bots[_startingPlayer - 1].hand.add(extraTile);
     }
     _compactRackSlots();
+    if (_gameSettings.autoPlay) _arrangeAutoPlayerRack();
     for (final bot in _bots) {
       bot.tileCount = bot.hand.length;
     }
 
     _tableMetds = [];
+    _markTableChanged();
     _discarded = null;
     _discardPiles = List.generate(4, (_) => <Tile>[]);
     _playerOpened = false;
@@ -727,8 +913,8 @@ class _GameScreenState extends State<GameScreen> {
     _tookDiscard = false;
     _takenDiscardTile = null;
     _botBusy = false;
-    _gridDragPosition.value = null;
-    _rackDragTilt.value = 0;
+    _rackDragVisual.value = const _RackDragVisualState();
+    _rackPushPreview.value = null;
     _draggingProcessableTile = false;
     _drawAttentionTileId = null;
     _botDiscardMotion = null;
@@ -736,6 +922,9 @@ class _GameScreenState extends State<GameScreen> {
     _uiMode = 'normal';
     _processedMoves.clear();
     _gameOverShown = false;
+    _autoPlayerBusy = false;
+    _autoPlayerGeneration++;
+    _autoPlayerTurns = 0;
     _showFinishCelebration = false;
     _finishCelebrationSerial++;
     _endDialogVisible = false;
@@ -744,12 +933,12 @@ class _GameScreenState extends State<GameScreen> {
     _turn = _startingPlayer;
     _drawnThisTurn = _turn == 0;
     final openingTurn = _turn;
-    if (_gameSettings.animations) {
+    if (_useGameplayAnimations) {
       final serial = ++_dealAnimationCounter;
       _dealAnimationSerial = serial;
       _dealInProgress = true;
       _dealTimer?.cancel();
-      _dealTimer = Timer(const Duration(milliseconds: 2600), () {
+      _dealTimer = Timer(const Duration(milliseconds: 1800), () {
         if (!mounted || _dealAnimationSerial != serial) return;
         _dealTimer = null;
         setState(() {
@@ -758,6 +947,8 @@ class _GameScreenState extends State<GameScreen> {
         });
         if (openingTurn > 0 && _turn == openingTurn && !_botBusy) {
           _runBot(_turn - 1, alreadyHasExtraTile: true);
+        } else if (openingTurn == 0) {
+          _scheduleAutoPlayer(alreadyHasExtraTile: true);
         }
       });
     } else {
@@ -772,6 +963,10 @@ class _GameScreenState extends State<GameScreen> {
           _runBot(_turn - 1, alreadyHasExtraTile: true);
         }
       });
+    } else if (_turn == 0 && !_dealInProgress) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleAutoPlayer(alreadyHasExtraTile: true);
+      });
     }
   }
 
@@ -784,7 +979,7 @@ class _GameScreenState extends State<GameScreen> {
     final visibleTileLimit = switch (kind) {
       _TableTileMotionKind.drawDeck || _TableTileMotionKind.drawDiscard => 1,
       _TableTileMotionKind.process => isBotMotion ? 1 : 2,
-      _TableTileMotionKind.open => isBotMotion ? 3 : 4,
+      _TableTileMotionKind.open => isBotMotion ? 1 : 4,
     };
     final visibleTiles = tiles.take(visibleTileLimit).toList();
     if (visibleTiles.isEmpty) return;
@@ -795,7 +990,7 @@ class _GameScreenState extends State<GameScreen> {
         sound: _GameSound.arrange,
       );
     }
-    if (!_gameSettings.animations) return;
+    if (!_useGameplayAnimations) return;
     final serial = ++_tableTileMotionSerial;
     _tableTileMotion.value = _TableTileMotion(
       tiles: visibleTiles,
@@ -804,13 +999,13 @@ class _GameScreenState extends State<GameScreen> {
       serial: serial,
     );
     final clearDelay = switch (kind) {
-      _TableTileMotionKind.drawDeck ||
-      _TableTileMotionKind.drawDiscard => const Duration(milliseconds: 240),
+      _TableTileMotionKind.drawDeck || _TableTileMotionKind.drawDiscard =>
+        Duration(milliseconds: isBotMotion ? 150 : 240),
       _TableTileMotionKind.process => Duration(
-        milliseconds: isBotMotion ? 200 : 250,
+        milliseconds: isBotMotion ? 150 : 250,
       ),
       _TableTileMotionKind.open => Duration(
-        milliseconds: isBotMotion ? 270 : 330,
+        milliseconds: isBotMotion ? 180 : 330,
       ),
     };
     Future.delayed(clearDelay, () {
@@ -857,10 +1052,27 @@ class _GameScreenState extends State<GameScreen> {
         requestedSlot != null &&
         requestedSlot >= 0 &&
         requestedSlot < _rackSlots.length;
-    final edgeSlot = hasRequestedSlot ? requestedSlot : _emptyRackEdgeSlot();
-    final targetSlot = edgeSlot ?? _rackSlots.indexOf(null);
+    final isolatedSlot = hasRequestedSlot ? requestedSlot : _isolatedRackSlot();
+    final edgeSlot = hasRequestedSlot || isolatedSlot != null
+        ? null
+        : _emptyRackEdgeSlot();
+    final targetSlot = isolatedSlot ?? edgeSlot ?? _rackSlots.indexOf(null);
     if (targetSlot >= 0) _insertRackTileAt(tile.id, targetSlot);
-    return !hasRequestedSlot && edgeSlot == null;
+    return !hasRequestedSlot && isolatedSlot == null;
+  }
+
+  int? _isolatedRackSlot() {
+    for (var row = 0; row < 2; row++) {
+      final start = row * _rackRowLength;
+      final end = start + _rackRowLength;
+      for (var slot = start; slot < end; slot++) {
+        if (_rackSlots[slot] != null) continue;
+        final leftEmpty = slot == start || _rackSlots[slot - 1] == null;
+        final rightEmpty = slot == end - 1 || _rackSlots[slot + 1] == null;
+        if (leftEmpty && rightEmpty) return slot;
+      }
+    }
+    return null;
   }
 
   int? _emptyRackEdgeSlot() {
@@ -930,24 +1142,32 @@ class _GameScreenState extends State<GameScreen> {
     _GameSound sound = _GameSound.place,
   }) {
     if (_gameSettings.sound) {
+      final now = _soundClock.elapsedMicroseconds;
+      final minimumGap = sound == _GameSound.pick ? 55000 : 80000;
+      final shouldPlay =
+          now - (_lastSoundMicros[sound] ?? -minimumGap) >= minimumGap;
+      if (shouldPlay) _lastSoundMicros[sound] = now;
       final asset = switch (sound) {
         _GameSound.pick => 'sounds/tile_pick.wav',
         _GameSound.place => 'sounds/tile_place.wav',
         _GameSound.arrange => 'sounds/tile_arrange.wav',
       };
-      final player = _soundPlayers[sound]!;
-      unawaited(() async {
-        try {
-          await player.stop();
-          await player.play(
-            AssetSource(asset),
-            volume: strong ? 0.78 : 0.62,
-            mode: PlayerMode.lowLatency,
-          );
-        } catch (_) {
-          // Ses desteği olmayan test ortamlarında oyun akışını sürdür.
-        }
-      }());
+      if (shouldPlay) {
+        final serial = ++_soundSerial;
+        unawaited(() async {
+          try {
+            await _soundPlayer.stop();
+            if (!mounted || serial != _soundSerial) return;
+            await _soundPlayer.play(
+              AssetSource(asset),
+              volume: strong ? 0.78 : 0.62,
+              mode: PlayerMode.lowLatency,
+            );
+          } catch (_) {
+            // Ses desteği olmayan test ortamlarında oyun akışını sürdür.
+          }
+        }());
+      }
     }
     if (_gameSettings.vibration) {
       if (strong) {
@@ -983,6 +1203,21 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  void _releaseTurnTransients() {
+    _pendingGridDragPosition = null;
+    _pendingRackDragTilt = 0;
+    _pendingRackDragLift = 0;
+    _rackApproachDirection = 0;
+    _rackDragOriginX = null;
+    _draggingProcessableTile = false;
+    _rackDragVisual.value = const _RackDragVisualState();
+    _rackPushPreview.value = null;
+    _drawAttentionTileId = null;
+    _rackAnalysisSignature = null;
+    _processableSignature = null;
+    _cachedProcessableTileIds = const {};
+  }
+
   Set<int> get _selectedTileIds =>
       _rack.where((tile) => tile.selected).map((tile) => tile.id).toSet();
 
@@ -1016,12 +1251,40 @@ class _GameScreenState extends State<GameScreen> {
     if (from == -1) return;
     final target = targetIndex.clamp(0, _rackSlotCount - 1);
     if (from == target) return;
+    var moved = false;
     setState(() {
+      // Kaynak taşı önce kaldır. Böylece taşın bıraktığı gerçek boşluk da
+      // zincirleme yerleştirme hesabına dahil edilir.
       _rackSlots[from] = null;
-      _insertRackTileAt(tileId, target);
-      _rackAnalysisSignature = null;
+      if (_rackSlots[target] == null) {
+        _rackSlots[target] = tileId;
+        moved = true;
+      } else {
+        final vacancy = _directionalRackVacancy(
+          _rackSlots,
+          from,
+          target,
+          approachDirection: _rackApproachDirection,
+        );
+        if (vacancy < 0) {
+          _rackSlots[from] = tileId;
+          return;
+        }
+        if (vacancy > target) {
+          for (var index = vacancy; index > target; index--) {
+            _rackSlots[index] = _rackSlots[index - 1];
+          }
+        } else {
+          for (var index = vacancy; index < target; index++) {
+            _rackSlots[index] = _rackSlots[index + 1];
+          }
+        }
+        _rackSlots[target] = tileId;
+        moved = true;
+      }
+      if (moved) _rackAnalysisSignature = null;
     });
-    _playInteractionFeedback(sound: _GameSound.place);
+    if (moved) _playInteractionFeedback(sound: _GameSound.place);
   }
 
   int get _currentRackSignature => Object.hash(
@@ -1141,7 +1404,7 @@ class _GameScreenState extends State<GameScreen> {
       _rack.removeWhere((item) => item.id == tile.id);
       tile.selected = false;
       _discarded = tile;
-      _discardPiles[3].add(tile);
+      _addDiscardToPile(3, tile);
       _drawnThisTurn = false;
       _tookDiscard = false;
       _takenDiscardTile = null;
@@ -1188,15 +1451,16 @@ class _GameScreenState extends State<GameScreen> {
       // taşınırken mavi çerçeve ve yukarı kayma durumunu taşımamalı.
       tile.selected = false;
       _discarded = tile;
-      _discardPiles[0].add(tile);
+      _addDiscardToPile(0, tile);
       _drawnThisTurn = false;
       _tookDiscard = false;
       _takenDiscardTile = null;
     });
+    _releaseTurnTransients();
     _playInteractionFeedback(strong: true);
 
     if (_rack.isEmpty) {
-      if (celebrateCenterFinish && _gameSettings.animations) {
+      if (celebrateCenterFinish && _useGameplayAnimations) {
         final serial = ++_finishCelebrationSerial;
         setState(() {
           _showFinishCelebration = true;
@@ -1290,6 +1554,7 @@ class _GameScreenState extends State<GameScreen> {
           Meld(tiles: Rules.orderedMeld(groups[i], type), type: type),
         );
       }
+      _markTableChanged();
       _clearRackSlots(tileIds);
       _rack.removeWhere((tile) => tileIds.contains(tile.id));
       _playerOpened = true;
@@ -1390,6 +1655,7 @@ class _GameScreenState extends State<GameScreen> {
           );
         }
       }
+      _markTableChanged();
       _clearRackSlots(tileIds);
       _rack.removeWhere((tile) => tileIds.contains(tile.id));
       _playerOpened = true;
@@ -1432,17 +1698,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Set<int> get _processableTileIds {
     if (_rack.isEmpty || _tableMetds.isEmpty) return const <int>{};
-    final signature = Object.hash(
-      _currentRackSignature,
-      Object.hashAll(
-        _tableMetds.map(
-          (meld) => Object.hash(
-            meld.type,
-            Object.hashAll(meld.tiles.map((tile) => tile.id)),
-          ),
-        ),
-      ),
-    );
+    final signature = Object.hash(_currentRackSignature, _tableRevision);
     if (_processableSignature == signature) return _cachedProcessableTileIds;
     _cachedProcessableTileIds = Set<int>.unmodifiable({
       for (final tile in _rack)
@@ -1452,27 +1708,52 @@ class _GameScreenState extends State<GameScreen> {
     return _cachedProcessableTileIds;
   }
 
+  void _addDiscardToPile(int seat, Tile tile) {
+    final pile = _discardPiles[seat];
+    pile.add(tile);
+    // Arayüz yalnızca son taşı gösterir. Uzun oyunlarda görünmeyen geçmişi
+    // sınırsız tutmak gereksiz bellek ve liste maliyeti oluşturur.
+    const retainedTiles = 8;
+    if (pile.length > retainedTiles) {
+      pile.removeRange(0, pile.length - retainedTiles);
+    }
+  }
+
+  void _markTableChanged() {
+    _tableRevision++;
+    _processableSignature = null;
+  }
+
   int _automaticTargetMeldIndex(Tile tile) {
     return Rules.preferredMeldIndexForTile(_tableMetds, tile);
   }
 
   void _startGridDragZoom(_RackDragData data) {
     _playInteractionFeedback(sound: _GameSound.pick);
-    _rackDragTilt.value = 0;
-    _rackDragLift.value = 0;
+    _rackDragVisual.value = const _RackDragVisualState();
+    _rackPushPreview.value = null;
     _pendingRackDragTilt = 0;
     _pendingRackDragLift = 0;
+    _rackApproachDirection = 0;
+    _rackDragOriginX = null;
     final draggedIds = data.tileIds.isEmpty ? {data.tileId} : data.tileIds;
     _draggingProcessableTile =
         _gameSettings.gridMagnifier &&
         draggedIds.any(_processableTileIds.contains);
     if (!_draggingProcessableTile) {
       _pendingGridDragPosition = null;
-      _gridDragPosition.value = null;
+      _rackDragVisual.value = const _RackDragVisualState();
     }
   }
 
   void _updateGridDragZoom(_RackDragData _, DragUpdateDetails details) {
+    _rackDragOriginX ??= details.globalPosition.dx - details.delta.dx;
+    final horizontalTravel = details.globalPosition.dx - _rackDragOriginX!;
+    // Son birkaç piksellik parmak düzeltmesi yönü ters çevirmesin. İttirme
+    // yönü, taşın başlangıçtan hedefe yaptığı esas yatay harekete göre seçilir.
+    if (horizontalTravel.abs() >= 6) {
+      _rackApproachDirection = horizontalTravel.sign.toInt();
+    }
     final targetTilt = (details.delta.dx * 0.035).clamp(-0.18, 0.18);
     final tilt = _pendingRackDragTilt * 0.55 + targetTilt.toDouble() * 0.45;
     Offset? localPosition;
@@ -1488,7 +1769,7 @@ class _GameScreenState extends State<GameScreen> {
           local.dx <= renderObject.size.width &&
           local.dy <= renderObject.size.height;
       if (_draggingProcessableTile && inside) {
-        const positionStep = 8.0;
+        const positionStep = 12.0;
         localPosition = Offset(
           (local.dx / positionStep).round() * positionStep,
           (local.dy / positionStep).round() * positionStep,
@@ -1508,21 +1789,22 @@ class _GameScreenState extends State<GameScreen> {
     _pendingRackDragTilt = rackTilt;
     _pendingRackDragLift = rackLift;
     final nowMicros = _dragVisualUpdateClock.elapsedMicroseconds;
-    if (nowMicros - _lastDragVisualUpdateMicros < 33000) return;
+    if (nowMicros - _lastDragVisualUpdateMicros < 66000) return;
     _lastDragVisualUpdateMicros = nowMicros;
     if (_dragVisualFrameScheduled) return;
     _dragVisualFrameScheduled = true;
     WidgetsBinding.instance.scheduleFrameCallback((_) {
       _dragVisualFrameScheduled = false;
       if (!mounted) return;
-      if (_gridDragPosition.value != _pendingGridDragPosition) {
-        _gridDragPosition.value = _pendingGridDragPosition;
-      }
-      if (_rackDragTilt.value != _pendingRackDragTilt) {
-        _rackDragTilt.value = _pendingRackDragTilt;
-      }
-      if (_rackDragLift.value != _pendingRackDragLift) {
-        _rackDragLift.value = _pendingRackDragLift;
+      final current = _rackDragVisual.value;
+      if (current.gridPosition != _pendingGridDragPosition ||
+          current.tilt != _pendingRackDragTilt ||
+          current.lift != _pendingRackDragLift) {
+        _rackDragVisual.value = _RackDragVisualState(
+          gridPosition: _pendingGridDragPosition,
+          tilt: _pendingRackDragTilt,
+          lift: _pendingRackDragLift,
+        );
       }
     });
   }
@@ -1532,9 +1814,10 @@ class _GameScreenState extends State<GameScreen> {
     _pendingGridDragPosition = null;
     _pendingRackDragTilt = 0;
     _pendingRackDragLift = 0;
-    _gridDragPosition.value = null;
-    _rackDragTilt.value = 0;
-    _rackDragLift.value = 0;
+    _rackApproachDirection = 0;
+    _rackDragOriginX = null;
+    _rackDragVisual.value = const _RackDragVisualState();
+    _rackPushPreview.value = null;
   }
 
   bool get _canLayPairsAfterStandard =>
@@ -1664,7 +1947,8 @@ class _GameScreenState extends State<GameScreen> {
     for (final tile in tiles) {
       tile.selected = false;
     }
-    meld.tiles = Rules.orderedMeld([...meld.tiles, ...tiles], meld.type);
+    meld.tiles = Rules.extendMeldKeepingPositions(meld.tiles, tiles, meld.type);
+    _markTableChanged();
     final tileIds = tiles.map((tile) => tile.id).toSet();
     _clearRackSlots(tileIds);
     _rack.removeWhere((tile) => tileIds.contains(tile.id));
@@ -1709,6 +1993,7 @@ class _GameScreenState extends State<GameScreen> {
     final changed = List<Tile>.from(meld.tiles)
       ..[replacementIndex] = replacement;
     meld.tiles = changed;
+    _markTableChanged();
     _clearRackSlots({replacement.id});
     _rack.removeWhere((tile) => tile.id == replacement.id);
     _rack.add(okey);
@@ -1749,6 +2034,7 @@ class _GameScreenState extends State<GameScreen> {
         _tookDiscard = move.tookDiscardBefore;
         _takenDiscardTile = move.takenDiscardTileBefore;
       }
+      _markTableChanged();
       _processedMoves.clear();
       _uiMode = 'normal';
     });
@@ -1815,7 +2101,7 @@ class _GameScreenState extends State<GameScreen> {
         tile.selected = tile.id == data.tileId;
       }
     });
-    _discardTile();
+    _discardTile(celebrateCenterFinish: _rack.length == 1);
   }
 
   void _finishByCenterDrop(_RackDragData data) {
@@ -1825,62 +2111,79 @@ class _GameScreenState extends State<GameScreen> {
     _discardTile(celebrateCenterFinish: true);
   }
 
-  Set<int> _layoutRackGroups(List<List<Tile>> groups) {
+  Set<int> _applyRackGroupLayout(List<List<Tile>> groups) {
     final placedIds = <int>{};
     final reservedSeparators = <int>{};
 
-    setState(() {
-      _rackSlots = List<int?>.filled(_rackSlotCount, null);
-      for (final tile in _rack) {
-        tile.selected = false;
-      }
+    _rackSlots = List<int?>.filled(_rackSlotCount, null);
+    for (final tile in _rack) {
+      tile.selected = false;
+    }
 
-      var row = 0;
-      var position = 0;
-      for (final group in groups) {
-        if (group.length > _rackRowLength) continue;
-        if (position > 0 && position + group.length > _rackRowLength) {
-          row++;
-          position = 0;
-        }
-        if (row >= 2) break;
-
-        for (final tile in group) {
-          final slot = row * _rackRowLength + position;
-          _rackSlots[slot] = tile.id;
-          placedIds.add(tile.id);
-          position++;
-        }
-        if (position < _rackRowLength) {
-          reservedSeparators.add(row * _rackRowLength + position);
-          position++;
-        }
+    var row = 0;
+    var position = 0;
+    for (final group in groups) {
+      if (group.length > _rackRowLength) continue;
+      if (position > 0 && position + group.length > _rackRowLength) {
+        row++;
+        position = 0;
       }
+      if (row >= 2) break;
 
-      final remaining =
-          _rack.where((tile) => !placedIds.contains(tile.id)).toList()
-            ..sort((a, b) {
-              final byNumber = b.number.compareTo(a.number);
-              if (byNumber != 0) return byNumber;
-              final byColor = b.color.index.compareTo(a.color.index);
-              if (byColor != 0) return byColor;
-              return b.id.compareTo(a.id);
-            });
-      final trailingSlots = [
-        for (var index = _rackSlotCount - 1; index >= 0; index--)
-          if (_rackSlots[index] == null && !reservedSeparators.contains(index))
-            index,
-      ];
-      for (
-        var index = 0;
-        index < remaining.length && index < trailingSlots.length;
-        index++
-      ) {
-        _rackSlots[trailingSlots[index]] = remaining[index].id;
+      for (final tile in group) {
+        final slot = row * _rackRowLength + position;
+        _rackSlots[slot] = tile.id;
+        placedIds.add(tile.id);
+        position++;
       }
-      _rackAnalysisSignature = null;
-    });
+      if (position < _rackRowLength) {
+        reservedSeparators.add(row * _rackRowLength + position);
+        position++;
+      }
+    }
+
+    final remaining =
+        _rack.where((tile) => !placedIds.contains(tile.id)).toList()
+          ..sort((a, b) {
+            final byNumber = b.number.compareTo(a.number);
+            if (byNumber != 0) return byNumber;
+            final byColor = b.color.index.compareTo(a.color.index);
+            if (byColor != 0) return byColor;
+            return b.id.compareTo(a.id);
+          });
+    final trailingSlots = [
+      for (var index = _rackSlotCount - 1; index >= 0; index--)
+        if (_rackSlots[index] == null && !reservedSeparators.contains(index))
+          index,
+    ];
+    for (
+      var index = 0;
+      index < remaining.length && index < trailingSlots.length;
+      index++
+    ) {
+      _rackSlots[trailingSlots[index]] = remaining[index].id;
+    }
+    _rackAnalysisSignature = null;
     return placedIds;
+  }
+
+  Set<int> _layoutRackGroups(List<List<Tile>> groups) {
+    late Set<int> placedIds;
+    setState(() => placedIds = _applyRackGroupLayout(groups));
+    return placedIds;
+  }
+
+  void _arrangeAutoPlayerRack() {
+    final standard = RackSolver.standardMelds(_rack);
+    final pairs = RackSolver.pairs(_rack);
+    final standardTiles = standard.fold<int>(
+      0,
+      (sum, group) => sum + group.length,
+    );
+    final pairTiles = pairs.fold<int>(0, (sum, group) => sum + group.length);
+    final usePairs = pairTiles > standardTiles;
+    _showRackPairCount = usePairs;
+    _applyRackGroupLayout(usePairs ? pairs : standard);
   }
 
   void _arrangeStandardMelds() {
@@ -1914,10 +2217,8 @@ class _GameScreenState extends State<GameScreen> {
       _msg_('Istakada boşluklarla ayırdığın geçerli bir per bulunamadı.');
       return;
     }
-    _openStandardMelds(
-      groups.expand((group) => group).map((tile) => tile.id).toSet(),
-      detectedGroups: groups,
-    );
+    final ids = groups.expand((group) => group).map((tile) => tile.id).toSet();
+    _openStandardMelds(ids, detectedGroups: groups);
   }
 
   void _autoOpenPairs() {
@@ -1927,13 +2228,106 @@ class _GameScreenState extends State<GameScreen> {
       _msg_('Istakada yan yana dizdiğin geçerli bir çift bulunamadı.');
       return;
     }
-    _openPairs(
-      pairs.expand((pair) => pair).map((tile) => tile.id).toSet(),
-      detectedPairs: pairs,
-    );
+    final ids = pairs.expand((pair) => pair).map((tile) => tile.id).toSet();
+    _openPairs(ids, detectedPairs: pairs);
   }
 
   // ── Sıra Geçişi ───────────────────────────────────────────────────────
+  void _scheduleAutoPlayer({bool alreadyHasExtraTile = false}) {
+    if (!_gameSettings.autoPlay ||
+        _autoPlayerBusy ||
+        _dealInProgress ||
+        _gameOverShown ||
+        _turn != 0) {
+      return;
+    }
+    final generation = ++_autoPlayerGeneration;
+    _autoPlayerBusy = true;
+    setState(() => _botBusy = true);
+    Future.delayed(const Duration(milliseconds: 260), () async {
+      if (!mounted ||
+          generation != _autoPlayerGeneration ||
+          !_gameSettings.autoPlay ||
+          _gameOverShown ||
+          _turn != 0) {
+        return;
+      }
+
+      if (!alreadyHasExtraTile && !_drawnThisTurn) {
+        if (_deck.isEmpty) {
+          _autoPlayerBusy = false;
+          setState(() => _botBusy = false);
+          _endRoundNoDeck();
+          return;
+        }
+        final drawn = _deck.removeLast();
+        _rack.add(drawn);
+        _placeInRackSlot(drawn);
+        _drawnThisTurn = true;
+      }
+
+      final playerBot = BotPlayer(
+        name: 'Oyuncu 1',
+        tileCount: _rack.length,
+        hasOpened: _playerOpened,
+        openType: _playerOpenType,
+        turnsPlayed: ++_autoPlayerTurns,
+        hand: List<Tile>.from(_rack),
+      );
+      final tableIdsBefore = _tableMetds
+          .expand((meld) => meld.tiles)
+          .map((tile) => tile.id)
+          .toSet();
+      final computation = await _computeBotTurnInBackground(
+        playerBot,
+        _tableMetds,
+        allowOpening: true,
+        minimumStandardScore: 101,
+        minimumPairCount: 5,
+      );
+      if (!mounted ||
+          generation != _autoPlayerGeneration ||
+          !_gameSettings.autoPlay ||
+          _gameOverShown ||
+          _turn != 0) {
+        return;
+      }
+
+      final movedToTable = computation.tableMelds
+          .expand((meld) => meld.tiles)
+          .any((tile) => !tableIdsBefore.contains(tile.id));
+      final discarded = computation.result.discarded;
+      setState(() {
+        _rack = computation.bot.hand;
+        _playerOpened = computation.bot.hasOpened;
+        _playerOpenType = computation.bot.openType;
+        if (movedToTable) {
+          _tableMetds = computation.tableMelds;
+          _markTableChanged();
+        }
+        for (final tile in _rack) {
+          tile.selected = false;
+        }
+        _compactRackSlots();
+        _arrangeAutoPlayerRack();
+        _processedMoves.clear();
+        _drawnThisTurn = false;
+        _tookDiscard = false;
+        _takenDiscardTile = null;
+        _discarded = discarded;
+        if (discarded != null) _addDiscardToPile(0, discarded);
+        _autoPlayerBusy = false;
+        _botBusy = false;
+      });
+
+      if (_rack.isEmpty) {
+        _endRoundPlayerWins();
+      } else {
+        _nextTurn();
+      }
+    });
+  }
+
   void _nextTurn() {
     final nextTurn = (_turn + 1) % 4;
     setState(() {
@@ -1948,6 +2342,10 @@ class _GameScreenState extends State<GameScreen> {
           _runBot(nextTurn - 1, alreadyMarkedBusy: true);
         }
       });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleAutoPlayer();
+      });
     }
   }
 
@@ -1958,13 +2356,20 @@ class _GameScreenState extends State<GameScreen> {
     bool alreadyMarkedBusy = false,
   }) {
     if (_gameOverShown || _turn == 0 || _turn != botIdx + 1) return;
+    final roundGeneration = _roundGeneration;
     if (!alreadyMarkedBusy) setState(() => _botBusy = true);
 
-    final botThinkTime = _instantBotTurns
+    final botThinkTime = _gameSettings.autoPlay
+        ? const Duration(milliseconds: 110)
+        : _instantBotTurns
         ? const Duration(milliseconds: 25)
         : Duration(milliseconds: 650 + Random().nextInt(651));
-    Future.delayed(botThinkTime, () {
-      if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+    Future.delayed(botThinkTime, () async {
+      if (!mounted ||
+          roundGeneration != _roundGeneration ||
+          _gameOverShown ||
+          _turn == 0 ||
+          _turn != botIdx + 1) {
         return;
       }
 
@@ -1974,17 +2379,23 @@ class _GameScreenState extends State<GameScreen> {
       const pairOpeningTargets = [5, 6, 5];
       final nextBotTurn = bot.turnsPlayed + 1;
       final allowOpening = nextBotTurn >= earliestOpeningTurns[botIdx];
-      final canTakeDiscard =
-          !alreadyHasExtraTile &&
-          _discarded != null &&
-          BotEngine.wantsDiscard(
-            bot,
-            _discarded!,
-            _tableMetds,
-            allowOpening: allowOpening,
-            minimumStandardScore: standardOpeningTargets[botIdx],
-            minimumPairCount: pairOpeningTargets[botIdx],
-          );
+      final discardCandidate = _discarded;
+      final canTakeDiscard = !alreadyHasExtraTile && discardCandidate != null
+          ? await _computeBotWantsDiscard(
+              bot,
+              discardCandidate,
+              _tableMetds,
+              allowOpening: allowOpening,
+              minimumStandardScore: standardOpeningTargets[botIdx],
+              minimumPairCount: pairOpeningTargets[botIdx],
+            )
+          : false;
+      if (!mounted ||
+          roundGeneration != _roundGeneration ||
+          _gameOverShown ||
+          _turn != botIdx + 1) {
+        return;
+      }
       if (!alreadyHasExtraTile && !canTakeDiscard && _deck.isEmpty) {
         setState(() => _botBusy = false);
         _endRoundNoDeck();
@@ -2015,12 +2426,16 @@ class _GameScreenState extends State<GameScreen> {
             [drawnTile!],
             playerIndex: botIdx + 1,
           );
-          animatedDraw = _gameSettings.animations;
+          animatedDraw = _useGameplayAnimations;
         });
       }
 
-      void playAndDiscard() {
-        if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+      Future<void> playAndDiscard() async {
+        if (!mounted ||
+            roundGeneration != _roundGeneration ||
+            _gameOverShown ||
+            _turn == 0 ||
+            _turn != botIdx + 1) {
           return;
         }
         late final BotTurnResult result;
@@ -2029,20 +2444,38 @@ class _GameScreenState extends State<GameScreen> {
             .map((tile) => tile.id)
             .toSet();
         var movedToTable = <Tile>[];
-        setState(() {
-          bot.turnsPlayed++;
-          result = BotEngine.play(
-            bot,
-            _tableMetds,
-            allowOpening: bot.turnsPlayed >= earliestOpeningTurns[botIdx],
-            minimumStandardScore: standardOpeningTargets[botIdx],
-            minimumPairCount: pairOpeningTargets[botIdx],
-          );
-          movedToTable = _tableMetds
-              .expand((meld) => meld.tiles)
-              .where((tile) => !tableTileIdsBefore.contains(tile.id))
-              .toList();
-          if (movedToTable.isNotEmpty) {
+        bot.turnsPlayed++;
+        final computation = await _computeBotTurnInBackground(
+          bot,
+          _tableMetds,
+          allowOpening: bot.turnsPlayed >= earliestOpeningTurns[botIdx],
+          minimumStandardScore: standardOpeningTargets[botIdx],
+          minimumPairCount: pairOpeningTargets[botIdx],
+        );
+        if (!mounted ||
+            roundGeneration != _roundGeneration ||
+            _gameOverShown ||
+            _turn != botIdx + 1) {
+          return;
+        }
+        result = computation.result;
+        bot.hand = computation.bot.hand;
+        bot.tileCount = computation.bot.tileCount;
+        bot.hasOpened = computation.bot.hasOpened;
+        bot.openType = computation.bot.openType;
+        bot.turnsPlayed = computation.bot.turnsPlayed;
+        movedToTable = computation.tableMelds
+            .expand((meld) => meld.tiles)
+            .where((tile) => !tableTileIdsBefore.contains(tile.id))
+            .toList();
+        // Botlarin buyuk bolumu bu turda masaya tas indirmez. Bu durumda
+        // klonlanmis ayni masayi geri atamak hem grid onbellegini bosaltiyor hem
+        // de atma animasyonundan hemen once gereksiz bir tam sahne rebuild'i
+        // uretiyordu. Masayi yalnizca gercekten degistiyse yenile.
+        if (movedToTable.isNotEmpty) {
+          setState(() {
+            _tableMetds = computation.tableMelds;
+            _markTableChanged();
             _beginTableTileMotion(
               result.openedMeldCount > 0
                   ? _TableTileMotionKind.open
@@ -2050,51 +2483,90 @@ class _GameScreenState extends State<GameScreen> {
               movedToTable,
               playerIndex: botIdx + 1,
             );
-          }
-          _discarded = result.discarded;
-        });
+          });
+        }
 
         void finishTurn() {
-          if (!mounted || _gameOverShown || _turn == 0 || _turn != botIdx + 1) {
+          if (!mounted ||
+              roundGeneration != _roundGeneration ||
+              _gameOverShown ||
+              _turn == 0 ||
+              _turn != botIdx + 1) {
             return;
           }
-          setState(() {
-            _botBusy = false;
-            if (result.discarded != null) {
-              _discardPiles[botIdx + 1].add(result.discarded!);
-            }
-            if (_botDiscardMotion?.serial == _botDiscardMotionSerial) {
-              _botDiscardMotion = null;
-            }
-          });
           if (bot.hand.isEmpty) {
+            setState(() {
+              _botBusy = false;
+              _discarded = result.discarded;
+              if (result.discarded != null) {
+                _addDiscardToPile(botIdx + 1, result.discarded!);
+              }
+              _botDiscardMotion = null;
+            });
             _endRoundBotWins(botIdx);
           } else if (_deck.isEmpty) {
+            setState(() {
+              _botBusy = false;
+              _discarded = result.discarded;
+              if (result.discarded != null) {
+                _addDiscardToPile(botIdx + 1, result.discarded!);
+              }
+              _botDiscardMotion = null;
+            });
             _endRoundNoDeck();
           } else {
-            _nextTurn();
+            final nextTurn = (_turn + 1) % 4;
+            // Atılan taşı kesinleştirme ve sıra değişimini tek sahne
+            // güncellemesinde yap; botlar arasında iki tam rebuild oluşmasın.
+            setState(() {
+              _discarded = result.discarded;
+              if (result.discarded != null) {
+                _addDiscardToPile(botIdx + 1, result.discarded!);
+              }
+              _botDiscardMotion = null;
+              _turn = nextTurn;
+              _botBusy = nextTurn != 0;
+              if (nextTurn == 0) _drawnThisTurn = false;
+            });
+            if (nextTurn != 0) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && _turn == nextTurn && _botBusy) {
+                  _runBot(nextTurn - 1, alreadyMarkedBusy: true);
+                }
+              });
+            } else {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _scheduleAutoPlayer();
+              });
+            }
           }
         }
 
         void startDiscard() {
-          if (!mounted || _gameOverShown || _turn != botIdx + 1) return;
-          if (result.discarded != null && _gameSettings.animations) {
+          if (!mounted ||
+              roundGeneration != _roundGeneration ||
+              _gameOverShown ||
+              _turn != botIdx + 1) {
+            return;
+          }
+          if (result.discarded != null && _useGameplayAnimations) {
             setState(() {
+              _discarded = result.discarded;
               _botDiscardMotion = _BotDiscardMotion(
                 tile: result.discarded!,
                 botIndex: botIdx,
                 serial: ++_botDiscardMotionSerial,
               );
             });
-            Future.delayed(const Duration(milliseconds: 320), finishTurn);
+            Future.delayed(const Duration(milliseconds: 210), finishTurn);
           } else {
             finishTurn();
           }
         }
 
         final tableMotionDelay =
-            _gameSettings.animations && movedToTable.isNotEmpty
-            ? Duration(milliseconds: result.openedMeldCount > 0 ? 270 : 200)
+            _useGameplayAnimations && movedToTable.isNotEmpty
+            ? Duration(milliseconds: result.openedMeldCount > 0 ? 180 : 150)
             : Duration.zero;
         if (tableMotionDelay == Duration.zero) {
           startDiscard();
@@ -2104,7 +2576,7 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       if (animatedDraw) {
-        Future.delayed(const Duration(milliseconds: 220), playAndDiscard);
+        Future.delayed(const Duration(milliseconds: 150), playAndDiscard);
       } else {
         playAndDiscard();
       }
@@ -2191,9 +2663,6 @@ class _GameScreenState extends State<GameScreen> {
     required int playerPen,
     required List<int> botPens,
   }) {
-    if (mounted && !_endDialogVisible) {
-      setState(() => _endDialogVisible = true);
-    }
     final playerWon = winner == 'Oyuncu 1' || winner == 'Sen';
     final reward = playerProgress.recordCompletedGame(
       config: widget.launchConfig,
@@ -2201,6 +2670,24 @@ class _GameScreenState extends State<GameScreen> {
       openedHand: _playerOpened,
       finishedHand: playerWon,
     );
+    if (_gameSettings.autoPlay) {
+      final completedRound = _roundGeneration;
+      for (var i = 0; i < _bots.length; i++) {
+        _bots[i].penalty += botPens[i];
+      }
+      Future.delayed(const Duration(milliseconds: 900), () {
+        if (!mounted ||
+            completedRound != _roundGeneration ||
+            !_gameSettings.autoPlay) {
+          return;
+        }
+        setState(_startNewRound);
+      });
+      return;
+    }
+    if (mounted && !_endDialogVisible) {
+      setState(() => _endDialogVisible = true);
+    }
     showGeneralDialog(
       context: context,
       barrierDismissible: false,
@@ -2263,7 +2750,7 @@ class _GameScreenState extends State<GameScreen> {
         : const <int>{};
 
     return Scaffold(
-      backgroundColor: const Color(0xFF003E2A),
+      backgroundColor: const Color(0xFF004526),
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: _clearRackSelection,
@@ -2307,7 +2794,7 @@ class _GameScreenState extends State<GameScreen> {
                         enabled: !_endDialogVisible,
                         child: RepaintBoundary(
                           child: _GameSceneEntrance(
-                            enabled: _gameSettings.animations,
+                            enabled: _useGameplayAnimations,
                             child: Stack(
                               children: [
                                 // ── Büyük oyun masası ───────────────────────────────────
@@ -2356,7 +2843,7 @@ class _GameScreenState extends State<GameScreen> {
                                       onReturnDiscard: _returnTakenDiscard,
                                       gridTileWidth: gridTileWidth,
                                       gridKey: _meldGridKey,
-                                      gridDragPosition: _gridDragPosition,
+                                      dragVisual: _rackDragVisual,
                                       botDiscardMotion: _botDiscardMotion,
                                       tableTileMotion: _tableTileMotion,
                                       bottomReservedSpace: infoPanelHeight,
@@ -2379,6 +2866,8 @@ class _GameScreenState extends State<GameScreen> {
                                       onFinishByCenterDrop: _finishByCenterDrop,
                                       dragTileWidth: rackVisualTileWidth,
                                       dragTileHeight: rackVisualTileHeight,
+                                      showGrid: _gameSettings.showGrid,
+                                      showBots: _gameSettings.showBots,
                                     ),
                                   ),
                                 ),
@@ -2448,37 +2937,43 @@ class _GameScreenState extends State<GameScreen> {
                                           child: IgnorePointer(
                                             ignoring: _dealInProgress,
                                             child: RepaintBoundary(
-                                              child: _RackArea(
-                                                rack: _rack,
-                                                slots: _rackSlots,
-                                                dealAnimationSerial:
-                                                    _dealAnimationSerial,
-                                                onTileTap: _tapTile,
-                                                onReorder: _reorderRack,
-                                                onTileDragStart:
-                                                    _startGridDragZoom,
-                                                onTileDragUpdate:
-                                                    _updateGridDragZoom,
-                                                onTileDragEnd: _endGridDragZoom,
-                                                dragTilt: _rackDragTilt,
-                                                dragLift: _rackDragLift,
-                                                gridDragPosition:
-                                                    _gridDragPosition,
-                                                processableTileIds:
-                                                    processableTileIds,
-                                                drawAttentionTileId:
-                                                    _drawAttentionTileId,
-                                                drawAttentionSerial:
-                                                    _drawAttentionSerial,
-                                                canAcceptDeckDrop:
-                                                    myTurn && !_drawnThisTurn,
-                                                canAcceptDiscardDrop:
-                                                    myTurn &&
-                                                    !_drawnThisTurn &&
-                                                    _discarded != null,
-                                                onDeckDropAt: _drawFromDeck,
-                                                onDiscardDropAt: _takeDiscarded,
-                                              ),
+                                              child: _gameSettings.showRack
+                                                  ? _RackArea(
+                                                      rack: _rack,
+                                                      slots: _rackSlots,
+                                                      dealAnimationSerial:
+                                                          _dealAnimationSerial,
+                                                      onTileTap: _tapTile,
+                                                      onReorder: _reorderRack,
+                                                      onTileDragStart:
+                                                          _startGridDragZoom,
+                                                      onTileDragUpdate:
+                                                          _updateGridDragZoom,
+                                                      onTileDragEnd:
+                                                          _endGridDragZoom,
+                                                      dragVisual:
+                                                          _rackDragVisual,
+                                                      pushPreview:
+                                                          _rackPushPreview,
+                                                      processableTileIds:
+                                                          processableTileIds,
+                                                      drawAttentionTileId:
+                                                          _drawAttentionTileId,
+                                                      drawAttentionSerial:
+                                                          _drawAttentionSerial,
+                                                      canAcceptDeckDrop:
+                                                          myTurn &&
+                                                          !_drawnThisTurn,
+                                                      canAcceptDiscardDrop:
+                                                          myTurn &&
+                                                          !_drawnThisTurn &&
+                                                          _discarded != null,
+                                                      onDeckDropAt:
+                                                          _drawFromDeck,
+                                                      onDiscardDropAt:
+                                                          _takeDiscarded,
+                                                    )
+                                                  : const SizedBox.expand(),
                                             ),
                                           ),
                                         ),
@@ -2568,13 +3063,6 @@ class _GameScreenState extends State<GameScreen> {
                                       color: const Color(0xFFFFC04D),
                                       width: 2,
                                     ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Colors.black54,
-                                        blurRadius: 10,
-                                        offset: Offset(0, 4),
-                                      ),
-                                    ],
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -2673,7 +3161,7 @@ class _TopBar extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 // OYUNCU BİLGİSİ (avatar + isim + taş sayısı)
 // ═══════════════════════════════════════════════════════════════════════════
-class _PlayerInfo extends StatelessWidget {
+class _PlayerInfo extends StatefulWidget {
   final BotPlayer bot;
   final bool active;
   final bool horizontal;
@@ -2685,38 +3173,54 @@ class _PlayerInfo extends StatelessWidget {
   });
 
   @override
+  State<_PlayerInfo> createState() => _PlayerInfoState();
+}
+
+class _PlayerInfoState extends State<_PlayerInfo> {
+  late final Widget _avatarFace;
+  late final Widget _nameTag;
+
+  @override
+  void initState() {
+    super.initState();
+    final avatarSize = widget.horizontal ? 34.0 : 38.0;
+    _avatarFace = RepaintBoundary(
+      child: CustomPaint(
+        size: Size.square(avatarSize),
+        painter: const _BotAvatarPainter(),
+      ),
+    );
+    _nameTag = RepaintBoundary(
+      child: Container(
+        constraints: BoxConstraints(maxWidth: widget.horizontal ? 48 : 52),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xE6141917),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: const Color(0xFF7B5224), width: 1),
+        ),
+        child: Text(
+          widget.bot.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 7,
+            fontWeight: FontWeight.w800,
+            height: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final avatar = Stack(
       clipBehavior: Clip.none,
       children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
-          width: horizontal ? 34 : 38,
-          height: horizontal ? 34 : 38,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const RadialGradient(
-              colors: [Color(0xFFF2D89B), Color(0xFFB67828)],
-            ),
-            border: Border.all(
-              color: active ? OC.okeyGold : const Color(0xFF4B2D12),
-              width: active ? 2.5 : 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: active
-                    ? OC.okeyGold.withValues(alpha: 0.45)
-                    : Colors.black45,
-                blurRadius: active ? 9 : 5,
-              ),
-            ],
-          ),
-          child: Icon(
-            Icons.person,
-            size: horizontal ? 21 : 23,
-            color: const Color(0xFF553116),
-          ),
-        ),
+        _avatarFace,
         Positioned(
           right: -3,
           bottom: -2,
@@ -2730,7 +3234,7 @@ class _PlayerInfo extends StatelessWidget {
             ),
             alignment: Alignment.center,
             child: Text(
-              '${bot.tileCount}',
+              '${widget.bot.tileCount}',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 7,
@@ -2739,51 +3243,80 @@ class _PlayerInfo extends StatelessWidget {
             ),
           ),
         ),
+        if (widget.active)
+          Positioned(
+            left: -2,
+            top: -2,
+            child: Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                color: OC.okeyGold,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
       ],
     );
 
-    final nameTag = Container(
-      constraints: BoxConstraints(maxWidth: horizontal ? 48 : 52),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xE6141917),
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(
-          color: active ? OC.gold : const Color(0xFF7B5224),
-          width: 1,
-        ),
-      ),
-      child: Text(
-        bot.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 7,
-          fontWeight: FontWeight.w800,
-          height: 1,
-        ),
-      ),
-    );
-
-    return _ActiveTurnPulse(
-      active: active,
-      child: Container(
-        key: ValueKey('seat-${bot.name}'),
-        padding: const EdgeInsets.all(2),
-        child: horizontal
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [avatar, const SizedBox(width: 4), nameTag],
-              )
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [avatar, const SizedBox(height: 3), nameTag],
-              ),
-      ),
+    return Container(
+      key: ValueKey('seat-${widget.bot.name}'),
+      padding: const EdgeInsets.all(2),
+      child: widget.horizontal
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [avatar, const SizedBox(width: 4), _nameTag],
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [avatar, const SizedBox(height: 3), _nameTag],
+            ),
     );
   }
+}
+
+class _BotAvatarPainter extends CustomPainter {
+  const _BotAvatarPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final center = rect.center;
+    final radius = size.shortestSide / 2;
+    final background = Paint()
+      ..shader = const RadialGradient(
+        colors: [Color(0xFFF2D89B), Color(0xFFB67828)],
+      ).createShader(rect);
+    canvas.drawCircle(center, radius - 1, background);
+    canvas.drawCircle(
+      center,
+      radius - 1,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = const Color(0xFF4B2D12),
+    );
+    final person = Paint()..color = const Color(0xFF553116);
+    canvas.drawCircle(
+      Offset(center.dx, size.height * 0.38),
+      size.width * 0.13,
+      person,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(center.dx, size.height * 0.68),
+          width: size.width * 0.46,
+          height: size.height * 0.30,
+        ),
+        Radius.circular(size.width * 0.16),
+      ),
+      person,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _BotAvatarPainter oldDelegate) => false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2811,7 +3344,7 @@ class _TableArea extends StatelessWidget {
   final VoidCallback onReturnDiscard;
   final double gridTileWidth;
   final GlobalKey gridKey;
-  final ValueNotifier<Offset?> gridDragPosition;
+  final ValueNotifier<_RackDragVisualState> dragVisual;
   final _BotDiscardMotion? botDiscardMotion;
   final ValueNotifier<_TableTileMotion?> tableTileMotion;
   final double bottomReservedSpace;
@@ -2827,6 +3360,8 @@ class _TableArea extends StatelessWidget {
   final ValueChanged<_RackDragData> onFinishByCenterDrop;
   final double dragTileWidth;
   final double dragTileHeight;
+  final bool showGrid;
+  final bool showBots;
 
   const _TableArea({
     required this.melds,
@@ -2850,7 +3385,7 @@ class _TableArea extends StatelessWidget {
     required this.onReturnDiscard,
     required this.gridTileWidth,
     required this.gridKey,
-    required this.gridDragPosition,
+    required this.dragVisual,
     required this.botDiscardMotion,
     required this.tableTileMotion,
     required this.bottomReservedSpace,
@@ -2866,6 +3401,8 @@ class _TableArea extends StatelessWidget {
     required this.onFinishByCenterDrop,
     required this.dragTileWidth,
     required this.dragTileHeight,
+    required this.showGrid,
+    required this.showBots,
   });
 
   @override
@@ -2902,45 +3439,47 @@ class _TableArea extends StatelessWidget {
                           child: Stack(
                             clipBehavior: Clip.hardEdge,
                             children: [
-                              Positioned.fill(
-                                child: RepaintBoundary(
-                                  child: _MeldGridBoard(
-                                    tileWidth: gridTileWidth,
-                                    melds: melds,
-                                    uiMode: uiMode,
-                                    eligibleMeldIndexes: eligibleMeldIndexes,
-                                    onMeldTap: onMeldTap,
-                                    onMeldDrop: onMeldDrop,
-                                    canAcceptMeldDrop: canAcceptMeldDrop,
-                                    onPairDrop: onPairDrop,
-                                    canAcceptPairDrop: canAcceptPairDrop,
-                                    deckCount: deckCount,
-                                    indicator: indicator,
-                                    perPoints: perPoints,
-                                    showRemainingPoints: showRemainingPoints,
-                                    pairCount: pairCount,
-                                    canDraw: canDraw,
-                                    onDraw: onDraw,
-                                    canFinishByCenterDrop:
-                                        canFinishByCenterDrop,
-                                    onFinishByCenterDrop: onFinishByCenterDrop,
-                                    dragTileWidth: dragTileWidth,
-                                    dragTileHeight: dragTileHeight,
+                              if (showGrid)
+                                Positioned.fill(
+                                  child: RepaintBoundary(
+                                    child: _MeldGridBoard(
+                                      tileWidth: gridTileWidth,
+                                      melds: melds,
+                                      uiMode: uiMode,
+                                      eligibleMeldIndexes: eligibleMeldIndexes,
+                                      onMeldTap: onMeldTap,
+                                      onMeldDrop: onMeldDrop,
+                                      canAcceptMeldDrop: canAcceptMeldDrop,
+                                      onPairDrop: onPairDrop,
+                                      canAcceptPairDrop: canAcceptPairDrop,
+                                      deckCount: deckCount,
+                                      indicator: indicator,
+                                      perPoints: perPoints,
+                                      showRemainingPoints: showRemainingPoints,
+                                      pairCount: pairCount,
+                                      canDraw: canDraw,
+                                      onDraw: onDraw,
+                                      canFinishByCenterDrop:
+                                          canFinishByCenterDrop,
+                                      onFinishByCenterDrop:
+                                          onFinishByCenterDrop,
+                                      dragTileWidth: dragTileWidth,
+                                      dragTileHeight: dragTileHeight,
+                                    ),
                                   ),
                                 ),
-                              ),
                               Positioned.fill(
-                                child: ValueListenableBuilder<Offset?>(
-                                  valueListenable: gridDragPosition,
-                                  builder: (context, position, _) {
-                                    if (position == null) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    return _GridDragMagnifier(
-                                      position: position,
-                                    );
-                                  },
-                                ),
+                                child:
+                                    ValueListenableBuilder<
+                                      _RackDragVisualState
+                                    >(
+                                      valueListenable: dragVisual,
+                                      builder: (context, visual, _) {
+                                        return _GridDragMagnifier(
+                                          position: visual.gridPosition,
+                                        );
+                                      },
+                                    ),
                               ),
                             ],
                           ),
@@ -2973,50 +3512,54 @@ class _TableArea extends StatelessWidget {
                           ],
                         ),
                       ),
-                      Positioned(
-                        top: 6,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: _PlayerInfo(
-                            bot: bots[1],
-                            active: activeTurn == 2,
-                            horizontal: true,
+                      if (showBots)
+                        Positioned(
+                          top: 6,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: _PlayerInfo(
+                              bot: bots[1],
+                              active: activeTurn == 2,
+                              horizontal: true,
+                            ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        left: 10,
-                        top: 56,
-                        bottom: max(0, bottomReservedSpace - 56),
-                        child: Center(
-                          child: _PlayerInfo(
-                            bot: bots[2],
-                            active: activeTurn == 3,
+                      if (showBots)
+                        Positioned(
+                          left: 10,
+                          top: 56,
+                          bottom: max(0, bottomReservedSpace - 56),
+                          child: Center(
+                            child: _PlayerInfo(
+                              bot: bots[2],
+                              active: activeTurn == 3,
+                            ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        right: 10,
-                        top: 56,
-                        bottom: max(0, bottomReservedSpace - 56),
-                        child: Center(
-                          child: _PlayerInfo(
-                            bot: bots[0],
-                            active: activeTurn == 1,
+                      if (showBots)
+                        Positioned(
+                          right: 10,
+                          top: 56,
+                          bottom: max(0, bottomReservedSpace - 56),
+                          child: Center(
+                            child: _PlayerInfo(
+                              bot: bots[0],
+                              active: activeTurn == 1,
+                            ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        top: 64,
-                        right: 8,
-                        child: _TableDiscardPile(
-                          tiles: discardPiles[1],
-                          label: bots[0].name,
-                          hitWidth: 38 + gridTileWidth * 2,
-                          visualAlignment: Alignment.topRight,
+                      if (showBots)
+                        Positioned(
+                          top: 64,
+                          right: 8,
+                          child: _TableDiscardPile(
+                            tiles: discardPiles[1],
+                            label: bots[0].name,
+                            hitWidth: 38 + gridTileWidth * 2,
+                            visualAlignment: Alignment.topRight,
+                          ),
                         ),
-                      ),
                       Positioned(
                         top: discardZoneTop,
                         bottom: 0,
@@ -3032,32 +3575,34 @@ class _TableArea extends StatelessWidget {
                           visualAlignment: Alignment.bottomRight,
                         ),
                       ),
-                      Positioned(
-                        top: 64,
-                        left: 8,
-                        child: _TableDiscardPile(
-                          tiles: discardPiles[2],
-                          label: bots[1].name,
-                          hitWidth: 38 + gridTileWidth * 2,
-                          visualAlignment: Alignment.topLeft,
+                      if (showBots)
+                        Positioned(
+                          top: 64,
+                          left: 8,
+                          child: _TableDiscardPile(
+                            tiles: discardPiles[2],
+                            label: bots[1].name,
+                            hitWidth: 38 + gridTileWidth * 2,
+                            visualAlignment: Alignment.topLeft,
+                          ),
                         ),
-                      ),
-                      Positioned(
-                        bottom: max(8, bottomReservedSpace - 48),
-                        left: 8,
-                        child: _TableDiscardPile(
-                          tiles: discardPiles[3],
-                          label: bots[2].name,
-                          takeEnabled: canTakeDiscard,
-                          onTake: onTakeDiscard,
-                          showReturnButton: canReturnDiscard,
-                          returnTileId: returnDiscardTileId,
-                          onReturn: onReturnDiscard,
-                          hitWidth: 38 + gridTileWidth * 2,
-                          visualAlignment: Alignment.bottomLeft,
+                      if (showBots)
+                        Positioned(
+                          bottom: max(8, bottomReservedSpace - 48),
+                          left: 8,
+                          child: _TableDiscardPile(
+                            tiles: discardPiles[3],
+                            label: bots[2].name,
+                            takeEnabled: canTakeDiscard,
+                            onTake: onTakeDiscard,
+                            showReturnButton: canReturnDiscard,
+                            returnTileId: returnDiscardTileId,
+                            onReturn: onReturnDiscard,
+                            hitWidth: 38 + gridTileWidth * 2,
+                            visualAlignment: Alignment.bottomLeft,
+                          ),
                         ),
-                      ),
-                      if (botDiscardMotion != null)
+                      if (showBots && botDiscardMotion != null)
                         Positioned.fill(
                           child: RepaintBoundary(
                             child: _FlyingBotDiscard(
@@ -3284,7 +3829,7 @@ class _GridResetButton extends StatelessWidget {
 }
 
 class _GridDragMagnifier extends StatelessWidget {
-  final Offset position;
+  final Offset? position;
 
   const _GridDragMagnifier({required this.position});
 
@@ -3292,6 +3837,7 @@ class _GridDragMagnifier extends StatelessWidget {
   Widget build(BuildContext context) => IgnorePointer(
     child: LayoutBuilder(
       builder: (context, box) {
+        final activePosition = position;
         final lensWidth = min(
           box.maxWidth,
           min(180.0, max(112.0, box.maxWidth * 0.24)),
@@ -3300,38 +3846,45 @@ class _GridDragMagnifier extends StatelessWidget {
           box.maxHeight,
           min(112.0, max(74.0, box.maxHeight * 0.31)),
         );
-        final left = (position.dx - lensWidth / 2)
+        final left = ((activePosition?.dx ?? 0) - lensWidth / 2)
             .clamp(0.0, max(0.0, box.maxWidth - lensWidth))
             .toDouble();
-        final top = (position.dy - lensHeight / 2)
+        final top = ((activePosition?.dy ?? 0) - lensHeight / 2)
             .clamp(0.0, max(0.0, box.maxHeight - lensHeight))
             .toDouble();
         final lensCenter = Offset(left + lensWidth / 2, top + lensHeight / 2);
 
-        return Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Positioned(
-              key: const ValueKey('grid-drag-magnifier'),
-              left: left,
-              top: top,
-              child: RawMagnifier(
-                size: Size(lensWidth, lensHeight),
-                magnificationScale: 1.45,
-                focalPointOffset: position - lensCenter,
-                clipBehavior: Clip.hardEdge,
-                decoration: MagnifierDecoration(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(
-                      color: OC.numGreen.withValues(alpha: 0.88),
-                      width: 1.4,
+        // RawMagnifier'ı sürükleme aralarında ağaçtan çıkarmıyoruz. Böylece
+        // engine her taş kaldırılışında yeni bir offscreen yüzey ayırmak yerine
+        // aynı küçük yüzeyi yeniden kullanıyor.
+        return Offstage(
+          offstage: activePosition == null,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                key: const ValueKey('grid-drag-magnifier'),
+                left: left,
+                top: top,
+                child: RawMagnifier(
+                  size: Size(lensWidth, lensHeight),
+                  magnificationScale: 1.45,
+                  focalPointOffset:
+                      (activePosition ?? Offset.zero) - lensCenter,
+                  clipBehavior: Clip.hardEdge,
+                  decoration: MagnifierDecoration(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: OC.numGreen.withValues(alpha: 0.88),
+                        width: 1.4,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     ),
@@ -3485,9 +4038,6 @@ class _DeckStack extends StatelessWidget {
                     color: const Color(0xFF747979),
                     width: 1.2,
                   ),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black38, blurRadius: 3),
-                  ],
                 ),
                 child: Text(
                   '$count',
@@ -3817,6 +4367,27 @@ class _GridDrawColumn extends StatelessWidget {
               ),
             ),
             Positioned(
+              left: (area.maxWidth - 4) / 4 + 6,
+              right: 2,
+              bottom: 2,
+              height: min(displayTileHeight * 1.22, area.maxHeight - 4),
+              child: GestureDetector(
+                key: const ValueKey('expanded-deck-draw-hit-area'),
+                behavior: HitTestBehavior.opaque,
+                onTap: canDraw ? onDraw : null,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0A332F).withValues(alpha: 0.34),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFFC48A31).withValues(alpha: 0.32),
+                      width: 1,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
               right: 2,
               bottom: 2,
               child: DragTarget<_RackDragData>(
@@ -3971,9 +4542,6 @@ class _PairMeldGrid extends StatelessWidget {
                             color: OC.okeyGold,
                             fontSize: 8,
                             fontWeight: FontWeight.w900,
-                            shadows: [
-                              Shadow(color: Colors.black, blurRadius: 3),
-                            ],
                           ),
                         )
                       : null,
@@ -3989,6 +4557,7 @@ class _PairMeldGrid extends StatelessWidget {
             children: [
               for (final entry in entries)
                 SizedBox(
+                  key: ValueKey('pair-meld-${entry.key}'),
                   width: cellWidth * 2,
                   height: cellHeight,
                   child: DragTarget<_RackDragData>(
@@ -4023,14 +4592,12 @@ class _PairMeldGrid extends StatelessWidget {
                                 : null,
                           ),
                           child: LayoutBuilder(
-                            builder: (context, pairBox) => RepaintBoundary(
-                              child: _MeldRow(
-                                meld: entry.value,
-                                cellWidth:
-                                    pairBox.maxWidth /
-                                    max(1, entry.value.tiles.length),
-                                cellHeight: pairBox.maxHeight,
-                              ),
+                            builder: (context, pairBox) => _CachedMeldRow(
+                              meld: entry.value,
+                              cellWidth:
+                                  pairBox.maxWidth /
+                                  max(1, entry.value.tiles.length),
+                              cellHeight: pairBox.maxHeight,
                             ),
                           ),
                         ),
@@ -4047,6 +4614,9 @@ class _PairMeldGrid extends StatelessWidget {
 }
 
 class _RunMeldGrid extends StatelessWidget {
+  static final Map<int, List<({int row, int column})>> _layoutCache = {};
+
+  static void clearLayoutCache() => _layoutCache.clear();
   final int columns;
   final int rows;
   final double cellWidth;
@@ -4077,6 +4647,43 @@ class _RunMeldGrid extends StatelessWidget {
   });
 
   List<({MapEntry<int, Meld> entry, int row, int column})> _placements() {
+    final cacheKey = Object.hash(
+      columns,
+      rows,
+      meldGapColumns,
+      Object.hashAll(
+        entries.map(
+          (entry) => Object.hash(
+            entry.key,
+            entry.value.type,
+            Object.hashAll(entry.value.tiles.map((tile) => tile.id)),
+          ),
+        ),
+      ),
+    );
+    final cached = _layoutCache[cacheKey];
+    if (cached != null && cached.length == entries.length) {
+      return [
+        for (var index = 0; index < entries.length; index++)
+          (
+            entry: entries[index],
+            row: cached[index].row,
+            column: cached[index].column,
+          ),
+      ];
+    }
+
+    List<({MapEntry<int, Meld> entry, int row, int column})> remember(
+      List<({MapEntry<int, Meld> entry, int row, int column})> result,
+    ) {
+      if (_layoutCache.length >= 3) _layoutCache.clear();
+      _layoutCache[cacheKey] = [
+        for (final placement in result)
+          (row: placement.row, column: placement.column),
+      ];
+      return result;
+    }
+
     if (entries.isNotEmpty && entries.first.value.type == 'grup') {
       final result = <({MapEntry<int, Meld> entry, int row, int column})>[];
       var row = 0;
@@ -4095,7 +4702,7 @@ class _RunMeldGrid extends StatelessWidget {
           column = 0;
         }
       }
-      return result;
+      return remember(result);
     }
 
     final occupied = <int, Set<int>>{};
@@ -4152,7 +4759,7 @@ class _RunMeldGrid extends StatelessWidget {
       occupied.putIfAbsent(targetRow, () => <int>{}).addAll(reservedColumns);
       result.add((entry: entry, row: targetRow, column: column));
     }
-    return result;
+    return remember(result);
   }
 
   ({int index, bool replacesOkey})? _placementFor(
@@ -4165,7 +4772,9 @@ class _RunMeldGrid extends StatelessWidget {
       return (index: replacementIndex, replacesOkey: true);
     }
     if (!Rules.canAddToMeld(meld, [data.tile])) return null;
-    final ordered = Rules.orderedMeld([...meld.tiles, data.tile], meld.type);
+    final ordered = Rules.extendMeldKeepingPositions(meld.tiles, [
+      data.tile,
+    ], meld.type);
     final index = ordered.indexWhere((tile) => tile.id == data.tile.id);
     return index < 0 ? null : (index: index, replacesOkey: false);
   }
@@ -4175,6 +4784,7 @@ class _RunMeldGrid extends StatelessWidget {
         uiMode == 'addMeld' && eligibleMeldIndexes.contains(entry.key);
     const hitPadding = 8.0;
     return Transform.translate(
+      key: ValueKey('run-meld-${entry.key}'),
       offset: const Offset(-hitPadding, -hitPadding),
       child: SizedBox(
         width: cellWidth * entry.value.tiles.length + hitPadding * 2,
@@ -4198,14 +4808,6 @@ class _RunMeldGrid extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(5),
-                  boxShadow: hovering
-                      ? [
-                          BoxShadow(
-                            color: focusColor.withValues(alpha: 0.38),
-                            blurRadius: 6,
-                          ),
-                        ]
-                      : null,
                 ),
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -4223,12 +4825,10 @@ class _RunMeldGrid extends StatelessWidget {
                           ),
                         ),
                       Positioned.fill(
-                        child: RepaintBoundary(
-                          child: _MeldRow(
-                            meld: entry.value,
-                            cellWidth: cellWidth,
-                            cellHeight: cellHeight,
-                          ),
+                        child: _CachedMeldRow(
+                          meld: entry.value,
+                          cellWidth: cellWidth,
+                          cellHeight: cellHeight,
                         ),
                       ),
                       if (placement != null)
@@ -4346,13 +4946,6 @@ class _MeldPlacementPreview extends StatelessWidget {
                     color: tile.displayColor.withValues(alpha: 0.88),
                     width: 1.5,
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: OC.okeyGold.withValues(alpha: 0.48),
-                      blurRadius: 7,
-                      spreadRadius: 1,
-                    ),
-                  ],
                 ),
               ),
             ),
@@ -4362,7 +4955,6 @@ class _MeldPlacementPreview extends StatelessWidget {
                 Icons.arrow_drop_down_rounded,
                 color: OC.okeyGold,
                 size: max(13, cellWidth * 0.55),
-                shadows: const [Shadow(color: Colors.black87, blurRadius: 3)],
               ),
             ),
           ],
@@ -4419,7 +5011,59 @@ class _MeldRow extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 // ISTAKA
 // ═══════════════════════════════════════════════════════════════════════════
-class _RackArea extends StatelessWidget {
+class _CachedMeldRow extends StatefulWidget {
+  final Meld meld;
+  final double cellWidth;
+  final double cellHeight;
+
+  const _CachedMeldRow({
+    required this.meld,
+    required this.cellWidth,
+    required this.cellHeight,
+  });
+
+  @override
+  State<_CachedMeldRow> createState() => _CachedMeldRowState();
+}
+
+class _CachedMeldRowState extends State<_CachedMeldRow> {
+  late int _signature;
+  late Widget _row;
+
+  int _calculateSignature() => Object.hash(
+    widget.cellWidth,
+    widget.cellHeight,
+    widget.meld.type,
+    Object.hashAll(widget.meld.tiles.map((tile) => tile.id)),
+  );
+
+  Widget _buildRow() => _MeldRow(
+    meld: widget.meld,
+    cellWidth: widget.cellWidth,
+    cellHeight: widget.cellHeight,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _signature = _calculateSignature();
+    _row = _buildRow();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CachedMeldRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = _calculateSignature();
+    if (next == _signature) return;
+    _signature = next;
+    _row = _buildRow();
+  }
+
+  @override
+  Widget build(BuildContext context) => _row;
+}
+
+class _RackArea extends StatefulWidget {
   final List<Tile> rack;
   final List<int?> slots;
   final int? dealAnimationSerial;
@@ -4428,9 +5072,8 @@ class _RackArea extends StatelessWidget {
   final ValueChanged<_RackDragData> onTileDragStart;
   final void Function(_RackDragData, DragUpdateDetails) onTileDragUpdate;
   final VoidCallback onTileDragEnd;
-  final ValueNotifier<double> dragTilt;
-  final ValueNotifier<double> dragLift;
-  final ValueNotifier<Offset?> gridDragPosition;
+  final ValueNotifier<_RackDragVisualState> dragVisual;
+  final ValueNotifier<_RackPushPreview?> pushPreview;
   final Set<int> processableTileIds;
   final int? drawAttentionTileId;
   final int drawAttentionSerial;
@@ -4448,9 +5091,8 @@ class _RackArea extends StatelessWidget {
     required this.onTileDragStart,
     required this.onTileDragUpdate,
     required this.onTileDragEnd,
-    required this.dragTilt,
-    required this.dragLift,
-    required this.gridDragPosition,
+    required this.dragVisual,
+    required this.pushPreview,
     required this.processableTileIds,
     required this.drawAttentionTileId,
     required this.drawAttentionSerial,
@@ -4461,24 +5103,74 @@ class _RackArea extends StatelessWidget {
   });
 
   @override
+  State<_RackArea> createState() => _RackAreaState();
+}
+
+class _RackAreaState extends State<_RackArea>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _dealController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1650),
+  );
+  final ValueNotifier<double> _dealProgress = ValueNotifier<double>(1);
+
+  void _syncDealProgress() {
+    final next = _dealController.value;
+    // Dağıtım görünümünü yaklaşık 36 FPS ile yenilemek, 22 ayrı taşın her
+    // ekran tazelemesinde tekrar çizilmesini engellerken hareketi akıcı tutar.
+    if ((next - _dealProgress.value).abs() >= 1 / 36 || next == 1) {
+      _dealProgress.value = next;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _dealController.addListener(_syncDealProgress);
+    if (widget.dealAnimationSerial != null) {
+      _dealProgress.value = 0;
+      _dealController.forward();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _RackArea oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.dealAnimationSerial != null &&
+        widget.dealAnimationSerial != oldWidget.dealAnimationSerial) {
+      _dealProgress.value = 0;
+      _dealController.forward(from: 0);
+    } else if (widget.dealAnimationSerial == null) {
+      _dealController.stop();
+      _dealController.value = 1;
+      _dealProgress.value = 1;
+    }
+  }
+
+  @override
+  void dispose() {
+    _dealController.removeListener(_syncDealProgress);
+    _dealController.dispose();
+    _dealProgress.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final rackImage = ResizeImage(
+      const AssetImage('images/rack2.png'),
+      width: _rackDecodeWidth(context),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
       child: Container(
         key: const ValueKey('rack-area-surface'),
         decoration: BoxDecoration(
-          image: const DecorationImage(
-            image: ResizeImage(AssetImage('images/rack2.png'), width: 1920),
+          image: DecorationImage(
+            image: rackImage,
             fit: BoxFit.fill,
             filterQuality: FilterQuality.low,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
         ),
         child: LayoutBuilder(
           builder: (context, rackBox) => Padding(
@@ -4516,24 +5208,24 @@ class _RackArea extends StatelessWidget {
                           borderRadius: BorderRadius.circular(7),
                         ),
                         child: _RackRows(
-                          rack: rack,
-                          slots: slots,
-                          dealAnimationSerial: dealAnimationSerial,
-                          processableTileIds: processableTileIds,
-                          drawAttentionTileId: drawAttentionTileId,
-                          drawAttentionSerial: drawAttentionSerial,
-                          onTileTap: onTileTap,
-                          onReorder: onReorder,
-                          onTileDragStart: onTileDragStart,
-                          onTileDragUpdate: onTileDragUpdate,
-                          onTileDragEnd: onTileDragEnd,
-                          dragTilt: dragTilt,
-                          dragLift: dragLift,
-                          gridDragPosition: gridDragPosition,
-                          canAcceptDeckDrop: canAcceptDeckDrop,
-                          canAcceptDiscardDrop: canAcceptDiscardDrop,
-                          onDeckDropAt: onDeckDropAt,
-                          onDiscardDropAt: onDiscardDropAt,
+                          rack: widget.rack,
+                          slots: widget.slots,
+                          dealAnimationSerial: widget.dealAnimationSerial,
+                          dealProgress: _dealProgress,
+                          processableTileIds: widget.processableTileIds,
+                          drawAttentionTileId: widget.drawAttentionTileId,
+                          drawAttentionSerial: widget.drawAttentionSerial,
+                          onTileTap: widget.onTileTap,
+                          onReorder: widget.onReorder,
+                          onTileDragStart: widget.onTileDragStart,
+                          onTileDragUpdate: widget.onTileDragUpdate,
+                          onTileDragEnd: widget.onTileDragEnd,
+                          dragVisual: widget.dragVisual,
+                          pushPreview: widget.pushPreview,
+                          canAcceptDeckDrop: widget.canAcceptDeckDrop,
+                          canAcceptDiscardDrop: widget.canAcceptDiscardDrop,
+                          onDeckDropAt: widget.onDeckDropAt,
+                          onDiscardDropAt: widget.onDiscardDropAt,
                         ),
                       ),
                 ),
@@ -4546,10 +5238,97 @@ class _RackArea extends StatelessWidget {
   }
 }
 
+class _RackSlotDropTarget extends StatelessWidget {
+  final int slotIndex;
+  final int rowEnd;
+  final int? occupiedTileId;
+  final double tileWidth;
+  final double tileHeight;
+  final bool canAcceptDeckDrop;
+  final bool canAcceptDiscardDrop;
+  final ValueChanged<int> onDeckDropAt;
+  final ValueChanged<int> onDiscardDropAt;
+  final void Function(int, int) onReorder;
+  final ValueNotifier<_RackPushPreview?> pushPreview;
+  final Widget child;
+
+  const _RackSlotDropTarget({
+    required this.slotIndex,
+    required this.rowEnd,
+    required this.occupiedTileId,
+    required this.tileWidth,
+    required this.tileHeight,
+    required this.canAcceptDeckDrop,
+    required this.canAcceptDiscardDrop,
+    required this.onDeckDropAt,
+    required this.onDiscardDropAt,
+    required this.onReorder,
+    required this.pushPreview,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    BuildContext? hitTestContext;
+    return DragTarget<Object>(
+      key: ValueKey('rack-slot-$slotIndex'),
+      onWillAcceptWithDetails: (details) => switch (details.data) {
+        _DeckDragData() => canAcceptDeckDrop,
+        _DiscardDragData() => canAcceptDiscardDrop,
+        _RackDragData(:final tileId) => tileId != occupiedTileId,
+        _ => false,
+      },
+      onMove: (details) {
+        if (details.data is _RackDragData && pushPreview.value != null) {
+          pushPreview.value = null;
+        }
+      },
+      onAcceptWithDetails: (details) {
+        final data = details.data;
+        if (data is _DeckDragData) {
+          onDeckDropAt(slotIndex);
+          return;
+        }
+        if (data is _DiscardDragData) {
+          onDiscardDropAt(slotIndex);
+          return;
+        }
+        if (data is! _RackDragData) return;
+        var insertionSlot = slotIndex;
+        if (occupiedTileId != null) {
+          final renderObject = hitTestContext?.findRenderObject();
+          if (renderObject is RenderBox && renderObject.hasSize) {
+            final center =
+                details.offset + Offset(tileWidth / 2, tileHeight / 2);
+            final local = renderObject.globalToLocal(center);
+            if (local.dx >= renderObject.size.width / 2 &&
+                slotIndex + 1 < rowEnd) {
+              final afterSlot = slotIndex + 1;
+              // Hemen soldaki taşın sağ yarısına bırakıldığında hesaplanan
+              // aralık kaynak yuvanın kendisi olabilir. Bu durumda hareketi
+              // iptal etmek yerine hedef taşı sola iterek bırakılan taşı onun
+              // yerine yerleştir.
+              if (afterSlot != data.sourceSlot) insertionSlot = afterSlot;
+            }
+          }
+        }
+        onReorder(data.tileId, insertionSlot);
+      },
+      builder: (_, _, _) => Builder(
+        builder: (context) {
+          hitTestContext = context;
+          return child;
+        },
+      ),
+    );
+  }
+}
+
 class _RackRows extends StatelessWidget {
   final List<Tile> rack;
   final List<int?> slots;
   final int? dealAnimationSerial;
+  final ValueListenable<double> dealProgress;
   final Set<int> processableTileIds;
   final int? drawAttentionTileId;
   final int drawAttentionSerial;
@@ -4558,9 +5337,8 @@ class _RackRows extends StatelessWidget {
   final ValueChanged<_RackDragData> onTileDragStart;
   final void Function(_RackDragData, DragUpdateDetails) onTileDragUpdate;
   final VoidCallback onTileDragEnd;
-  final ValueNotifier<double> dragTilt;
-  final ValueNotifier<double> dragLift;
-  final ValueNotifier<Offset?> gridDragPosition;
+  final ValueNotifier<_RackDragVisualState> dragVisual;
+  final ValueNotifier<_RackPushPreview?> pushPreview;
   final bool canAcceptDeckDrop;
   final bool canAcceptDiscardDrop;
   final ValueChanged<int> onDeckDropAt;
@@ -4569,6 +5347,7 @@ class _RackRows extends StatelessWidget {
     required this.rack,
     required this.slots,
     required this.dealAnimationSerial,
+    required this.dealProgress,
     required this.processableTileIds,
     required this.drawAttentionTileId,
     required this.drawAttentionSerial,
@@ -4577,9 +5356,8 @@ class _RackRows extends StatelessWidget {
     required this.onTileDragStart,
     required this.onTileDragUpdate,
     required this.onTileDragEnd,
-    required this.dragTilt,
-    required this.dragLift,
-    required this.gridDragPosition,
+    required this.dragVisual,
+    required this.pushPreview,
     required this.canAcceptDeckDrop,
     required this.canAcceptDiscardDrop,
     required this.onDeckDropAt,
@@ -4651,35 +5429,29 @@ class _RackRows extends StatelessWidget {
           final slotIndex = offset + rowIndex;
           final tile = _tileById(slots[slotIndex]);
           if (tile == null) {
-            return DragTarget<_DeckDragData>(
-              key: ValueKey('rack-slot-$slotIndex'),
-              onWillAcceptWithDetails: (_) => canAcceptDeckDrop,
-              onAcceptWithDetails: (_) => onDeckDropAt(slotIndex),
-              builder: (context, deckCandidates, rejected) =>
-                  DragTarget<_DiscardDragData>(
-                    onWillAcceptWithDetails: (_) => canAcceptDiscardDrop,
-                    onAcceptWithDetails: (_) => onDiscardDropAt(slotIndex),
-                    builder: (context, discardCandidates, rejected) =>
-                        DragTarget<_RackDragData>(
-                          onWillAcceptWithDetails: (_) => true,
-                          onAcceptWithDetails: (details) =>
-                              onReorder(details.data.tileId, slotIndex),
-                          builder: (context, rackCandidates, rejected) {
-                            return Container(
-                              width: tw,
-                              height: th,
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 0.6,
-                              ),
-                            );
-                          },
-                        ),
-                  ),
+            return _RackSlotDropTarget(
+              slotIndex: slotIndex,
+              rowEnd: offset + _GameScreenState._rackRowLength,
+              occupiedTileId: null,
+              tileWidth: tw,
+              tileHeight: th,
+              canAcceptDeckDrop: canAcceptDeckDrop,
+              canAcceptDiscardDrop: canAcceptDiscardDrop,
+              onDeckDropAt: onDeckDropAt,
+              onDiscardDropAt: onDiscardDropAt,
+              onReorder: onReorder,
+              pushPreview: pushPreview,
+              child: Container(
+                width: tw,
+                height: th,
+                margin: const EdgeInsets.symmetric(horizontal: 0.6),
+              ),
             );
           }
 
           final dragData = _RackDragData(
             tileId: tile.id,
+            sourceSlot: slotIndex,
             tileIds: tile.selected ? selectedIds : {tile.id},
             tile: tile,
           );
@@ -4707,6 +5479,7 @@ class _RackRows extends StatelessWidget {
                   width: tw,
                   height: th,
                   front: visibleTile,
+                  progress: dealProgress,
                 );
           final tileWidget = tile.id == drawAttentionTileId
               ? _DrawnTileAttention(
@@ -4715,92 +5488,59 @@ class _RackRows extends StatelessWidget {
                 )
               : baseTileWidget;
 
-          return DragTarget<_DeckDragData>(
-            key: ValueKey('rack-slot-$slotIndex'),
-            onWillAcceptWithDetails: (_) => canAcceptDeckDrop,
-            onAcceptWithDetails: (_) => onDeckDropAt(slotIndex),
-            builder: (context, deckCandidates, rejected) =>
-                DragTarget<_DiscardDragData>(
-                  onWillAcceptWithDetails: (_) => canAcceptDiscardDrop,
-                  onAcceptWithDetails: (_) => onDiscardDropAt(slotIndex),
-                  builder: (context, discardCandidates, rejected) =>
-                      DragTarget<_RackDragData>(
-                        onWillAcceptWithDetails: (details) =>
-                            details.data.tileId != tile.id,
-                        onAcceptWithDetails: (details) =>
-                            onReorder(details.data.tileId, slotIndex),
-                        builder: (context, candidates, rejected) => Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 0.6),
-                          child: AnimatedSlide(
-                            duration: const Duration(milliseconds: 85),
-                            curve: Curves.easeOutCubic,
-                            offset:
-                                candidates.isNotEmpty ||
-                                    deckCandidates.isNotEmpty ||
-                                    discardCandidates.isNotEmpty
-                                ? const Offset(0.14, 0)
-                                : Offset.zero,
-                            child: Draggable<_RackDragData>(
-                              data: dragData,
-                              dragAnchorStrategy: (_, _, _) =>
-                                  Offset(tw / 2, th / 2),
-                              onDragStarted: () => onTileDragStart(dragData),
-                              onDragUpdate: (details) =>
-                                  onTileDragUpdate(dragData, details),
-                              onDragEnd: (_) => onTileDragEnd(),
-                              feedback: ValueListenableBuilder<double>(
-                                valueListenable: dragLift,
-                                builder: (context, lift, _) =>
-                                    Transform.translate(
-                                      offset: Offset(0, -lift),
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        child: ValueListenableBuilder<double>(
-                                          valueListenable: dragTilt,
-                                          child: _TileWidget(
-                                            tile: tile,
-                                            w: tw,
-                                            h: th,
-                                            onTap: null,
-                                            hideOkey: true,
-                                            emphasized: true,
-                                            showShadow: false,
-                                          ),
-                                          builder: (context, tilt, child) =>
-                                              ValueListenableBuilder<Offset?>(
-                                                valueListenable:
-                                                    gridDragPosition,
-                                                builder:
-                                                    (
-                                                      context,
-                                                      position,
-                                                      _,
-                                                    ) => Transform.rotate(
-                                                      angle: tilt,
-                                                      alignment: Alignment
-                                                          .bottomCenter,
-                                                      child: Transform.scale(
-                                                        scale: position == null
-                                                            ? 1
-                                                            : 1.45,
-                                                        child: child,
-                                                      ),
-                                                    ),
-                                              ),
-                                        ),
-                                      ),
-                                    ),
-                              ),
-                              childWhenDragging: SizedBox(
-                                width: tw,
-                                height: th,
-                              ),
-                              child: tileWidget,
-                            ),
-                          ),
-                        ),
+          return _RackSlotDropTarget(
+            slotIndex: slotIndex,
+            rowEnd: offset + _GameScreenState._rackRowLength,
+            occupiedTileId: tile.id,
+            tileWidth: tw,
+            tileHeight: th,
+            canAcceptDeckDrop: canAcceptDeckDrop,
+            canAcceptDiscardDrop: canAcceptDiscardDrop,
+            onDeckDropAt: onDeckDropAt,
+            onDiscardDropAt: onDiscardDropAt,
+            onReorder: onReorder,
+            pushPreview: pushPreview,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 0.6),
+              child: Draggable<_RackDragData>(
+                key: ValueKey('rack-tile-${tile.id}'),
+                data: dragData,
+                dragAnchorStrategy: (_, _, _) => Offset(tw / 2, th / 2),
+                onDragStarted: () => onTileDragStart(dragData),
+                onDragUpdate: (details) => onTileDragUpdate(dragData, details),
+                onDragEnd: (_) => onTileDragEnd(),
+                feedback: ValueListenableBuilder<_RackDragVisualState>(
+                  valueListenable: dragVisual,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: _TileWidget(
+                      tile: tile,
+                      w: tw,
+                      h: th,
+                      onTap: null,
+                      hideOkey: true,
+                      emphasized: true,
+                      showShadow: false,
+                    ),
+                  ),
+                  builder: (context, visual, child) => Transform.translate(
+                    offset: Offset(0, -visual.lift),
+                    child: Transform.rotate(
+                      angle: visual.tilt,
+                      alignment: Alignment.bottomCenter,
+                      child: AnimatedScale(
+                        scale: visual.gridPosition == null ? 1 : 1.16,
+                        duration: const Duration(milliseconds: 130),
+                        curve: Curves.easeOutCubic,
+                        child: child,
                       ),
+                    ),
+                  ),
                 ),
+                childWhenDragging: SizedBox(width: tw, height: th),
+                child: tileWidget,
+              ),
+            ),
           );
         }),
       ],
@@ -4874,13 +5614,6 @@ class _RackActionPanel extends StatelessWidget {
       color: const Color(0xFF111815),
       borderRadius: BorderRadius.circular(12),
       border: Border.all(color: const Color(0xFF8A6027), width: 1.5),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.42),
-          blurRadius: 7,
-          offset: const Offset(0, 3),
-        ),
-      ],
     ),
     child: Column(
       children: [
@@ -5037,15 +5770,6 @@ class _SceneActionButtonFace extends StatelessWidget {
                     : const Color(0xFFD3A44F),
                 width: action.isUndo ? 1.8 : 1.2,
               ),
-              boxShadow: action.active
-                  ? [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : const [],
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 5),
@@ -5090,9 +5814,6 @@ class _SceneActionButtonFace extends StatelessWidget {
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.25,
                           height: action.isUndo ? 0.9 : 1,
-                          shadows: const [
-                            Shadow(color: Colors.black54, blurRadius: 2),
-                          ],
                         ),
                       ),
                     ],
@@ -5110,7 +5831,7 @@ class _SceneActionButtonFace extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 // TAŞ WİDGET
 // ═══════════════════════════════════════════════════════════════════════════
-class _TileWidget extends StatefulWidget {
+class _TileWidget extends StatelessWidget {
   final Tile tile;
   final double w, h;
   final VoidCallback? onTap;
@@ -5132,125 +5853,115 @@ class _TileWidget extends StatefulWidget {
     this.showShadow = true,
   });
 
-  @override
-  State<_TileWidget> createState() => _TileWidgetState();
-}
-
-class _TileWidgetState extends State<_TileWidget> {
-  Tile get tile => widget.tile;
-
   String get _label {
     if (tile.isFakeOkey) return '★';
     if (tile.isOkey) return '${tile.number}';
     return '${tile.number}';
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildTile(VoidCallback? onToggleOkey) {
     final isSelected = tile.selected;
-    final tileWidget = GestureDetector(
-      onTap: widget.onTap,
-      onDoubleTap: widget.hideOkey && widget.allowOkeyFaceToggle && tile.isOkey
-          ? () => setState(() {
-              tile.okeyFaceRevealed = !tile.okeyFaceRevealed;
-            })
-          : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: widget.w,
-        height: widget.h,
-        transform: Matrix4.translationValues(0, isSelected ? -11 : 0, 0),
-        decoration: BoxDecoration(
-          image: const DecorationImage(
-            image: AssetImage('images/tas_ters.png'),
-            fit: BoxFit.fill,
-            filterQuality: FilterQuality.low,
-          ),
-          borderRadius: BorderRadius.circular(5),
-          border: Border.all(
-            color: isSelected ? OC.tileSel : Colors.transparent,
-            width: isSelected ? 2 : 0,
-          ),
-          boxShadow: widget.showShadow
-              ? [
-                  BoxShadow(
-                    color: isSelected
-                        ? OC.tileSel.withValues(alpha: 0.45)
-                        : Colors.black.withValues(
-                            alpha: widget.emphasized ? 0.34 : 0.18,
-                          ),
-                    blurRadius: isSelected ? 7 : (widget.emphasized ? 3 : 2),
-                    offset: Offset(0, widget.emphasized ? 2 : 1.5),
+    final content = hideOkey && tile.isOkey && !tile.okeyFaceRevealed
+        ? null
+        : Stack(
+            children: [
+              Center(
+                child: Text(
+                  _label,
+                  style: TextStyle(
+                    color: tile.displayColor,
+                    fontSize:
+                        h *
+                        (tile.isFakeOkey ? 0.47 : 0.44) *
+                        (emphasized ? 1.13 : 1) *
+                        numberScale,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                    letterSpacing: -0.25,
                   ),
-                ]
-              : null,
-        ),
-        child: widget.hideOkey && tile.isOkey && !tile.okeyFaceRevealed
-            ? null
-            : Stack(
-                children: [
-                  Center(
-                    child: Text(
-                      _label,
-                      style: TextStyle(
-                        color: tile.displayColor,
-                        fontSize:
-                            widget.h *
-                            (tile.isFakeOkey ? 0.47 : 0.44) *
-                            (widget.emphasized ? 1.13 : 1) *
-                            widget.numberScale,
-                        fontWeight: FontWeight.w900,
-                        height: 1,
-                        letterSpacing: -0.25,
-                        shadows: [
-                          Shadow(
-                            color: Colors.white.withValues(alpha: 0.72),
-                            blurRadius: 0.8,
-                            offset: const Offset(0, -0.35),
-                          ),
-                          Shadow(
-                            color: Colors.black.withValues(alpha: 0.36),
-                            blurRadius: 1.1,
-                            offset: const Offset(0, 0.7),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: 3,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Container(
-                        width: widget.w * 0.18,
-                        height: widget.w * 0.18,
-                        decoration: BoxDecoration(
-                          color: tile.displayColor.withValues(alpha: 0.4),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
+              Positioned(
+                bottom: 3,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    width: w * 0.18,
+                    height: w * 0.18,
+                    decoration: BoxDecoration(
+                      color: tile.displayColor.withValues(alpha: 0.4),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+    final decoration = BoxDecoration(
+      image: const DecorationImage(
+        image: AssetImage('images/tas_ters.png'),
+        fit: BoxFit.fill,
+        filterQuality: FilterQuality.low,
+      ),
+      borderRadius: BorderRadius.circular(5),
+      border: Border.all(
+        color: isSelected ? OC.tileSel : Colors.transparent,
+        width: isSelected ? 2 : 0,
       ),
     );
-    if (!widget.hideOkey || !widget.allowOkeyFaceToggle || !tile.isOkey) {
-      return tileWidget;
+    final visual = onTap == null
+        ? Container(
+            width: w,
+            height: h,
+            transform: Matrix4.translationValues(0, isSelected ? -11 : 0, 0),
+            decoration: decoration,
+            child: content,
+          )
+        : AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: w,
+            height: h,
+            transform: Matrix4.translationValues(0, isSelected ? -11 : 0, 0),
+            decoration: decoration,
+            child: content,
+          );
+    return GestureDetector(
+      onTap: onTap,
+      onDoubleTap: onToggleOkey,
+      child: visual,
+    );
+  }
+
+  Widget _buildOkeyAnimation(Widget tileWidget) =>
+      TweenAnimationBuilder<double>(
+        key: ValueKey(tile.okeyFaceRevealed),
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 360),
+        curve: Curves.easeOutCubic,
+        child: tileWidget,
+        builder: (context, value, child) {
+          final bounce = sin(value * pi);
+          return Transform.translate(
+            offset: Offset(0, -h * 0.22 * bounce),
+            child: Transform.scale(scale: 1 + bounce * 0.08, child: child),
+          );
+        },
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hideOkey || !allowOkeyFaceToggle || !tile.isOkey) {
+      return _buildTile(null);
     }
-    return TweenAnimationBuilder<double>(
-      key: ValueKey(tile.okeyFaceRevealed),
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 360),
-      curve: Curves.easeOutCubic,
-      child: RepaintBoundary(child: tileWidget),
-      builder: (context, value, child) {
-        final bounce = sin(value * pi);
-        return Transform.translate(
-          offset: Offset(0, -widget.h * 0.22 * bounce),
-          child: Transform.scale(scale: 1 + bounce * 0.08, child: child),
+    return StatefulBuilder(
+      builder: (context, setOkeyState) {
+        final tileWidget = _buildTile(
+          () => setOkeyState(() {
+            tile.okeyFaceRevealed = !tile.okeyFaceRevealed;
+          }),
         );
+        return _buildOkeyAnimation(tileWidget);
       },
     );
   }
@@ -5267,9 +5978,6 @@ class _MsgBanner extends StatelessWidget {
       color: OC.panelBrown.withValues(alpha: 0.94),
       borderRadius: BorderRadius.circular(8),
       border: Border.all(color: OC.gold.withValues(alpha: 0.5)),
-      boxShadow: [
-        BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 6),
-      ],
     ),
     child: Text(
       text,
@@ -5332,7 +6040,6 @@ class GameEndDialog extends StatelessWidget {
             color: OC.bg,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: OC.gold, width: 2),
-            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
           ),
           child: Column(
             children: [

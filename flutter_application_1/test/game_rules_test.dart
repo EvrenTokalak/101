@@ -67,6 +67,23 @@ void main() {
       expect(Rules.orderedMeld(leftRun, 'seri').first, same(leftJoker));
     });
 
+    test('sayılı pere eklenen taşlar gridde artan sırada kalır', () {
+      final run = [
+        tile(2, TileColor.red),
+        tile(3, TileColor.red),
+        tile(4, TileColor.red),
+      ];
+
+      final withSix = Rules.extendMeldKeepingPositions(run, [
+        tile(6, TileColor.red),
+      ], 'seri');
+      final withFive = Rules.extendMeldKeepingPositions(withSix, [
+        tile(5, TileColor.red),
+      ], 'seri');
+
+      expect(withFive.map((item) => item.number), [2, 3, 4, 5, 6]);
+    });
+
     test('aynı sayı farklı renklerle grup olur', () {
       final group = [
         tile(8, TileColor.red),

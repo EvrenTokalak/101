@@ -17,9 +17,9 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
   static const _modes = [
     _GameModeData(
       id: 'elimination-101',
-      label: 'Eliminasyon 101',
-      subtitle: 'Tekli mücadele · Standart 101 kuralları',
-      badge: 'KLASİK TEMPO',
+      label: 'Klasik 101',
+      subtitle: 'Standart 101 kuralları',
+      badge: 'KLASİK',
       icon: Icons.filter_1_rounded,
       accent: Color(0xFF4CAF50),
       accentDark: Color(0xFF174F25),
@@ -28,13 +28,13 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
         id: 'elimination-101',
         label: 'Eliminasyon 101',
       ),
-      features: ['4 kişilik masa', '101 puanla açılış', 'Bireysel sıralama'],
+      features: ['4 Oyuncu', 'Bireysel', 'Normal Puanlama'],
     ),
     _GameModeData(
       id: 'paired-101',
       label: 'Eşli 101',
-      subtitle: 'Takım arkadaşınla birlikte mücadele et',
-      badge: 'TAKIM MODU',
+      subtitle: 'Eşinle birlikte kazan',
+      badge: 'TAKIM',
       icon: Icons.groups_2_rounded,
       accent: Color(0xFF2196F3),
       accentDark: Color(0xFF0D3D73),
@@ -43,12 +43,12 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
         id: 'paired-101',
         label: 'Eşli 101',
       ),
-      features: ['2 kişilik takımlar', 'Ortak takım puanı', 'Stratejik oyun'],
+      features: ["2'ye 2", 'Ortak Puan', 'Takım Oyunu'],
     ),
     _GameModeData(
       id: 'progressive',
       label: 'Katlamalı',
-      subtitle: 'Her elde riskin ve ödülün yükseldiği oyun',
+      subtitle: 'Rakip açtıkça hedef yükselir',
       badge: 'YÜKSEK RİSK',
       icon: Icons.add_chart_rounded,
       accent: Color(0xFFE0A126),
@@ -58,7 +58,7 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
         id: 'progressive',
         label: 'Katlamalı',
       ),
-      features: ['Artan oyun değeri', 'Katlanan ceza', 'Yüksek ödül'],
+      features: ['4 Oyuncu', 'Bireysel', 'Yükselen Hedef'],
     ),
   ];
 
@@ -272,7 +272,7 @@ class _ModeTitle extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     children: [
       const Text(
-        'Oyun Modu Seç',
+        'OYUN MODLARI',
         style: TextStyle(
           color: OkeyColors.goldLight,
           fontSize: 26,
@@ -318,7 +318,7 @@ class _ModeCard extends StatelessWidget {
       duration: const Duration(milliseconds: 260),
       curve: Curves.easeOutCubic,
       margin: EdgeInsets.fromLTRB(8, selected ? 0 : 13, 8, selected ? 0 : 13),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         gradient: LinearGradient(
@@ -357,35 +357,69 @@ class _ModeCard extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              color: mode.accent.withValues(alpha: selected ? 0.22 : 0.1),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: mode.accent.withValues(alpha: selected ? 0.8 : 0.35),
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: mode.accent.withValues(alpha: selected ? 0.22 : 0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: mode.accent.withValues(alpha: selected ? 0.8 : 0.35),
+                  ),
+                ),
+                child: Text(
+                  mode.badge,
+                  style: TextStyle(
+                    color: mode.accent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                  ),
+                ),
               ),
-            ),
-            child: Text(
-              mode.badge,
-              style: TextStyle(
-                color: mode.accent,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.5,
-              ),
-            ),
+              if (selected)
+                Positioned(
+                  right: -12,
+                  top: -10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: OkeyColors.gold,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black45, blurRadius: 5),
+                      ],
+                    ),
+                    child: const Text(
+                      'SEÇİLİ',
+                      style: TextStyle(
+                        color: Color(0xFF342006),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           Column(
             children: [
-              Icon(mode.icon, color: mode.accent, size: selected ? 60 : 52),
-              const SizedBox(height: 14),
+              _ModeArtwork(mode: mode, selected: selected),
+              const SizedBox(height: 10),
               Text(
                 mode.label.toUpperCase(),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: selected ? Colors.white : OkeyColors.cream,
-                  fontSize: selected ? 20 : 17,
+                  fontSize: selected ? 24 : 21,
                   fontWeight: FontWeight.w900,
                   fontFamily: 'Georgia',
                   letterSpacing: 0.7,
@@ -397,44 +431,131 @@ class _ModeCard extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: OkeyColors.cream.withValues(alpha: 0.7),
-                  fontSize: 11,
+                  fontSize: 13,
                   height: 1.3,
                 ),
               ),
             ],
           ),
-          Column(
-            children: mode.features
-                .map(
-                  (feature) => Padding(
-                    padding: const EdgeInsets.only(top: 5),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.check_circle_rounded,
-                          color: mode.accent,
-                          size: 14,
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: Text(
-                            feature,
-                            style: TextStyle(
-                              color: OkeyColors.cream.withValues(alpha: 0.82),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-                .toList(),
+          Text(
+            mode.features.join('  •  '),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: OkeyColors.cream.withValues(alpha: 0.9),
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ],
       ),
     ),
   );
+}
+
+class _ModeArtwork extends StatelessWidget {
+  final _GameModeData mode;
+  final bool selected;
+
+  const _ModeArtwork({required this.mode, required this.selected});
+
+  Widget _tile(String value, Color color) => Container(
+    width: 34,
+    height: 44,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF8E7),
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: const Color(0xFFD9C79C)),
+      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
+    ),
+    child: Text(
+      value,
+      style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w900),
+    ),
+  );
+
+  Widget _rack(List<Widget> tiles) => Stack(
+    alignment: Alignment.bottomCenter,
+    clipBehavior: Clip.none,
+    children: [
+      Container(
+        width: 122,
+        height: 13,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF6B3D17), Color(0xFFC08A43), Color(0xFF6B3D17)],
+          ),
+          borderRadius: BorderRadius.circular(5),
+        ),
+      ),
+      Positioned(
+        bottom: 7,
+        child: Row(mainAxisSize: MainAxisSize.min, children: tiles),
+      ),
+    ],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final content = switch (mode.id) {
+      'paired-101' => SizedBox(
+        width: 220,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _rack([_tile('7', Colors.red), _tile('10', Colors.blue)]),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(
+                  Icons.compare_arrows_rounded,
+                  color: Colors.white70,
+                  size: 24,
+                ),
+              ),
+              _rack([_tile('7', Colors.red), _tile('10', Colors.blue)]),
+            ],
+          ),
+        ),
+      ),
+      'progressive' => Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _tile('101', const Color(0xFF18723A)),
+          const Icon(
+            Icons.arrow_forward_rounded,
+            color: Colors.white54,
+            size: 17,
+          ),
+          Transform.translate(
+            offset: const Offset(0, -8),
+            child: _tile('202', const Color(0xFFB87513)),
+          ),
+          const Icon(
+            Icons.arrow_forward_rounded,
+            color: Colors.white54,
+            size: 17,
+          ),
+          Transform.translate(
+            offset: const Offset(0, -16),
+            child: _tile('303', const Color(0xFFB93A2E)),
+          ),
+        ],
+      ),
+      _ => _rack([
+        _tile('7', Colors.red),
+        _tile('10', Colors.blue),
+        _tile('13', const Color(0xFF1C1C1C)),
+      ]),
+    };
+    return AnimatedScale(
+      scale: selected ? 1.05 : 0.96,
+      duration: const Duration(milliseconds: 240),
+      child: SizedBox(height: 92, child: Center(child: content)),
+    );
+  }
 }
 
 class _ModeBottomBar extends StatelessWidget {
@@ -446,85 +567,46 @@ class _ModeBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 34),
-    child: Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 54,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.46),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: mode.accent.withValues(alpha: 0.45)),
+    child: Center(
+      child: GestureDetector(
+        key: const ValueKey('game-mode-start'),
+        onTap: onStart,
+        child: Container(
+          height: 54,
+          padding: const EdgeInsets.symmetric(horizontal: 54),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(
+              colors: [mode.accentDark, mode.accent, mode.accentDark],
             ),
-            child: Row(
-              children: [
-                Icon(mode.icon, color: mode.accent, size: 24),
-                const SizedBox(width: 11),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      mode.label,
-                      style: const TextStyle(
-                        color: OkeyColors.cream,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Georgia',
-                      ),
-                    ),
-                    Text(
-                      mode.badge,
-                      style: TextStyle(color: mode.accent, fontSize: 10),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 14),
-        GestureDetector(
-          key: const ValueKey('game-mode-start'),
-          onTap: onStart,
-          child: Container(
-            height: 54,
-            padding: const EdgeInsets.symmetric(horizontal: 30),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              gradient: LinearGradient(
-                colors: [mode.accentDark, mode.accent, mode.accentDark],
+            border: Border.all(color: mode.accent, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: mode.accent.withValues(alpha: 0.32),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
               ),
-              border: Border.all(color: mode.accent, width: 1.5),
-              boxShadow: [
-                BoxShadow(
-                  color: mode.accent.withValues(alpha: 0.32),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
+            ],
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.play_arrow_rounded, color: Colors.white, size: 23),
+              SizedBox(width: 8),
+              Text(
+                'BU MODDA OYNA',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'Georgia',
+                  letterSpacing: 0.5,
                 ),
-              ],
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.play_arrow_rounded, color: Colors.white, size: 23),
-                SizedBox(width: 8),
-                Text(
-                  'MODU SEÇ',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'Georgia',
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     ),
   );
 }

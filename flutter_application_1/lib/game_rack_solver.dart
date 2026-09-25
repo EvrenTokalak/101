@@ -99,10 +99,15 @@ class RackSolver {
                 tiles.add(copies[copy]);
               } else {
                 missing++;
+                if (missing <= jokers.length) {
+                  // Okeyi temsil ettiği sayının fiziksel konumuna yerleştir.
+                  // Böylece aynı taşlarla kurulabilen farklı seriler ayrı
+                  // adaylar olarak değerlendirilir.
+                  tiles.add(jokers[missing - 1]);
+                }
               }
             }
             if (missing > jokers.length || tiles.isEmpty) continue;
-            tiles.addAll(jokers.take(missing));
             _addCandidate(candidates, tiles, 'seri');
             for (var index = 0; index < tiles.length; index++) {
               final tile = tiles[index];
@@ -184,14 +189,12 @@ class RackSolver {
         ? Rules.isValidRun(tiles)
         : Rules.isValidGroup(tiles);
     if (!valid) return;
-    final signature = tiles.map((tile) => tile.id).toList()..sort();
-    if (target.any((item) => item.signature == signature.join(','))) return;
-    target.add(
-      _RackMeldCandidate(
-        tiles: Rules.orderedMeld(tiles, type),
-        signature: signature.join(','),
-      ),
-    );
+    final ordered = Rules.orderedMeld(tiles, type);
+    // Sıra imzanın parçasıdır: aynı okey farklı bir sayıyı temsil ediyorsa
+    // çözücü bunu ayrı bir yerleşim olarak puanlamalıdır.
+    final signature = ordered.map((tile) => tile.id).join(',');
+    if (target.any((item) => item.signature == signature)) return;
+    target.add(_RackMeldCandidate(tiles: ordered, signature: signature));
   }
 
   static List<List<Tile>> _pickNonOverlapping(

@@ -240,6 +240,104 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
+  testWidgets('rack tile inserts between tiles and pushes right', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final targetSlot = find.byKey(const ValueKey('rack-slot-7'));
+    final shiftedSlot = find.byKey(const ValueKey('rack-slot-8'));
+    final sourceTile = find.descendant(
+      of: sourceSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final shiftedTile = find.descendant(
+      of: shiftedSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final sourceKey = tester.widget<Draggable>(sourceTile).key!;
+    final shiftedKey = tester.widget<Draggable>(shiftedTile).key!;
+    final targetRect = tester.getRect(targetSlot);
+
+    await tester.dragFrom(
+      tester.getCenter(sourceSlot),
+      Offset(
+            targetRect.center.dx + targetRect.width * 0.25,
+            targetRect.center.dy,
+          ) -
+          tester.getCenter(sourceSlot),
+    );
+    await tester.pump();
+
+    expect(
+      find.descendant(of: shiftedSlot, matching: find.byKey(sourceKey)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-9')),
+        matching: find.byKey(shiftedKey),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('rack tile pushes occupied tiles to the left', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+
+    final vacancySource = find.byKey(const ValueKey('rack-slot-4'));
+    final emptySlot = find.byKey(const ValueKey('rack-slot-14'));
+    await tester.dragFrom(
+      tester.getCenter(vacancySource),
+      tester.getCenter(emptySlot) - tester.getCenter(vacancySource),
+    );
+    await tester.pump();
+
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-8'));
+    final targetSlot = find.byKey(const ValueKey('rack-slot-7'));
+    final sourceTile = find.descendant(
+      of: sourceSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final targetTile = find.descendant(
+      of: targetSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final sourceKey = tester.widget<Draggable>(sourceTile).key!;
+    final targetKey = tester.widget<Draggable>(targetTile).key!;
+    final targetRect = tester.getRect(targetSlot);
+
+    await tester.dragFrom(
+      tester.getCenter(sourceSlot),
+      Offset(targetRect.left + targetRect.width * 0.35, targetRect.center.dy) -
+          tester.getCenter(sourceSlot),
+    );
+    await tester.pump();
+
+    expect(
+      find.descendant(of: targetSlot, matching: find.byKey(sourceKey)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-6')),
+        matching: find.byKey(targetKey),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('middle area shows pairs and an unlabeled draw tray', (
     tester,
   ) async {

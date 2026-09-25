@@ -116,7 +116,6 @@ class _TileBack extends StatelessWidget {
       ),
       borderRadius: BorderRadius.circular(6),
       border: showBorder ? Border.all(color: OC.gold, width: 2) : null,
-      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
     ),
   );
 }

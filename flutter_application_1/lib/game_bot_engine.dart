@@ -14,11 +14,278 @@ class BotTurnResult {
   });
 }
 
+class _BotComputation {
+  final BotTurnResult result;
+  final BotPlayer bot;
+  final List<Meld> tableMelds;
+
+  const _BotComputation(this.result, this.bot, this.tableMelds);
+}
+
+/// Oyun boyunca yasayan tek bot is parcacigi. Her hamlede yeni isolate acmak
+/// hem kurulum maliyeti uretiyor hem de BotEngine onbellegini sifirliyordu.
+class _BotWorker {
+  _BotWorker._() {
+    _responses.listen(_handleResponse);
+  }
+
+  static final instance = _BotWorker._();
+  final ReceivePort _responses = ReceivePort();
+  final Map<int, Completer<Object?>> _pending = {};
+  SendPort? _commands;
+  Future<void>? _starting;
+  Isolate? _isolate;
+  Completer<void>? _ready;
+  int _serial = 0;
+
+  Future<void> _ensureStarted() => _starting ??= _start();
+
+  Future<void> _start() async {
+    final ready = Completer<void>();
+    _ready = ready;
+    _isolate = await Isolate.spawn(_botWorkerMain, _responses.sendPort);
+    await ready.future;
+    _ready = null;
+  }
+
+  void _handleResponse(Object? message) {
+    if (message is SendPort) {
+      _commands = message;
+      final ready = _ready;
+      if (ready != null && !ready.isCompleted) ready.complete();
+      return;
+    }
+    final response = message! as List<Object?>;
+    final id = response[0]! as int;
+    _pending.remove(id)?.complete(response[1]);
+  }
+
+  /// Oyun sahnesi kapanınca bot isolate'ının heap'ini ana menüde tutma.
+  /// Sonraki oyunda ihtiyaç olduğunda temiz bir isolate yeniden açılır.
+  void shutdown() {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _commands = null;
+    _starting = null;
+    _ready = null;
+    _pending.clear();
+  }
+
+  Future<_BotComputation> calculate(
+    BotPlayer bot,
+    List<Meld> melds,
+    bool allowOpening,
+    int minimumStandardScore,
+    int minimumPairCount,
+  ) async {
+    await _ensureStarted();
+    final id = ++_serial;
+    final completer = Completer<Object?>();
+    _pending[id] = completer;
+    _commands!.send(<Object?>[
+      id,
+      'play',
+      bot,
+      melds,
+      allowOpening,
+      minimumStandardScore,
+      minimumPairCount,
+    ]);
+    return await completer.future as _BotComputation;
+  }
+
+  Future<bool> wantsDiscard(
+    BotPlayer bot,
+    Tile discarded,
+    List<Meld> melds,
+    bool allowOpening,
+    int minimumStandardScore,
+    int minimumPairCount,
+  ) async {
+    await _ensureStarted();
+    final id = ++_serial;
+    final completer = Completer<Object?>();
+    _pending[id] = completer;
+    _commands!.send(<Object?>[
+      id,
+      'wants',
+      bot,
+      discarded,
+      melds,
+      allowOpening,
+      minimumStandardScore,
+      minimumPairCount,
+    ]);
+    return await completer.future as bool;
+  }
+
+  Future<void> clearCaches() async {
+    await _ensureStarted();
+    final id = ++_serial;
+    final completer = Completer<Object?>();
+    _pending[id] = completer;
+    _commands!.send(<Object?>[id, 'clear']);
+    await completer.future;
+  }
+}
+
+void _botWorkerMain(SendPort output) {
+  final input = ReceivePort();
+  output.send(input.sendPort);
+  input.listen((message) {
+    final request = message as List<Object?>;
+    final id = request[0]! as int;
+    final operation = request[1]! as String;
+    if (operation == 'clear') {
+      BotEngine.clearCaches();
+      output.send(<Object?>[id, true]);
+      return;
+    }
+    final bot = request[2]! as BotPlayer;
+    if (operation == 'wants') {
+      output.send(<Object?>[
+        id,
+        BotEngine.wantsDiscard(
+          bot,
+          request[3]! as Tile,
+          request[4]! as List<Meld>,
+          allowOpening: request[5]! as bool,
+          minimumStandardScore: request[6]! as int,
+          minimumPairCount: request[7]! as int,
+        ),
+      ]);
+      return;
+    }
+    final melds = request[3]! as List<Meld>;
+    final result = BotEngine.play(
+      bot,
+      melds,
+      allowOpening: request[4]! as bool,
+      minimumStandardScore: request[5]! as int,
+      minimumPairCount: request[6]! as int,
+    );
+    output.send(<Object?>[id, _BotComputation(result, bot, melds)]);
+  });
+}
+
+Future<bool> _computeBotWantsDiscard(
+  BotPlayer sourceBot,
+  Tile discarded,
+  List<Meld> sourceMelds, {
+  required bool allowOpening,
+  required int minimumStandardScore,
+  required int minimumPairCount,
+}) {
+  if (kIsWeb) {
+    return Future(
+      () => BotEngine.wantsDiscard(
+        sourceBot,
+        discarded,
+        sourceMelds,
+        allowOpening: allowOpening,
+        minimumStandardScore: minimumStandardScore,
+        minimumPairCount: minimumPairCount,
+      ),
+    );
+  }
+  return _BotWorker.instance.wantsDiscard(
+    sourceBot,
+    discarded,
+    sourceMelds,
+    allowOpening,
+    minimumStandardScore,
+    minimumPairCount,
+  );
+}
+
+Tile _cloneBotTile(Tile tile) => Tile(
+  number: tile.number,
+  color: tile.color,
+  id: tile.id,
+  isFakeOkey: tile.isFakeOkey,
+  isOkey: tile.isOkey,
+  selected: tile.selected,
+  okeyFaceRevealed: tile.okeyFaceRevealed,
+);
+
+Future<_BotComputation> _computeBotTurnInBackground(
+  BotPlayer sourceBot,
+  List<Meld> sourceMelds, {
+  required bool allowOpening,
+  required int minimumStandardScore,
+  required int minimumPairCount,
+}) {
+  BotPlayer cloneBot() => BotPlayer(
+    name: sourceBot.name,
+    tileCount: sourceBot.tileCount,
+    penalty: sourceBot.penalty,
+    hasOpened: sourceBot.hasOpened,
+    openType: sourceBot.openType,
+    turnsPlayed: sourceBot.turnsPlayed,
+    hand: sourceBot.hand.map(_cloneBotTile).toList(),
+  );
+  List<Meld> cloneMelds() => [
+    for (final meld in sourceMelds)
+      Meld(tiles: meld.tiles.map(_cloneBotTile).toList(), type: meld.type),
+  ];
+  _BotComputation calculate(BotPlayer bot, List<Meld> melds) {
+    final result = BotEngine.play(
+      bot,
+      melds,
+      allowOpening: allowOpening,
+      minimumStandardScore: minimumStandardScore,
+      minimumPairCount: minimumPairCount,
+    );
+    return _BotComputation(result, bot, melds);
+  }
+
+  if (kIsWeb) {
+    // dart4web isolate desteklemez; önbellekli hesap bir sonraki event turunda
+    // çalıştırılarak giriş işleyicisinin bloklanması önlenir.
+    return Future(() => calculate(cloneBot(), cloneMelds()));
+  }
+  return _BotWorker.instance.calculate(
+    sourceBot,
+    sourceMelds,
+    allowOpening,
+    minimumStandardScore,
+    minimumPairCount,
+  );
+}
+
 /// Gerçek bot eli üzerinden 101 açma, çift açma, işleme ve taş atma kararı verir.
 class BotEngine {
   const BotEngine._();
 
   static final Random _random = Random();
+  static final Map<int, List<List<Tile>>> _standardPlanCache = {};
+  static final Map<int, List<List<Tile>>> _pairPlanCache = {};
+
+  static void clearCaches() {
+    _standardPlanCache.clear();
+    _pairPlanCache.clear();
+  }
+
+  static int _handSignature(List<Tile> hand) {
+    final ids = hand.map((tile) => tile.id).toList()..sort();
+    return Object.hashAll(ids);
+  }
+
+  static List<List<Tile>> _standardMelds(List<Tile> hand) {
+    final signature = _handSignature(hand);
+    final cached = _standardPlanCache[signature];
+    if (cached != null) return cached;
+    if (_standardPlanCache.length >= 6) _standardPlanCache.clear();
+    return _standardPlanCache[signature] = RackSolver.standardMelds(hand);
+  }
+
+  static List<List<Tile>> _pairs(List<Tile> hand) {
+    final signature = _handSignature(hand);
+    final cached = _pairPlanCache[signature];
+    if (cached != null) return cached;
+    if (_pairPlanCache.length >= 6) _pairPlanCache.clear();
+    return _pairPlanCache[signature] = RackSolver.pairs(hand);
+  }
 
   static bool wantsDiscard(
     BotPlayer bot,
@@ -157,8 +424,9 @@ class BotEngine {
         if (bot.hand.length <= 1) break;
         for (final meld in tableMelds) {
           if (!Rules.canAddToMeld(meld, [tile])) continue;
-          final candidate = [...meld.tiles, tile];
-          meld.tiles = Rules.orderedMeld(candidate, meld.type);
+          meld.tiles = Rules.extendMeldKeepingPositions(meld.tiles, [
+            tile,
+          ], meld.type);
           bot.hand.removeWhere((item) => item.id == tile.id);
           processed++;
           changed = true;
@@ -173,11 +441,11 @@ class BotEngine {
 
   static Tile? _chooseDiscard(List<Tile> hand, List<Meld> tableMelds) {
     if (hand.isEmpty) return null;
-    final plannedIds = RackSolver.standardMelds(hand)
+    final plannedIds = _standardMelds(hand)
         .expand((meld) => meld)
         .map((tile) => tile.id)
         .toSet();
-    final pairedIds = RackSolver.pairs(hand)
+    final pairedIds = _pairs(hand)
         .expand((pair) => pair)
         .map((tile) => tile.id)
         .toSet();
@@ -232,7 +500,7 @@ class BotEngine {
   }
 
   static int _futureValue(List<Tile> hand, List<Meld> tableMelds) {
-    final melds = RackSolver.standardMelds(hand);
+    final melds = _standardMelds(hand);
     var value = _meldScore(melds) + melds.expand((meld) => meld).length * 8;
     value += hand.where((tile) => _canProcess(tile, tableMelds)).length * 20;
     return value;
@@ -242,12 +510,12 @@ class BotEngine {
       melds.fold(0, (sum, meld) => sum + Rules.meldValue(meld));
 
   static List<List<Tile>> _standardMeldsKeepingDiscard(List<Tile> hand) {
-    final direct = RackSolver.standardMelds(hand);
+    final direct = _standardMelds(hand);
     if (direct.expand((meld) => meld).length < hand.length) return direct;
 
     var best = <List<Tile>>[];
     for (final reserved in hand) {
-      final candidate = RackSolver.standardMelds(
+      final candidate = _standardMelds(
         hand.where((tile) => tile.id != reserved.id).toList(),
       );
       final candidateCount = candidate.expand((meld) => meld).length;
@@ -262,12 +530,12 @@ class BotEngine {
   }
 
   static List<List<Tile>> _pairsKeepingDiscard(List<Tile> hand) {
-    final direct = RackSolver.pairs(hand);
+    final direct = _pairs(hand);
     if (direct.expand((pair) => pair).length < hand.length) return direct;
 
     var best = <List<Tile>>[];
     for (final reserved in hand) {
-      final candidate = RackSolver.pairs(
+      final candidate = _pairs(
         hand.where((tile) => tile.id != reserved.id).toList(),
       );
       if (candidate.length > best.length) best = candidate;
