@@ -686,6 +686,14 @@ class _GameScreenState extends State<GameScreen> {
   int _dealAnimationCounter = 0;
   bool _dealInProgress = false;
   Timer? _dealTimer;
+  Timer? _playerTurnTimer;
+  Timer? _botThinkTimer;
+  Timer? _messageTimer;
+  Timer? _warningTimer;
+  int _playerTurnGeneration = 0;
+  final ValueNotifier<int> _playerTurnSeconds = ValueNotifier(7);
+
+  bool get _isTimedMode => widget.launchConfig.mode == OkeyGameMode.timed101;
 
   // ── Oyuncu Durumu ─────────────────────────────────────────────────────
   bool _playerOpened = false; // el açıldı mı
@@ -750,6 +758,7 @@ class _GameScreenState extends State<GameScreen> {
   final Stopwatch _soundClock = Stopwatch()..start();
 
   Future<void> _openGameSettings() async {
+    _cancelTimedPlayerTurn();
     final updated = await showGeneralDialog<GameSettings>(
       context: context,
       barrierDismissible: true,
@@ -803,6 +812,7 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
     if (updated != null && mounted) setState(() => _gameSettings = updated);
+    if (mounted) _startTimedPlayerTurn();
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -816,6 +826,10 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _dealTimer?.cancel();
+    _cancelTimedPlayerTurn();
+    _botThinkTimer?.cancel();
+    _messageTimer?.cancel();
+    _warningTimer?.cancel();
     _roundGeneration++;
     _autoPlayerGeneration++;
     _soundSerial++;
@@ -828,6 +842,7 @@ class _GameScreenState extends State<GameScreen> {
     _rackDragVisual.dispose();
     _rackPushPreview.dispose();
     _tableTileMotion.dispose();
+    _playerTurnSeconds.dispose();
     super.dispose();
   }
 
@@ -837,6 +852,10 @@ class _GameScreenState extends State<GameScreen> {
     _roundGeneration++;
     _elCount++;
     _dealTimer?.cancel();
+    _cancelTimedPlayerTurn();
+    _botThinkTimer?.cancel();
+    _messageTimer?.cancel();
+    _warningTimer?.cancel();
     _warningSerial++;
     _msg = null;
     _warningMsg = null;
@@ -948,6 +967,7 @@ class _GameScreenState extends State<GameScreen> {
         if (openingTurn > 0 && _turn == openingTurn && !_botBusy) {
           _runBot(_turn - 1, alreadyHasExtraTile: true);
         } else if (openingTurn == 0) {
+          _startTimedPlayerTurn();
           _scheduleAutoPlayer(alreadyHasExtraTile: true);
         }
       });
@@ -965,8 +985,94 @@ class _GameScreenState extends State<GameScreen> {
       });
     } else if (_turn == 0 && !_dealInProgress) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scheduleAutoPlayer(alreadyHasExtraTile: true);
+        if (mounted) {
+          _startTimedPlayerTurn();
+          _scheduleAutoPlayer(alreadyHasExtraTile: true);
+        }
       });
+    }
+  }
+
+  void _cancelTimedPlayerTurn() {
+    _playerTurnGeneration++;
+    _playerTurnTimer?.cancel();
+    _playerTurnTimer = null;
+  }
+
+  void _startTimedPlayerTurn() {
+    _cancelTimedPlayerTurn();
+    if (!_isTimedMode ||
+        !mounted ||
+        _turn != 0 ||
+        _dealInProgress ||
+        _gameOverShown ||
+        _gameSettings.autoPlay) {
+      return;
+    }
+    final generation = _playerTurnGeneration;
+    _playerTurnSeconds.value = 7;
+    _playerTurnTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted ||
+          generation != _playerTurnGeneration ||
+          _turn != 0 ||
+          _dealInProgress ||
+          _gameOverShown) {
+        timer.cancel();
+        return;
+      }
+      final remaining = _playerTurnSeconds.value - 1;
+      _playerTurnSeconds.value = remaining;
+      if (remaining > 0) return;
+      timer.cancel();
+      _playerTurnTimer = null;
+      _handleTimedPlayerTimeout(generation);
+    });
+  }
+
+  List<Tile> _timedDiscardCandidates() {
+    final protectedIds = RackSolver.standardMelds(_rack)
+        .expand((group) => group)
+        .map((tile) => tile.id)
+        .toSet();
+    var candidates = _rack
+        .where((tile) => !protectedIds.contains(tile.id) && !tile.isOkey)
+        .toList();
+    if (candidates.isEmpty) {
+      candidates = _rack
+          .where((tile) => !protectedIds.contains(tile.id))
+          .toList();
+    }
+    if (candidates.isEmpty) {
+      candidates = _rack.where((tile) => !tile.isOkey).toList();
+    }
+    return candidates.isEmpty ? List<Tile>.from(_rack) : candidates;
+  }
+
+  void _handleTimedPlayerTimeout(int generation) {
+    if (!mounted ||
+        generation != _playerTurnGeneration ||
+        _turn != 0 ||
+        _gameOverShown) {
+      return;
+    }
+    if (!_drawnThisTurn) _drawFromDeck();
+    if (!mounted ||
+        _turn != 0 ||
+        !_drawnThisTurn ||
+        _gameOverShown ||
+        _rack.isEmpty) {
+      return;
+    }
+    final candidates = _timedDiscardCandidates();
+    final tile = candidates[Random().nextInt(candidates.length)];
+    setState(() {
+      for (final item in _rack) {
+        item.selected = item.id == tile.id;
+      }
+    });
+    _discardTile(timedOut: true);
+    if (mounted) {
+      _msg_('Süre doldu. Per dışında kalan bir taş otomatik atıldı.');
     }
   }
 
@@ -1020,16 +1126,20 @@ class _GameScreenState extends State<GameScreen> {
     Duration duration = const Duration(milliseconds: 1400),
   }) {
     if (_msg == m) return;
+    _messageTimer?.cancel();
     setState(() => _msg = m);
-    Future.delayed(duration, () {
+    _messageTimer = Timer(duration, () {
+      _messageTimer = null;
       if (mounted && _msg == m) setState(() => _msg = null);
     });
   }
 
   void _warn_(String message) {
     final serial = ++_warningSerial;
+    _warningTimer?.cancel();
     setState(() => _warningMsg = message);
-    Future.delayed(const Duration(milliseconds: 1900), () {
+    _warningTimer = Timer(const Duration(milliseconds: 1900), () {
+      _warningTimer = null;
       if (!mounted || serial != _warningSerial) return;
       setState(() => _warningMsg = null);
     });
@@ -1414,7 +1524,10 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // ── Taş At ────────────────────────────────────────────────────────────
-  void _discardTile({bool celebrateCenterFinish = false}) {
+  void _discardTile({
+    bool celebrateCenterFinish = false,
+    bool timedOut = false,
+  }) {
     if (_turn != 0) {
       _warn_('Sıra sende değil.');
       return;
@@ -1423,7 +1536,7 @@ class _GameScreenState extends State<GameScreen> {
       _warn_('Taş atmadan önce taş çekmelisin.');
       return;
     }
-    if (_tookDiscard && !_playerOpened) {
+    if (_tookDiscard && !_playerOpened && !timedOut) {
       _msg_('Soldan aldığın taşı açılışta kullan veya geri bırak.');
       return;
     }
@@ -1435,6 +1548,7 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     final tile = sel.first;
+    _cancelTimedPlayerTurn();
 
     // Atılan taş işleme cezası kontrolü
     if (_rack.length > 1 && _checkDiscardPenalty(tile)) {
@@ -2329,6 +2443,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _nextTurn() {
+    _cancelTimedPlayerTurn();
     final nextTurn = (_turn + 1) % 4;
     setState(() {
       _turn = nextTurn;
@@ -2344,7 +2459,10 @@ class _GameScreenState extends State<GameScreen> {
       });
     } else {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scheduleAutoPlayer();
+        if (mounted) {
+          _startTimedPlayerTurn();
+          _scheduleAutoPlayer();
+        }
       });
     }
   }
@@ -2364,7 +2482,9 @@ class _GameScreenState extends State<GameScreen> {
         : _instantBotTurns
         ? const Duration(milliseconds: 25)
         : Duration(milliseconds: 650 + Random().nextInt(651));
-    Future.delayed(botThinkTime, () async {
+    _botThinkTimer?.cancel();
+    _botThinkTimer = Timer(botThinkTime, () async {
+      _botThinkTimer = null;
       if (!mounted ||
           roundGeneration != _roundGeneration ||
           _gameOverShown ||
@@ -2536,7 +2656,10 @@ class _GameScreenState extends State<GameScreen> {
               });
             } else {
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _scheduleAutoPlayer();
+                if (mounted) {
+                  _startTimedPlayerTurn();
+                  _scheduleAutoPlayer();
+                }
               });
             }
           }
@@ -2586,6 +2709,7 @@ class _GameScreenState extends State<GameScreen> {
   // ── El Bitti: Oyuncu Kazandı ──────────────────────────────────────────
   void _endRoundPlayerWins() {
     if (_gameOverShown) return;
+    _cancelTimedPlayerTurn();
     _gameOverShown = true;
 
     // Diğer oyuncuların cezaları
@@ -2607,6 +2731,7 @@ class _GameScreenState extends State<GameScreen> {
   // ── El Bitti: Bot Kazandı ─────────────────────────────────────────────
   void _endRoundBotWins(int botIdx) {
     if (_gameOverShown) return;
+    _cancelTimedPlayerTurn();
     _gameOverShown = true;
 
     final myPen = Rules.roundPenaltyFor(
@@ -2637,6 +2762,7 @@ class _GameScreenState extends State<GameScreen> {
   // ── El Bitti: Deste Tükendi ───────────────────────────────────────────
   void _endRoundNoDeck() {
     if (_gameOverShown) return;
+    _cancelTimedPlayerTurn();
     _gameOverShown = true;
     final myPen = Rules.roundPenaltyFor(
       _rack,
@@ -2849,6 +2975,9 @@ class _GameScreenState extends State<GameScreen> {
                                       bottomReservedSpace: infoPanelHeight,
                                       gameModeLabel:
                                           widget.launchConfig.modeLabel,
+                                      playerTurnSeconds: _isTimedMode && myTurn
+                                          ? _playerTurnSeconds
+                                          : null,
                                       deckCount: _deck.length,
                                       indicator: _indicator,
                                       perPoints: _playerOpened
@@ -2891,6 +3020,16 @@ class _GameScreenState extends State<GameScreen> {
                                           child: _RackActionPanel(
                                             actions: [
                                               _RackAction(
+                                                label: 'SERİ AÇ',
+                                                active:
+                                                    canAct &&
+                                                    !(_playerOpened &&
+                                                        _playerOpenType ==
+                                                            'cift'),
+                                                color: const Color(0xFF19862B),
+                                                onTap: _autoOpenStandardMelds,
+                                              ),
+                                              _RackAction(
                                                 label: 'ÇİFT AÇ',
                                                 active:
                                                     canAct &&
@@ -2900,16 +3039,6 @@ class _GameScreenState extends State<GameScreen> {
                                                         _canLayPairsAfterStandard),
                                                 color: const Color(0xFF9A650E),
                                                 onTap: _autoOpenPairs,
-                                              ),
-                                              _RackAction(
-                                                label: 'SERİ AÇ',
-                                                active:
-                                                    canAct &&
-                                                    !(_playerOpened &&
-                                                        _playerOpenType ==
-                                                            'cift'),
-                                                color: const Color(0xFF19862B),
-                                                onTap: _autoOpenStandardMelds,
                                               ),
                                               _RackAction(
                                                 label: 'İŞLE',
@@ -3142,23 +3271,23 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _PressScale(
-    child: IconButton.filledTonal(
+    child: IconButton(
       key: const ValueKey('game-settings-button'),
       tooltip: 'Oyun ayarları',
       onPressed: onSettings,
       style: IconButton.styleFrom(
-        backgroundColor: const Color(0xFF1D9343),
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         minimumSize: const Size(42, 42),
-        side: const BorderSide(color: Color(0xFFC48A31), width: 1.5),
-        shape: const CircleBorder(),
+        padding: EdgeInsets.zero,
       ),
       icon: Image.asset(
         'images/ui/settings.png',
-        width: 24,
-        height: 24,
-        cacheWidth: 48,
-        cacheHeight: 48,
+        width: 40,
+        height: 40,
+        cacheWidth: 64,
+        cacheHeight: 64,
         filterQuality: FilterQuality.low,
       ),
     ),
@@ -3329,6 +3458,7 @@ class _TableArea extends StatelessWidget {
   final ValueNotifier<_TableTileMotion?> tableTileMotion;
   final double bottomReservedSpace;
   final String gameModeLabel;
+  final ValueListenable<int>? playerTurnSeconds;
   final int deckCount;
   final Tile? indicator;
   final int perPoints;
@@ -3370,6 +3500,7 @@ class _TableArea extends StatelessWidget {
     required this.tableTileMotion,
     required this.bottomReservedSpace,
     required this.gameModeLabel,
+    required this.playerTurnSeconds,
     required this.deckCount,
     required this.indicator,
     required this.perPoints,
@@ -3480,7 +3611,14 @@ class _TableArea extends StatelessWidget {
                                 alignment: Alignment.centerLeft,
                               ),
                             ),
-                            const Spacer(flex: 8),
+                            Expanded(
+                              flex: 8,
+                              child: playerTurnSeconds == null
+                                  ? const SizedBox.shrink()
+                                  : _TimedTurnBadge(
+                                      seconds: playerTurnSeconds!,
+                                    ),
+                            ),
                             Expanded(
                               flex: 13,
                               child: _GridTopCaption(
@@ -3649,6 +3787,44 @@ class _GridTopCaption extends StatelessWidget {
         ),
       ),
     ),
+  );
+}
+
+class _TimedTurnBadge extends StatelessWidget {
+  final ValueListenable<int> seconds;
+
+  const _TimedTurnBadge({required this.seconds});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+    valueListenable: seconds,
+    builder: (context, value, _) {
+      final urgent = value <= 2;
+      return Align(
+        child: Container(
+          key: const ValueKey('timed-turn-countdown'),
+          constraints: const BoxConstraints(maxHeight: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+          decoration: BoxDecoration(
+            color: urgent ? const Color(0xFFD4473E) : const Color(0xFF176C8B),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: urgent ? const Color(0xFFFFD1A6) : const Color(0xFF79D8F4),
+            ),
+          ),
+          child: Text(
+            '$value SN',
+            maxLines: 1,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 9,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -5546,12 +5722,20 @@ class _ProcessableTileMarker extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
     width: width,
     height: height,
-    child: Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(6),
-        border: active ? Border.all(color: OC.numGreen, width: 2) : null,
-      ),
-      child: child,
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        if (active)
+          IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: OC.numGreen, width: 2),
+              ),
+            ),
+          ),
+      ],
     ),
   );
 }
@@ -5640,38 +5824,35 @@ class _RackPerSummary extends StatelessWidget {
         ),
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
+          Align(
+            alignment: Alignment.topCenter,
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
                 label,
-                maxLines: 2,
+                maxLines: 1,
                 textAlign: TextAlign.center,
+                textScaler: TextScaler.noScaling,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
                   height: 1,
                 ),
               ),
             ),
-          ),
-          Container(
-            width: double.infinity,
-            height: 1,
-            margin: const EdgeInsets.symmetric(vertical: 1),
-            color: const Color(0xFF8A6027),
           ),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
                 '$value',
+                textScaler: TextScaler.noScaling,
                 style: TextStyle(
                   color: highlighted ? OC.numGreen : Colors.white,
-                  fontSize: 24,
+                  fontSize: 36,
                   fontWeight: FontWeight.w900,
                   height: 1,
                 ),
@@ -5722,6 +5903,16 @@ class _SceneActionButtonFace extends StatelessWidget {
 
   const _SceneActionButtonFace({required this.action});
 
+  String get _backgroundAsset {
+    if (action.color == const Color(0xFF19862B)) {
+      return 'images/ui/action_green.png';
+    }
+    if (action.color == const Color(0xFF08658F)) {
+      return 'images/ui/action_blue.png';
+    }
+    return 'images/ui/action_gold.png';
+  }
+
   @override
   Widget build(BuildContext context) => _PressScale(
     enabled: action.active,
@@ -5735,13 +5926,11 @@ class _SceneActionButtonFace extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           child: Ink(
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color.lerp(action.color, Colors.white, 0.13)!,
-                  Color.lerp(action.color, Colors.black, 0.18)!,
-                ],
+              color: action.color,
+              image: DecorationImage(
+                image: AssetImage(_backgroundAsset),
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.low,
               ),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
@@ -5843,40 +6032,54 @@ class _TileWidget extends StatelessWidget {
     final isSelected = tile.selected;
     final content = hideOkey && tile.isOkey && !tile.okeyFaceRevealed
         ? null
-        : Stack(
-            children: [
-              Center(
-                child: Text(
-                  _label,
-                  style: TextStyle(
-                    color: tile.displayColor,
-                    fontSize:
-                        h *
-                        (tile.isFakeOkey ? 0.47 : 0.44) *
-                        (emphasized ? 1.13 : 1) *
-                        numberScale,
-                    fontWeight: FontWeight.w900,
-                    height: 1,
-                    letterSpacing: -0.25,
-                  ),
-                ),
-              ),
-              Positioned(
-                bottom: 3,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: Container(
-                    width: w * 0.18,
-                    height: w * 0.18,
-                    decoration: BoxDecoration(
-                      color: tile.displayColor.withValues(alpha: 0.4),
-                      shape: BoxShape.circle,
+        : Transform.translate(
+            offset: Offset(0, -h * 0.07),
+            child: Stack(
+              children: [
+                Center(
+                  child: SizedBox(
+                    width: w * 0.82,
+                    height: h * 0.55,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        _label,
+                        maxLines: 1,
+                        softWrap: false,
+                        textScaler: TextScaler.noScaling,
+                        style: TextStyle(
+                          color: tile.displayColor,
+                          fontSize:
+                              h *
+                              (tile.isFakeOkey ? 0.50 : 0.47) *
+                              (emphasized ? 1.13 : 1) *
+                              numberScale,
+                          fontWeight: FontWeight.w900,
+                          height: 1,
+                          letterSpacing: -0.25,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+                Positioned(
+                  bottom: 3,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      width: w * 0.21,
+                      height: w * 0.21,
+                      decoration: BoxDecoration(
+                        color: tile.displayColor.withValues(alpha: 0.4),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           );
     final decoration = BoxDecoration(
       image: const DecorationImage(

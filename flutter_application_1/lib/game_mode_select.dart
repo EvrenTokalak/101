@@ -16,7 +16,7 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
     with SingleTickerProviderStateMixin {
   static const _modes = [
     _GameModeData(
-      id: 'elimination-101',
+      id: 'classic-101',
       label: 'Klasik 101',
       subtitle: 'Standart 101 kuralları',
       badge: 'KLASİK',
@@ -25,25 +25,40 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
       accentDark: Color(0xFF174F25),
       config: GameLaunchConfig.gameMode(
         mode: OkeyGameMode.classic101,
-        id: 'elimination-101',
-        label: 'Eliminasyon 101',
+        id: 'classic-101',
+        label: 'Klasik 101',
       ),
       features: ['4 Oyuncu', 'Bireysel', 'Normal Puanlama'],
     ),
     _GameModeData(
-      id: 'paired-101',
-      label: 'Eşli 101',
-      subtitle: 'Eşinle birlikte kazan',
-      badge: 'TAKIM',
-      icon: Icons.groups_2_rounded,
+      id: 'timed-101',
+      label: 'Zamanlı 101',
+      subtitle: 'Her hamle için 7 saniye',
+      badge: 'HIZLI',
+      icon: Icons.timer_rounded,
       accent: Color(0xFF2196F3),
       accentDark: Color(0xFF0D3D73),
       config: GameLaunchConfig.gameMode(
-        mode: OkeyGameMode.paired101,
-        id: 'paired-101',
-        label: 'Eşli 101',
+        mode: OkeyGameMode.timed101,
+        id: 'timed-101',
+        label: 'Zamanlı 101',
       ),
-      features: ["2'ye 2", 'Ortak Puan', 'Takım Oyunu'],
+      features: ['4 Oyuncu', '7 Saniye', 'Otomatik Hamle'],
+    ),
+    _GameModeData(
+      id: 'elimination-101',
+      label: 'Eliminasyon 101',
+      subtitle: 'Her elde ayakta kal',
+      badge: 'ELEME',
+      icon: Icons.local_fire_department_rounded,
+      accent: Color(0xFFE05252),
+      accentDark: Color(0xFF721F25),
+      config: GameLaunchConfig.gameMode(
+        mode: OkeyGameMode.elimination101,
+        id: 'elimination-101',
+        label: 'Eliminasyon 101',
+      ),
+      features: ['4 Oyuncu', 'Bireysel', 'Eleme Puanı'],
     ),
     _GameModeData(
       id: 'progressive',
@@ -111,8 +126,14 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
           SafeArea(
             child: LayoutBuilder(
               builder: (context, viewport) {
-                final canvasWidth = maxOf(viewport.maxWidth, 900);
-                final canvasHeight = maxOf(viewport.maxHeight, 600);
+                final widthScale = 900 / viewport.maxWidth;
+                final heightScale = 600 / viewport.maxHeight;
+                final requiredScale = widthScale > heightScale
+                    ? widthScale
+                    : heightScale;
+                final canvasScale = requiredScale < 1 ? 1.0 : requiredScale;
+                final canvasWidth = viewport.maxWidth * canvasScale;
+                final canvasHeight = viewport.maxHeight * canvasScale;
                 return Center(
                   child: FittedBox(
                     fit: BoxFit.contain,
@@ -173,8 +194,6 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen>
     );
   }
 }
-
-double maxOf(double value, double minimum) => value < minimum ? minimum : value;
 
 class _GameModeData {
   final String id;
@@ -498,26 +517,36 @@ class _ModeArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final content = switch (mode.id) {
-      'paired-101' => SizedBox(
-        width: 220,
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _rack([_tile('7', Colors.red), _tile('10', Colors.blue)]),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Icon(
-                  Icons.compare_arrows_rounded,
-                  color: Colors.white70,
-                  size: 24,
-                ),
+      'timed-101' => Stack(
+        alignment: Alignment.center,
+        children: [
+          const Icon(Icons.timer_rounded, color: Color(0xFF78C8FF), size: 72),
+          Transform.translate(
+            offset: const Offset(0, 3),
+            child: const Text(
+              '7',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 23,
+                fontWeight: FontWeight.w900,
               ),
-              _rack([_tile('7', Colors.red), _tile('10', Colors.blue)]),
-            ],
+            ),
           ),
-        ),
+        ],
+      ),
+      'elimination-101' => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _tile('101', const Color(0xFFC93F3F)),
+          const SizedBox(width: 7),
+          const Icon(
+            Icons.local_fire_department_rounded,
+            color: Color(0xFFFFB04A),
+            size: 43,
+          ),
+          const SizedBox(width: 7),
+          _tile('X', const Color(0xFF252525)),
+        ],
       ),
       'progressive' => Row(
         mainAxisSize: MainAxisSize.min,

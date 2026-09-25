@@ -486,13 +486,25 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
             const Icon(Icons.text_fields_rounded, color: OC.numGreen),
             const SizedBox(width: 9),
             const Expanded(
-              child: Text(
-                'Yazı Boyutu',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Yazı Boyutu',
+                    textScaler: TextScaler.noScaling,
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    'Taş sayıları sabit kalır',
+                    textScaler: TextScaler.noScaling,
+                    style: TextStyle(fontSize: 9, color: Colors.black54),
+                  ),
+                ],
               ),
             ),
             Text(
               '${(settings.fontScale * 100).round()}%',
+              textScaler: TextScaler.noScaling,
               style: const TextStyle(
                 color: OC.btnBrown,
                 fontWeight: FontWeight.w900,
@@ -502,8 +514,8 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
         ),
         Slider(
           value: settings.fontScale,
-          min: 0.85,
-          max: 1.25,
+          min: 0.9,
+          max: 1.1,
           divisions: 4,
           activeColor: OC.numGreen,
           onChanged: (value) => setState(() {

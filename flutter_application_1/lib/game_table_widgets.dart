@@ -22,14 +22,22 @@ class _DiscardDrawHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final content = _TileWidget(tile: tile, w: 27, h: 35, onTap: null);
+    const tileWidth = 30.0;
+    const tileHeight = tileWidth * 1.58;
+    final content = _TileWidget(
+      tile: tile,
+      w: tileWidth,
+      h: tileHeight,
+      onTap: null,
+    );
     if (!enabled) return content;
     return Draggable<_DiscardDragData>(
       data: const _DiscardDragData(),
-      dragAnchorStrategy: (_, _, _) => const Offset(13.5, 51),
+      dragAnchorStrategy: (_, _, _) =>
+          const Offset(tileWidth / 2, tileHeight + 16),
       feedbackOffset: const Offset(0, -12),
       feedback: Material(color: Colors.transparent, child: content),
-      childWhenDragging: const SizedBox(width: 27, height: 35),
+      childWhenDragging: const SizedBox(width: tileWidth, height: tileHeight),
       child: GestureDetector(onTap: onTake, child: content),
     );
   }
@@ -180,12 +188,12 @@ class _TableDiscardPile extends StatelessWidget {
           child: SizedBox(
             key: ValueKey('discard-$label'),
             width: 38,
-            height: 46,
+            height: 60,
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: SizedBox(
                 width: 38,
-                height: 46,
+                height: 60,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   padding: const EdgeInsets.all(2),
@@ -212,8 +220,8 @@ class _TableDiscardPile extends StatelessWidget {
                                   onTap: onReturn,
                                   borderRadius: BorderRadius.circular(7),
                                   child: Ink(
-                                    width: 32,
-                                    height: 39,
+                                    width: 30,
+                                    height: 47.4,
                                     decoration: BoxDecoration(
                                       gradient: const LinearGradient(
                                         begin: Alignment.topCenter,
@@ -255,8 +263,8 @@ class _TableDiscardPile extends StatelessWidget {
                             : tiles.isEmpty
                             ? const SizedBox(
                                 key: ValueKey('empty-discard'),
-                                width: 27,
-                                height: 35,
+                                width: 30,
+                                height: 47.4,
                                 child: Icon(
                                   Icons.arrow_downward_rounded,
                                   color: Colors.white24,
@@ -272,8 +280,8 @@ class _TableDiscardPile extends StatelessWidget {
                             : _TileWidget(
                                 key: ValueKey(tiles.last.id),
                                 tile: tiles.last,
-                                w: 27,
-                                h: 35,
+                                w: 30,
+                                h: 47.4,
                                 onTap: null,
                               ),
                       ),

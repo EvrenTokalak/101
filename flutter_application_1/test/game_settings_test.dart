@@ -30,7 +30,7 @@ void main() {
       find.textContaining('Hemen Oyna', findRichText: true),
       findsOneWidget,
     );
-    expect(find.text('ANA MENÜYE DÖN'), findsOneWidget);
+    expect(find.text('ANA MENÜ'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.ensureVisible(find.text('KAYDET'));

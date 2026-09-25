@@ -1,5 +1,7 @@
 package com.example.flutter_application_1
 
+import android.content.pm.ActivityInfo
+import android.os.Bundle
 import android.os.Process
 import android.os.Debug
 import io.flutter.embedding.android.FlutterActivity
@@ -9,6 +11,16 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var lastWallNanos = System.nanoTime()
     private var lastCpuMillis = Process.getElapsedCpuTime()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

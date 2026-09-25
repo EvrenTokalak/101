@@ -42,7 +42,7 @@ void main() {
     await pumpRouteTransition(tester);
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
-    expect(game.launchConfig.mode, OkeyGameMode.classic101);
+    expect(game.launchConfig.mode, OkeyGameMode.elimination101);
     expect(game.launchConfig.modeLabel, 'Eliminasyon 101');
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
@@ -59,7 +59,10 @@ void main() {
     await tester.tap(find.text('OYUN MODLARI'));
     await pumpRouteTransition(tester);
     expect(find.byType(GameModeSelectScreen), findsOneWidget);
-    expect(find.text('Eliminasyon 101'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('game-mode-card-elimination-101')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const ValueKey('game-mode-card-progressive')));
     await tester.pump(const Duration(milliseconds: 300));

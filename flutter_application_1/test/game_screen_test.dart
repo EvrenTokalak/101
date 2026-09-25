@@ -395,4 +395,35 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(seconds: 3));
   });
+
+  testWidgets('zamanlı mod 7 saniye sonunda otomatik hamle yapar', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameScreen(
+          startingPlayer: 0,
+          launchConfig: GameLaunchConfig.gameMode(
+            mode: OkeyGameMode.timed101,
+            id: 'timed-101',
+            label: 'Zamanlı 101',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1800));
+
+    expect(find.byKey(const ValueKey('timed-turn-countdown')), findsOneWidget);
+    expect(find.text('7 SN'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 7));
+
+    expect(find.byKey(const ValueKey('timed-turn-countdown')), findsNothing);
+    expect(find.textContaining('Süre doldu'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

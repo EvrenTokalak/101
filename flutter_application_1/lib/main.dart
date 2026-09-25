@@ -892,47 +892,13 @@ class _TeaDecoration extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => IgnorePointer(
-    child: Opacity(
-      opacity: 0.78,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Container(
-            width: 29,
-            height: 37,
-            decoration: BoxDecoration(
-              color: const Color(0x55E8F4EE),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(5),
-                bottom: Radius.circular(11),
-              ),
-              border: Border.all(color: Colors.white54),
-            ),
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              height: 25,
-              decoration: const BoxDecoration(
-                color: Color(0xCC9B3F16),
-                borderRadius: BorderRadius.vertical(
-                  bottom: Radius.circular(10),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            right: -9,
-            top: 11,
-            child: Container(
-              width: 12,
-              height: 15,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white54, width: 2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ],
-      ),
+    child: Image.asset(
+      'images/ui/tea.png',
+      width: 42,
+      height: 52,
+      cacheWidth: 42,
+      cacheHeight: 52,
+      filterQuality: FilterQuality.low,
     ),
   );
 }
@@ -1169,24 +1135,25 @@ class _IconBtn extends StatelessWidget {
       child: Container(
         width: 36,
         height: 36,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.5),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: OkeyColors.gold.withValues(alpha: 0.4),
-            width: 1,
-          ),
-        ),
+        decoration: assetPath == null
+            ? BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: OkeyColors.gold.withValues(alpha: 0.4),
+                  width: 1,
+                ),
+              )
+            : null,
         child: assetPath == null
             ? Icon(icon, color: OkeyColors.cream, size: 18)
-            : Padding(
-                padding: const EdgeInsets.all(5),
-                child: Image.asset(
-                  assetPath!,
-                  cacheWidth: 48,
-                  cacheHeight: 48,
-                  filterQuality: FilterQuality.low,
-                ),
+            : Image.asset(
+                assetPath!,
+                width: 36,
+                height: 36,
+                cacheWidth: 64,
+                cacheHeight: 64,
+                filterQuality: FilterQuality.low,
               ),
       ),
     );
@@ -1378,14 +1345,20 @@ class _FeatureDialog extends StatelessWidget {
     'OYUN MODLARI' => const [
       _FeatureEntry(
         Icons.looks_one_rounded,
-        'Eliminasyon 101',
+        'Klasik 101',
         'Tekli oyun · Standart kurallar',
         null,
       ),
       _FeatureEntry(
-        Icons.groups_2_rounded,
-        'Eşli 101',
-        'Takımınla birlikte mücadele et',
+        Icons.timer_rounded,
+        'Zamanlı 101',
+        'Her hamle için 7 saniye',
+        null,
+      ),
+      _FeatureEntry(
+        Icons.local_fire_department_rounded,
+        'Eliminasyon 101',
+        'Her elde ayakta kal',
         null,
       ),
       _FeatureEntry(
@@ -2213,17 +2186,14 @@ class _MenuTileRow extends StatelessWidget {
       alignment: Alignment.bottomCenter,
       clipBehavior: Clip.none,
       children: [
-        Container(
+        Image.asset(
+          'images/ui/menu_rack.png',
           width: 184,
-          height: 17,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF5A351B), Color(0xFFB17D3F), Color(0xFF5A351B)],
-            ),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFFD5AF70)),
-            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 5)],
-          ),
+          height: 34,
+          fit: BoxFit.fill,
+          cacheWidth: 220,
+          cacheHeight: 40,
+          filterQuality: FilterQuality.low,
         ),
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -2333,15 +2303,33 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
               ),
             ],
           ),
-          child: const Center(
-            child: Text(
-              'HEMEN OYNA',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Georgia',
-                letterSpacing: 2,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'images/ui/play_tiles.png',
+                    width: 44,
+                    height: 36,
+                    cacheWidth: 58,
+                    cacheHeight: 48,
+                    filterQuality: FilterQuality.low,
+                  ),
+                  const SizedBox(width: 7),
+                  const Text(
+                    'HEMEN OYNA',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'Georgia',
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -2366,6 +2354,12 @@ class _RightButtonColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const assetPaths = [
+      'images/ui/room_cards.png',
+      'images/ui/mode_tiles.png',
+      'images/ui/coin.png',
+      'images/ui/gift.png',
+    ];
     final buttons = [
       (
         Icons.people_alt_outlined,
@@ -2404,6 +2398,7 @@ class _RightButtonColumn extends StatelessWidget {
                 ),
                 child: _RightSideButton(
                   icon: icon,
+                  assetPath: assetPaths[i],
                   label: label,
                   onTap: i == 0
                       ? onSelectRoom
@@ -2424,11 +2419,13 @@ class _RightButtonColumn extends StatelessWidget {
 
 class _RightSideButton extends StatefulWidget {
   final IconData icon;
+  final String? assetPath;
   final String label;
   final VoidCallback onTap;
 
   const _RightSideButton({
     required this.icon,
+    this.assetPath,
     required this.label,
     required this.onTap,
   });
@@ -2487,6 +2484,12 @@ class _RightSideButtonState extends State<_RightSideButton>
               color: OkeyColors.gold.withValues(alpha: 0.5),
               width: 1.5,
             ),
+            image: const DecorationImage(
+              image: AssetImage('images/ui/menu_rack.png'),
+              fit: BoxFit.cover,
+              opacity: 0.2,
+              filterQuality: FilterQuality.low,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.4),
@@ -2499,14 +2502,20 @@ class _RightSideButtonState extends State<_RightSideButton>
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Row(
               children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    color: OkeyColors.gold.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(widget.icon, color: OkeyColors.gold, size: 17),
+                SizedBox(
+                  width: 40,
+                  height: 36,
+                  child: widget.assetPath == null
+                      ? Icon(widget.icon, color: OkeyColors.gold, size: 20)
+                      : Image.asset(
+                          widget.assetPath!,
+                          width: 40,
+                          height: 36,
+                          fit: BoxFit.contain,
+                          cacheWidth: 64,
+                          cacheHeight: 58,
+                          filterQuality: FilterQuality.low,
+                        ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(

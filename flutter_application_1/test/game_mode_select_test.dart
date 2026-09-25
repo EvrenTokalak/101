@@ -21,21 +21,24 @@ void main() {
       await tester.pump(const Duration(milliseconds: 650));
 
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
-      expect(find.text('Oyun Modu Seç'), findsOneWidget);
-      expect(find.text('Eliminasyon 101'), findsOneWidget);
+      expect(find.text('OYUN MODLARI'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('game-mode-card-elimination-101')),
+        find.byKey(const ValueKey('game-mode-card-classic-101')),
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('game-mode-card-paired-101')),
+        find.byKey(const ValueKey('game-mode-card-timed-101')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('game-mode-card-elimination-101')),
         findsOneWidget,
       );
       expect(
         find.byKey(const ValueKey('game-mode-card-progressive')),
         findsOneWidget,
       );
-      expect(find.text('MODU SEÇ'), findsOneWidget);
+      expect(find.text('BU MODDA OYNA'), findsOneWidget);
     }
   });
 }

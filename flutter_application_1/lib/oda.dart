@@ -212,12 +212,14 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
                 // Dört oda kartı ve alt aksiyon butonu için gereken minimum
                 // alanı koru. Küçük/kısa web pencerelerinde içerik kırpılmak
                 // yerine tek parça hâlinde ölçeklenir.
-                final canvasWidth = viewport.maxWidth < 900
-                    ? 900.0
-                    : viewport.maxWidth;
-                final canvasHeight = viewport.maxHeight < 600
-                    ? 600.0
-                    : viewport.maxHeight;
+                final widthScale = 900 / viewport.maxWidth;
+                final heightScale = 600 / viewport.maxHeight;
+                final requiredScale = widthScale > heightScale
+                    ? widthScale
+                    : heightScale;
+                final canvasScale = requiredScale < 1 ? 1.0 : requiredScale;
+                final canvasWidth = viewport.maxWidth * canvasScale;
+                final canvasHeight = viewport.maxHeight * canvasScale;
 
                 return Center(
                   child: FittedBox(
