@@ -40,6 +40,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       glowColor: Color(0x4A4CAF50),
       tierLabel: 'Başlangıç',
       tierIcon: '♟',
+      imageAsset: 'images/rooms/room_start.jpg',
     ),
     _RoomData(
       label: 'Standart',
@@ -55,6 +56,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       glowColor: Color(0x4A2196F3),
       tierLabel: 'Standart',
       tierIcon: '♜',
+      imageAsset: 'images/rooms/room_standard.jpg',
     ),
     _RoomData(
       label: 'VIP',
@@ -70,6 +72,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       glowColor: Color(0x5AD4A017),
       tierLabel: 'VIP',
       tierIcon: '♛',
+      imageAsset: 'images/rooms/room_vip.jpg',
     ),
     _RoomData(
       label: 'Elit',
@@ -85,6 +88,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen>
       glowColor: Color(0x55E040FB),
       tierLabel: 'Elit',
       tierIcon: '♚',
+      imageAsset: 'images/rooms/room_elite.jpg',
     ),
   ];
 
@@ -343,6 +347,7 @@ class _RoomData {
   final Color glowColor;
   final String tierLabel;
   final String tierIcon;
+  final String imageAsset;
 
   const _RoomData({
     required this.label,
@@ -358,6 +363,7 @@ class _RoomData {
     required this.glowColor,
     required this.tierLabel,
     required this.tierIcon,
+    required this.imageAsset,
   });
 }
 
@@ -535,78 +541,96 @@ class _RoomCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // ── Tier ikonu ─────────────────────────────────────
-              _TierBadge(room: room, isSelected: isSelected),
-
-              // ── Orta: Giriş ücreti ─────────────────────────────
-              Column(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.asset(
+                room.imageAsset,
+                fit: BoxFit.cover,
+                alignment: Alignment.topCenter,
+                cacheWidth: 128,
+                cacheHeight: 115,
+                filterQuality: FilterQuality.low,
+                color: Colors.black.withValues(alpha: isSelected ? 0.55 : 0.72),
+                colorBlendMode: BlendMode.darken,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    room.tierIcon,
-                    style: TextStyle(
-                      fontSize: isSelected ? 36 : 28,
-                      color: room.accentColor,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    room.label,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : OkeyColors.cream,
-                      fontSize: isSelected ? 15 : 13,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: 'Georgia',
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  // Giriş ücreti
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: room.accentColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: room.accentColor.withValues(alpha: 0.4),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.monetization_on,
+                  // ── Tier ikonu ─────────────────────────────────────
+                  _TierBadge(room: room, isSelected: isSelected),
+
+                  // ── Orta: Giriş ücreti ─────────────────────────────
+                  Column(
+                    children: [
+                      Text(
+                        room.tierIcon,
+                        style: TextStyle(
+                          fontSize: isSelected ? 36 : 28,
                           color: room.accentColor,
-                          size: 14,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          room.feeLabel,
-                          style: TextStyle(
-                            color: room.accentColor,
-                            fontSize: isSelected ? 17 : 15,
-                            fontWeight: FontWeight.bold,
-                            fontFamily: 'Georgia',
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        room.label,
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : OkeyColors.cream,
+                          fontSize: isSelected ? 15 : 13,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'Georgia',
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      // Giriş ücreti
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: room.accentColor.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: room.accentColor.withValues(alpha: 0.4),
+                            width: 1,
                           ),
                         ),
-                      ],
-                    ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.monetization_on,
+                              color: room.accentColor,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              room.feeLabel,
+                              style: TextStyle(
+                                color: room.accentColor,
+                                fontSize: isSelected ? 17 : 15,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'Georgia',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
+
+                  // ── Alt: Oyuncu durumu ──────────────────────────────
+                  _PlayerBar(room: room, isSelected: isSelected),
                 ],
               ),
-
-              // ── Alt: Oyuncu durumu ──────────────────────────────
-              _PlayerBar(room: room, isSelected: isSelected),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

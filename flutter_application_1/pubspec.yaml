@@ -61,6 +61,8 @@ flutter:
     - images/rack2.png
     - images/tas_ters.png
     - images/anamenu/menubg.png
+    - images/ui/
+    - images/rooms/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

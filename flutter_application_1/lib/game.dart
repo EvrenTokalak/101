@@ -822,7 +822,7 @@ class _GameScreenState extends State<GameScreen> {
     unawaited(_soundPlayer.dispose());
     unawaited(AudioCache.instance.clearAll());
     _gameAudioWarmup = null;
-    _BotWorker.instance.shutdown();
+    if (!kIsWeb) _BotWorker.instance.shutdown();
     BotEngine.clearCaches();
     _RunMeldGrid.clearLayoutCache();
     _rackDragVisual.dispose();
@@ -3153,7 +3153,14 @@ class _TopBar extends StatelessWidget {
         side: const BorderSide(color: Color(0xFFC48A31), width: 1.5),
         shape: const CircleBorder(),
       ),
-      icon: const Icon(Icons.settings, size: 19),
+      icon: Image.asset(
+        'images/ui/settings.png',
+        width: 24,
+        height: 24,
+        cacheWidth: 48,
+        cacheHeight: 48,
+        filterQuality: FilterQuality.low,
+      ),
     ),
   );
 }
@@ -3185,9 +3192,26 @@ class _PlayerInfoState extends State<_PlayerInfo> {
     super.initState();
     final avatarSize = widget.horizontal ? 34.0 : 38.0;
     _avatarFace = RepaintBoundary(
-      child: CustomPaint(
-        size: Size.square(avatarSize),
-        painter: const _BotAvatarPainter(),
+      child: Container(
+        width: avatarSize,
+        height: avatarSize,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFFB98532), width: 1.2),
+        ),
+        child: Image.asset(
+          switch (widget.bot.name) {
+            'Oyuncu 2' => 'images/ui/avatar_bot2.jpg',
+            'Oyuncu 3' => 'images/ui/avatar_bot3.jpg',
+            _ => 'images/ui/avatar_bot4.jpg',
+          },
+          fit: BoxFit.cover,
+          cacheWidth: 64,
+          cacheHeight: 64,
+          filterQuality: FilterQuality.low,
+          gaplessPlayback: true,
+        ),
       ),
     );
     _nameTag = RepaintBoundary(
@@ -3273,50 +3297,6 @@ class _PlayerInfoState extends State<_PlayerInfo> {
             ),
     );
   }
-}
-
-class _BotAvatarPainter extends CustomPainter {
-  const _BotAvatarPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final center = rect.center;
-    final radius = size.shortestSide / 2;
-    final background = Paint()
-      ..shader = const RadialGradient(
-        colors: [Color(0xFFF2D89B), Color(0xFFB67828)],
-      ).createShader(rect);
-    canvas.drawCircle(center, radius - 1, background);
-    canvas.drawCircle(
-      center,
-      radius - 1,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..color = const Color(0xFF4B2D12),
-    );
-    final person = Paint()..color = const Color(0xFF553116);
-    canvas.drawCircle(
-      Offset(center.dx, size.height * 0.38),
-      size.width * 0.13,
-      person,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(center.dx, size.height * 0.68),
-          width: size.width * 0.46,
-          height: size.height * 0.30,
-        ),
-        Radius.circular(size.width * 0.16),
-      ),
-      person,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _BotAvatarPainter oldDelegate) => false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

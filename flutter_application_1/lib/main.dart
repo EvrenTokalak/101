@@ -19,10 +19,10 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Büyük arka planlar ve masa görselleri arasında dolaşırken Flutter'ın resim
   // önbelleğinin oturum boyunca büyümesini sınırla. Sık kullanılan oyun
-  // görselleri için 12 MB alan bırakırken RAM kullanımını sabit tutar.
+  // görselleri için 11 MB alan bırakırken RAM kullanımını sabit tutar.
   PaintingBinding.instance.imageCache
     ..maximumSize = 20
-    ..maximumSizeBytes = 12 * 1024 * 1024;
+    ..maximumSizeBytes = 11 * 1024 * 1024;
   await playerProgress.load();
   await SystemChrome.setPreferredOrientations(const [
     DeviceOrientation.landscapeLeft,
@@ -1003,12 +1003,13 @@ class _ProfileChip extends StatelessWidget {
                       color: OkeyColors.tableMid,
                       border: Border.all(color: OkeyColors.gold, width: 1.5),
                     ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.person,
-                        color: OkeyColors.cream,
-                        size: 20,
-                      ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Image.asset(
+                      'images/ui/avatar_player.jpg',
+                      fit: BoxFit.cover,
+                      cacheWidth: 64,
+                      cacheHeight: 64,
+                      filterQuality: FilterQuality.low,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1112,10 +1113,13 @@ class _TopRightBar extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
-                    Icons.monetization_on,
-                    color: OkeyColors.gold,
-                    size: 18,
+                  Image.asset(
+                    'images/ui/coin.png',
+                    width: 18,
+                    height: 18,
+                    cacheWidth: 36,
+                    cacheHeight: 36,
+                    filterQuality: FilterQuality.low,
                   ),
                   const SizedBox(width: 5),
                   Text(
@@ -1141,7 +1145,11 @@ class _TopRightBar extends StatelessWidget {
           // İkon butonları
           _IconBtn(icon: Icons.mail_outlined, onTap: onMessages),
           const SizedBox(width: 6),
-          _IconBtn(icon: Icons.settings_outlined, onTap: onSettings),
+          _IconBtn(
+            icon: Icons.settings_outlined,
+            assetPath: 'images/ui/settings.png',
+            onTap: onSettings,
+          ),
         ],
       ),
     );
@@ -1150,8 +1158,9 @@ class _TopRightBar extends StatelessWidget {
 
 class _IconBtn extends StatelessWidget {
   final IconData icon;
+  final String? assetPath;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  const _IconBtn({required this.icon, this.assetPath, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1168,7 +1177,17 @@ class _IconBtn extends StatelessWidget {
             width: 1,
           ),
         ),
-        child: Icon(icon, color: OkeyColors.cream, size: 18),
+        child: assetPath == null
+            ? Icon(icon, color: OkeyColors.cream, size: 18)
+            : Padding(
+                padding: const EdgeInsets.all(5),
+                child: Image.asset(
+                  assetPath!,
+                  cacheWidth: 48,
+                  cacheHeight: 48,
+                  filterQuality: FilterQuality.low,
+                ),
+              ),
       ),
     );
   }
@@ -2165,47 +2184,14 @@ class _BigLogo extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text(
-            '101',
-            style: TextStyle(
-              color: OkeyColors.goldLight,
-              fontSize: 58,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'Georgia',
-              letterSpacing: 6,
-              height: 1.0,
-            ),
-          ),
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(
-                  color: OkeyColors.gold.withValues(alpha: 0.7),
-                  width: 1,
-                ),
-                bottom: BorderSide(
-                  color: OkeyColors.gold.withValues(alpha: 0.7),
-                  width: 1,
-                ),
-              ),
-            ),
-            child: const Text(
-              'OKEY',
-              style: TextStyle(
-                color: OkeyColors.cream,
-                fontSize: 20,
-                letterSpacing: 10,
-                fontFamily: 'Georgia',
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
+      child: Image.asset(
+        'images/ui/logo.png',
+        width: 150,
+        height: 112,
+        fit: BoxFit.contain,
+        cacheWidth: 150,
+        cacheHeight: 132,
+        filterQuality: FilterQuality.medium,
       ),
     );
   }
