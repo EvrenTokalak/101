@@ -97,6 +97,70 @@ void main() {
       table.fold(0, (sum, meld) => sum + Rules.meldValue(meld.tiles)),
       greaterThanOrEqualTo(101),
     );
+    expect(result.openingValue, 107);
+  });
+
+  test('bot renkli modda bonus serileri iki kat hesaplayarak açar', () {
+    BotPlayer createBot() => BotPlayer(
+      name: 'Renkli Bot',
+      hand: [
+        tile(7, TileColor.red),
+        tile(8, TileColor.red),
+        tile(9, TileColor.red),
+        tile(10, TileColor.red),
+        tile(11, TileColor.red),
+        tile(12, TileColor.red),
+        tile(2, TileColor.yellow),
+      ],
+    );
+
+    final normalBot = createBot();
+    final normalResult = BotEngine.play(normalBot, <Meld>[]);
+    expect(normalBot.hasOpened, isFalse);
+    expect(normalResult.openingValue, isNull);
+
+    final colorBot = createBot();
+    final colorResult = BotEngine.play(
+      colorBot,
+      <Meld>[],
+      bonusColor: TileColor.red,
+    );
+    expect(colorBot.hasOpened, isTrue);
+    expect(colorResult.openingValue, 114);
+  });
+
+  test('bot katlamali acilis sinirinin altinda kalinca acmaz', () {
+    BotPlayer createBot() => BotPlayer(
+      name: 'Katlamali Bot',
+      hand: [
+        for (var number = 10; number <= 13; number++)
+          tile(number, TileColor.red),
+        for (var number = 10; number <= 13; number++)
+          tile(number, TileColor.blue),
+        tile(4, TileColor.black),
+        tile(5, TileColor.black),
+        tile(6, TileColor.black),
+        tile(2, TileColor.yellow),
+      ],
+    );
+
+    final allowedBot = createBot();
+    final allowed = BotEngine.play(
+      allowedBot,
+      <Meld>[],
+      minimumStandardScore: 107,
+    );
+    expect(allowedBot.hasOpened, isTrue);
+    expect(allowed.openingValue, 107);
+
+    final blockedBot = createBot();
+    final blocked = BotEngine.play(
+      blockedBot,
+      <Meld>[],
+      minimumStandardScore: 108,
+    );
+    expect(blockedBot.hasOpened, isFalse);
+    expect(blocked.openingValue, isNull);
   });
 
   test('bot beş gerçek çift oluştuğunda çift açar', () {
@@ -115,7 +179,24 @@ void main() {
     expect(bot.hasOpened, isTrue);
     expect(bot.openType, 'cift');
     expect(result.openedMeldCount, 5);
+    expect(result.openingValue, 5);
     expect(table.every((meld) => meld.type == 'cift'), isTrue);
+  });
+
+  test('bot katlamali modda gereken cift sayisinin altinda acmaz', () {
+    final hand = <Tile>[];
+    for (final number in const [1, 3, 5, 7, 9]) {
+      hand
+        ..add(tile(number, TileColor.black))
+        ..add(tile(number, TileColor.black));
+    }
+    hand.add(tile(13, TileColor.yellow));
+    final bot = BotPlayer(name: 'Katlamali Bot', hand: hand);
+
+    final result = BotEngine.play(bot, <Meld>[], minimumPairCount: 6);
+
+    expect(bot.hasOpened, isFalse);
+    expect(result.openingValue, isNull);
   });
 
   test('eli açık bot masadaki pere uygun taşı işler', () {

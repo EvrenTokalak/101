@@ -46,7 +46,7 @@ class GameSettings {
     showRack: showRack ?? this.showRack,
     showGrid: showGrid ?? this.showGrid,
     showBots: showBots ?? this.showBots,
-    fontScale: fontScale ?? this.fontScale,
+    fontScale: (fontScale ?? this.fontScale).clamp(0.9, 1.25),
   );
 }
 
@@ -98,168 +98,247 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
               Expanded(
                 child: Container(
                   decoration: BoxDecoration(
-                    color: OC.bg,
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF123C2E), Color(0xFF071B14)],
+                    ),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: OC.gold, width: 2),
-                  ),
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 10, 8, 8),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.settings_rounded,
-                              color: OC.gold,
-                              size: 26,
-                            ),
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Text(
-                                'OYUN AYARLARI',
-                                style: TextStyle(
-                                  color: OC.panelBrown,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Kapat',
-                              onPressed: () => Navigator.of(
-                                context,
-                                rootNavigator: true,
-                              ).pop(),
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                          ],
-                        ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.48),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
                       ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Column(
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.24),
+                            border: Border(
+                              bottom: BorderSide(
+                                color: OC.gold.withValues(alpha: 0.42),
+                              ),
+                            ),
+                          ),
+                          padding: const EdgeInsets.fromLTRB(18, 9, 8, 9),
+                          child: Row(
                             children: [
-                              _sectionTitle('MASA BİLGİSİ'),
-                              _matchInfo(),
-                              const SizedBox(height: 12),
-                              _sectionTitle('OYUN DENEYİMİ'),
-                              _switch(
-                                Icons.volume_up_rounded,
-                                'Ses Efektleri',
-                                settings.sound,
-                                (value) =>
-                                    settings = settings.copyWith(sound: value),
+                              Image.asset(
+                                'images/ui/settings.png',
+                                width: 38,
+                                height: 38,
+                                cacheWidth: 72,
+                                cacheHeight: 72,
+                                filterQuality: FilterQuality.low,
                               ),
-                              _switch(
-                                Icons.vibration_rounded,
-                                'Titreşim',
-                                settings.vibration,
-                                (value) => settings = settings.copyWith(
-                                  vibration: value,
+                              const SizedBox(width: 11),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'OYUN AYARLARI',
+                                      style: TextStyle(
+                                        color: OC.goldLight,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w900,
+                                        fontFamily: 'Georgia',
+                                        letterSpacing: 1.2,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Masa deneyimini kendine göre düzenle',
+                                      style: TextStyle(
+                                        color: Colors.white54,
+                                        fontSize: 9,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              _switch(
-                                Icons.lightbulb_rounded,
-                                'Hamle İpuçları',
-                                settings.moveHints,
-                                (value) => settings = settings.copyWith(
-                                  moveHints: value,
-                                ),
+                              AppCloseButton(
+                                onTap: () => Navigator.of(
+                                  context,
+                                  rootNavigator: true,
+                                ).pop(),
+                                size: 38,
                               ),
-                              _switch(
-                                Icons.zoom_in_map_rounded,
-                                'Grid Büyüteci',
-                                settings.gridMagnifier,
-                                (value) => settings = settings.copyWith(
-                                  gridMagnifier: value,
-                                ),
-                              ),
-                              _switch(
-                                Icons.animation_rounded,
-                                'Animasyonlar',
-                                settings.animations,
-                                (value) => settings = settings.copyWith(
-                                  animations: value,
-                                ),
-                              ),
-                              _switch(
-                                Icons.smart_toy_rounded,
-                                'Otomatik Oyna',
-                                settings.autoPlay,
-                                (value) => settings = settings.copyWith(
-                                  autoPlay: value,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              _sectionTitle('ERİŞİLEBİLİRLİK'),
-                              _fontScaleSetting(),
                             ],
                           ),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: widget.onExitToMenu,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: OC.numRed,
-                                  side: const BorderSide(color: OC.numRed),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _sectionTitle('MASA BİLGİSİ'),
+                                _matchInfo(),
+                                const SizedBox(height: 12),
+                                _sectionTitle('OYUN DENEYİMİ'),
+                                _switch(
+                                  Icons.volume_up_rounded,
+                                  'Ses Efektleri',
+                                  settings.sound,
+                                  (value) => settings = settings.copyWith(
+                                    sound: value,
                                   ),
                                 ),
-                                icon: const Icon(
-                                  Icons.logout_rounded,
-                                  size: 17,
-                                ),
-                                label: const FittedBox(child: Text('ANA MENÜ')),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => widget.onRestart(settings),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: OC.btnBrown,
-                                  side: const BorderSide(color: OC.gold),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
+                                _switch(
+                                  Icons.vibration_rounded,
+                                  'Titreşim',
+                                  settings.vibration,
+                                  (value) => settings = settings.copyWith(
+                                    vibration: value,
                                   ),
                                 ),
-                                icon: const Icon(
-                                  Icons.restart_alt_rounded,
-                                  size: 17,
-                                ),
-                                label: const FittedBox(child: Text('RESTART')),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: FilledButton.icon(
-                                onPressed: () => Navigator.of(
-                                  context,
-                                  rootNavigator: true,
-                                ).pop(settings),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: OC.btnBrown,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
+                                _switch(
+                                  Icons.lightbulb_rounded,
+                                  'Hamle İpuçları',
+                                  settings.moveHints,
+                                  (value) => settings = settings.copyWith(
+                                    moveHints: value,
                                   ),
                                 ),
-                                icon: const Icon(Icons.check_rounded, size: 17),
-                                label: const FittedBox(child: Text('KAYDET')),
-                              ),
+                                _switch(
+                                  Icons.zoom_in_map_rounded,
+                                  'Grid Büyüteci',
+                                  settings.gridMagnifier,
+                                  (value) => settings = settings.copyWith(
+                                    gridMagnifier: value,
+                                  ),
+                                ),
+                                _switch(
+                                  Icons.animation_rounded,
+                                  'Animasyonlar',
+                                  settings.animations,
+                                  (value) => settings = settings.copyWith(
+                                    animations: value,
+                                  ),
+                                ),
+                                _switch(
+                                  Icons.smart_toy_rounded,
+                                  'Otomatik Oyna',
+                                  settings.autoPlay,
+                                  (value) => settings = settings.copyWith(
+                                    autoPlay: value,
+                                  ),
+                                ),
+                                _switch(
+                                  Icons.monitor_heart_rounded,
+                                  'CPU/GPU/RAM Göstergesi',
+                                  performanceOverlayEnabled.value,
+                                  (value) =>
+                                      performanceOverlayEnabled.value = value,
+                                ),
+                                const SizedBox(height: 12),
+                                _sectionTitle('ERİŞİLEBİLİRLİK'),
+                                _fontScaleSetting(),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ],
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.24),
+                            border: Border(
+                              top: BorderSide(
+                                color: OC.gold.withValues(alpha: 0.3),
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: widget.onExitToMenu,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFFFFB7A7),
+                                    side: BorderSide(
+                                      color: OC.numRed.withValues(alpha: 0.8),
+                                    ),
+                                    backgroundColor: OC.numRed.withValues(
+                                      alpha: 0.1,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.logout_rounded,
+                                    size: 17,
+                                  ),
+                                  label: const FittedBox(
+                                    child: Text('ANA MENÜ'),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => widget.onRestart(settings),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: OC.goldLight,
+                                    side: BorderSide(
+                                      color: OC.gold.withValues(alpha: 0.82),
+                                    ),
+                                    backgroundColor: OC.gold.withValues(
+                                      alpha: 0.1,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.restart_alt_rounded,
+                                    size: 17,
+                                  ),
+                                  label: const FittedBox(
+                                    child: Text('RESTART'),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: () => Navigator.of(
+                                    context,
+                                    rootNavigator: true,
+                                  ).pop(settings),
+                                  style: FilledButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: const Color(0xFF16863C),
+                                    side: BorderSide(
+                                      color: OC.gold.withValues(alpha: 0.7),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                    ),
+                                  ),
+                                  icon: Image.asset(
+                                    'images/ui/settings_ok.png',
+                                    width: 22,
+                                    height: 22,
+                                    cacheWidth: 44,
+                                    cacheHeight: 44,
+                                    filterQuality: FilterQuality.low,
+                                  ),
+                                  label: const FittedBox(child: Text('KAYDET')),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -272,9 +351,20 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
 
   Widget _performancePanel() => Container(
     decoration: BoxDecoration(
-      color: const Color(0xFF102C22),
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF123C2E), Color(0xFF071B14)],
+      ),
       borderRadius: BorderRadius.circular(18),
       border: Border.all(color: OC.gold, width: 2),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.42),
+          blurRadius: 16,
+          offset: const Offset(0, 7),
+        ),
+      ],
     ),
     child: Column(
       children: [
@@ -368,29 +458,41 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
   ) => Padding(
     padding: const EdgeInsets.only(bottom: 5),
     child: Material(
-      color: Colors.transparent,
-      child: SwitchListTile(
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-        secondary: Icon(
-          icon,
-          color: value ? OC.okeyGold : Colors.white38,
-          size: 19,
+      color: value
+          ? const Color(0xFF174C35)
+          : Colors.black.withValues(alpha: 0.2),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: value ? OC.gold.withValues(alpha: 0.48) : Colors.white10,
         ),
-        title: Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        value: value,
-        activeTrackColor: OC.numGreen,
-        onChanged: (next) {
-          setState(() => update(next));
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () {
+          setState(() => update(!value));
           widget.onChanged(settings);
         },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          child: Row(
+            children: [
+              Icon(icon, color: value ? OC.okeyGold : Colors.white38, size: 19),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              _toggleImage(value, width: 48),
+            ],
+          ),
+        ),
       ),
     ),
   );
@@ -400,7 +502,7 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
     child: Text(
       title,
       style: const TextStyle(
-        color: OC.btnBrown,
+        color: OC.goldLight,
         fontSize: 10,
         fontWeight: FontWeight.w900,
         letterSpacing: 1.15,
@@ -427,9 +529,9 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
       width: double.infinity,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: OC.tableGreen.withValues(alpha: 0.12),
+        color: Colors.black.withValues(alpha: 0.22),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: OC.numGreen.withValues(alpha: 0.45)),
+        border: Border.all(color: OC.gold.withValues(alpha: 0.38)),
       ),
       child: Wrap(
         spacing: 12,
@@ -440,21 +542,21 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
               width: 170,
               child: Row(
                 children: [
-                  Icon(detail.$1, size: 17, color: OC.numGreen),
+                  Icon(detail.$1, size: 17, color: OC.goldLight),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text.rich(
                       TextSpan(
                         text: '${detail.$2}: ',
                         style: const TextStyle(
-                          color: Colors.black54,
+                          color: Colors.white54,
                           fontSize: 11,
                         ),
                         children: [
                           TextSpan(
                             text: detail.$3,
                             style: const TextStyle(
-                              color: OC.panelBrown,
+                              color: OC.cream,
                               fontWeight: FontWeight.w900,
                             ),
                           ),
@@ -475,15 +577,15 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
   Widget _fontScaleSetting() => Container(
     padding: const EdgeInsets.fromLTRB(12, 8, 12, 5),
     decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.48),
+      color: Colors.black.withValues(alpha: 0.22),
       borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: OC.tileBdr),
+      border: Border.all(color: OC.gold.withValues(alpha: 0.38)),
     ),
     child: Column(
       children: [
         Row(
           children: [
-            const Icon(Icons.text_fields_rounded, color: OC.numGreen),
+            const Icon(Icons.text_fields_rounded, color: OC.goldLight),
             const SizedBox(width: 9),
             const Expanded(
               child: Column(
@@ -492,12 +594,15 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                   Text(
                     'Yazı Boyutu',
                     textScaler: TextScaler.noScaling,
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: OC.cream,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   Text(
                     'Taş sayıları sabit kalır',
                     textScaler: TextScaler.noScaling,
-                    style: TextStyle(fontSize: 9, color: Colors.black54),
+                    style: TextStyle(fontSize: 9, color: Colors.white54),
                   ),
                 ],
               ),
@@ -506,7 +611,7 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
               '${(settings.fontScale * 100).round()}%',
               textScaler: TextScaler.noScaling,
               style: const TextStyle(
-                color: OC.btnBrown,
+                color: OC.goldLight,
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -515,13 +620,23 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
         Slider(
           value: settings.fontScale,
           min: 0.9,
-          max: 1.1,
-          divisions: 4,
-          activeColor: OC.numGreen,
+          max: 1.25,
+          divisions: 7,
+          activeColor: OC.gold,
+          inactiveColor: Colors.white12,
           onChanged: (value) => setState(() {
             settings = settings.copyWith(fontScale: value);
             widget.onChanged(settings);
           }),
+        ),
+        Text(
+          'Önizleme: 101 Okey',
+          textScaler: TextScaler.linear(settings.fontScale),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ],
     ),
@@ -535,23 +650,51 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
   ) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: Material(
-      color: Colors.white.withValues(alpha: 0.48),
+      color: value
+          ? const Color(0xFF174C35)
+          : Colors.black.withValues(alpha: 0.22),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: OC.tileBdr),
+        side: BorderSide(
+          color: value ? OC.gold.withValues(alpha: 0.58) : Colors.white12,
+        ),
       ),
-      child: SwitchListTile(
-        dense: true,
-        secondary: Icon(icon, color: value ? OC.numGreen : Colors.grey),
-        title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-        value: value,
-        activeTrackColor: OC.numGreen,
-        onChanged: (next) {
-          setState(() => update(next));
+      child: InkWell(
+        onTap: () {
+          setState(() => update(!value));
           widget.onChanged(settings);
         },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            children: [
+              Icon(icon, color: value ? OC.goldLight : Colors.white38),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: OC.cream,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              _toggleImage(value),
+            ],
+          ),
+        ),
       ),
     ),
+  );
+
+  Widget _toggleImage(bool value, {double width = 56}) => Image.asset(
+    value
+        ? 'images/ui/settings_switch_on.png'
+        : 'images/ui/settings_switch_off.png',
+    width: width,
+    height: width * 0.45,
+    cacheWidth: (width * 2).round(),
+    filterQuality: FilterQuality.low,
   );
 }

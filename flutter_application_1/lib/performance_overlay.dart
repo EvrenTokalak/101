@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 
 const MethodChannel _performanceChannel = MethodChannel('okey/performance');
 
+/// Kapalıyken ölçüm zamanlayıcısı ve ek ekran çizimi oluşturulmaz.
+final ValueNotifier<bool> performanceOverlayEnabled = ValueNotifier(false);
+
 /// Requests collection of resources which are no longer used. Aggressive
 /// trimming is reserved for route exit and app background transitions.
 Future<void> requestMemoryTrim({bool aggressive = false}) async {
@@ -40,7 +43,6 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
   );
   int _buildMicros = 0;
   int _rasterMicros = 0;
-  int _frameCount = 0;
 
   @override
   void initState() {
@@ -67,17 +69,23 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
       case AppLifecycleState.resumed:
         if (_sampleTimer == null || !_sampleTimer!.isActive) _startSampling();
       case AppLifecycleState.paused:
-      case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
         _sampleTimer?.cancel();
         _sampleTimer = null;
         _buildMicros = 0;
         _rasterMicros = 0;
-        _frameCount = 0;
         PaintingBinding.instance.imageCache
           ..clear()
           ..clearLiveImages();
         unawaited(requestMemoryTrim(aggressive: true));
+      case AppLifecycleState.hidden:
+        // Tarayıcı odağı kısa süre kaybettiğinde canlı oyun dokularını silmek,
+        // dönüşte CanvasKit yüzeyi hazırlanırken alttaki HTML rengini bir kare
+        // görünür bırakıyordu. Ölçümü durdur, sahne dokularını koru.
+        _sampleTimer?.cancel();
+        _sampleTimer = null;
+        _buildMicros = 0;
+        _rasterMicros = 0;
       case AppLifecycleState.inactive:
         // Do not rebuild caches for short interruptions such as system panels.
         break;
@@ -89,7 +97,6 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
     for (final timing in timings) {
       _buildMicros += timing.buildDuration.inMicroseconds;
       _rasterMicros += timing.rasterDuration.inMicroseconds;
-      _frameCount++;
     }
   }
 
@@ -97,14 +104,11 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
     if (!mounted) return;
     double? nativeCpu;
     double? memoryMb;
-    var refreshRate = 60.0;
     try {
       final metrics = await _performanceChannel
           .invokeMapMethod<String, dynamic>('sample');
       nativeCpu = (metrics?['cpuPercent'] as num?)?.toDouble();
       memoryMb = (metrics?['memoryMb'] as num?)?.toDouble();
-      refreshRate =
-          (metrics?['refreshRate'] as num?)?.toDouble().clamp(30, 240) ?? 60;
     } on PlatformException {
       // Web ve desteklenmeyen platformlarda kare süreleri kullanılır.
     } on MissingPluginException {
@@ -118,14 +122,11 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
     // ne kadar meşgul kaldığını gösterir. Tek bir ağır kareyi %100 gibi
     // göstermediği için cihazın süre içindeki gerçek yüküne daha yakındır.
     final fallbackCpu = _buildMicros / elapsedMicros * 100;
-    // GPU satırı fiziksel GPU sensörü değildir. Tamamlanan kare sayısı azaldığında
-    // yapay olarak düşmemesi için ortalama raster süresini cihazın kare bütçesine
-    // oranlar. Böylece düşük FPS, düşük yük gibi görünmez.
-    final frameBudgetMicros = 1000000 / refreshRate;
-    final averageRasterMicros = _frameCount == 0
-        ? 0.0
-        : _rasterMicros / _frameCount;
-    final gpuPercent = averageRasterMicros / frameBudgetMicros * 100;
+    // Android genel bir uygulama bazlı fiziksel GPU yüzdesi sağlamaz. Bu satır
+    // Flutter raster iş parçacığının örnek süresi boyunca gerçekten meşgul kaldığı
+    // oranı gösterir. Önceki ortalama-kare hesabı, boşta yalnızca tek bir 12 ms'lik
+    // kare çizildiğinde bile hatalı biçimde yaklaşık %70 gösteriyordu.
+    final gpuPercent = _rasterMicros / elapsedMicros * 100;
     final cpuPercent = nativeCpu ?? fallbackCpu;
     final nextText =
         'CPU ${cpuPercent.clamp(0, 100).toStringAsFixed(0)}%\n'
@@ -134,7 +135,6 @@ class _AppPerformanceOverlayState extends State<AppPerformanceOverlay>
     if (nextText != _text.value) _text.value = nextText;
     _buildMicros = 0;
     _rasterMicros = 0;
-    _frameCount = 0;
     _sampleClock.reset();
   }
 

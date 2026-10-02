@@ -31,7 +31,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('game-mode-card-elimination-101')),
+        find.byKey(const ValueKey('game-mode-card-color-bonus-101')),
         findsOneWidget,
       );
       expect(
@@ -39,6 +39,18 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('BU MODDA OYNA'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('game-mode-info-classic-101')),
+      );
+      await tester.pump(const Duration(milliseconds: 320));
+      expect(
+        find.byKey(const ValueKey('game-mode-info-dialog-classic-101')),
+        findsOneWidget,
+      );
+      expect(find.text('Standart 101 kuralları'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.close_rounded));
+      await tester.pump(const Duration(milliseconds: 320));
     }
   });
 }

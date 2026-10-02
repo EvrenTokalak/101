@@ -75,17 +75,15 @@ class _DrawnTileAttentionState extends State<_DrawnTileAttention>
   }
 
   @override
-  Widget build(BuildContext context) => RepaintBoundary(
-    child: AnimatedBuilder(
-      animation: _controller,
-      child: widget.child,
-      builder: (_, child) {
-        final progress = _controller.value;
-        final strength = 1 - progress;
-        final scale = 1 + sin(progress * pi * 4) * 0.075 * strength;
-        return Transform.scale(scale: scale, child: child);
-      },
-    ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    child: widget.child,
+    builder: (_, child) {
+      final progress = _controller.value;
+      final strength = 1 - progress;
+      final scale = 1 + sin(progress * pi * 4) * 0.075 * strength;
+      return Transform.scale(scale: scale, child: child);
+    },
   );
 }
 
@@ -237,7 +235,7 @@ class _FlyingTableTiles extends StatelessWidget {
     };
     final target = isDraw
         ? (motion.playerIndex > 0 ? _playerSource : const Alignment(0, 0.98))
-        : Alignment.center;
+        : motion.targetAlignment ?? Alignment.center;
 
     return IgnorePointer(
       child: LayoutBuilder(

@@ -199,6 +199,44 @@ void main() {
       expect(Rules.validMeldTotal([run, numberGroup, invalid]), 39);
     });
 
+    test('renkli mod yalnız bonus rengindeki seriyi iki kat sayar', () {
+      final redRun = [
+        tile(10, TileColor.red),
+        tile(11, TileColor.red),
+        tile(12, TileColor.red),
+      ];
+      final blueRun = [
+        tile(4, TileColor.blue),
+        tile(5, TileColor.blue),
+        tile(6, TileColor.blue),
+      ];
+      final mixedGroup = [
+        tile(8, TileColor.red),
+        tile(8, TileColor.blue),
+        tile(8, TileColor.black),
+      ];
+
+      expect(
+        Rules.coloredOpeningValue([redRun, blueRun, mixedGroup], TileColor.red),
+        105,
+      );
+    });
+
+    test('renkli mod açılıştan sonra kalan taşları normal değerinde sayar', () {
+      final rack = [tile(4, TileColor.red), tile(9, TileColor.blue)];
+
+      expect(
+        Rules.roundPenaltyFor(
+          rack,
+          fakeOkeyValue: 5,
+          hasOpened: true,
+          openedWithPairs: true,
+          normalOpenedPenalty: true,
+        ),
+        13,
+      );
+    });
+
     test('okey göstergenin aynı renkteki bir sonraki sayısıdır', () {
       expect(Rules.okeyNumberForIndicator(4), 5);
       expect(Rules.okeyNumberForIndicator(13), 1);
@@ -322,6 +360,47 @@ void main() {
       expect(Rules.canAddToMeld(pair, [tile(3, TileColor.blue)]), isFalse);
     });
 
+    test('tamamlanmış seri ve grup fazladan taş kabul etmez', () {
+      final completedBlackRun = Meld(
+        tiles: [
+          for (var number = 1; number <= 13; number++)
+            tile(number, TileColor.black),
+        ],
+        type: 'seri',
+      );
+      final completedGroup = Meld(
+        tiles: [
+          tile(8, TileColor.red),
+          tile(8, TileColor.blue),
+          tile(8, TileColor.black),
+          tile(8, TileColor.yellow),
+        ],
+        type: 'grup',
+      );
+
+      expect(
+        Rules.canAddToMeld(completedBlackRun, [tile(13, TileColor.black)]),
+        isFalse,
+      );
+      expect(
+        Rules.canAddToMeld(completedGroup, [tile(8, TileColor.black)]),
+        isFalse,
+      );
+    });
+
+    test('seriye aynı sayıdaki ikinci fiziksel kopya işlenemez', () {
+      final blackRun = Meld(
+        tiles: [
+          tile(4, TileColor.black),
+          tile(5, TileColor.black),
+          tile(6, TileColor.black),
+        ],
+        type: 'seri',
+      );
+
+      expect(Rules.canAddToMeld(blackRun, [tile(6, TileColor.black)]), isFalse);
+    });
+
     test('okey yalnız temsil ettiği gerçek taşla değiştirilebilir', () {
       final run = Meld(
         tiles: [
@@ -346,6 +425,22 @@ void main() {
       expect(Rules.okeyReplacementIndex(group, tile(8, TileColor.black)), 3);
       expect(
         Rules.okeyReplacementIndex(group, tile(9, TileColor.black)),
+        isNull,
+      );
+    });
+
+    test('çiftteki okey aynı taşla değiştirilip geri alınabilir', () {
+      final pair = Meld(
+        tiles: [
+          tile(13, TileColor.red),
+          tile(4, TileColor.black, isOkey: true),
+        ],
+        type: 'cift',
+      );
+
+      expect(Rules.okeyReplacementIndex(pair, tile(13, TileColor.red)), 1);
+      expect(
+        Rules.okeyReplacementIndex(pair, tile(13, TileColor.blue)),
         isNull,
       );
     });

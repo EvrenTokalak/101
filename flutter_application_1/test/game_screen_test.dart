@@ -48,6 +48,14 @@ void main() {
       expect(find.byKey(const ValueKey('group-meld-grid')), findsOneWidget);
       expect(find.byKey(const ValueKey('table-draw-column')), findsOneWidget);
       expect(find.byKey(const ValueKey('pair-meld-grid')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pair-grid-viewer')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('pair-grid-viewer')),
+          matching: find.byType(InteractiveViewer),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('opening-rule-caption')),
         findsOneWidget,
@@ -58,6 +66,24 @@ void main() {
         find.byKey(const ValueKey('pair-area-drop-target')),
         findsOneWidget,
       );
+      final sideOverlapPairs = <(String, String)>[
+        ('Oyuncu 4', 'Oyuncu 3'),
+        ('Oyuncu 4', 'Oyuncu 4'),
+        ('Oyuncu 2', 'Oyuncu 2'),
+      ];
+      for (final pair in sideOverlapPairs) {
+        final profileRect = tester.getRect(
+          find.byKey(ValueKey('seat-${pair.$1}')),
+        );
+        final discardTargetRect = tester.getRect(
+          find.byKey(ValueKey('discard-target-${pair.$2}')),
+        );
+        expect(
+          profileRect.overlaps(discardTargetRect),
+          isFalse,
+          reason: '${pair.$1} / ${pair.$2} overlap at $size',
+        );
+      }
 
       final runGridSize = tester.getSize(
         find.byKey(const ValueKey('run-meld-grid')),
@@ -120,8 +146,7 @@ void main() {
         );
         expect(player3Discard.dy, closeTo(player2Discard.dy, 0.1));
         expect(player3Discard.dx, closeTo(player4Discard.dx, 0.1));
-        expect(player1Discard.dx, greaterThan(player2Discard.dx));
-        expect(player1Discard.dx - player2Discard.dx, lessThanOrEqualTo(10));
+        expect(player1Discard.dx, closeTo(player2Discard.dx, 0.1));
 
         final runGridRect = tester.getRect(
           find.byKey(const ValueKey('run-meld-grid')),
@@ -129,6 +154,26 @@ void main() {
         final groupGridRect = tester.getRect(
           find.byKey(const ValueKey('group-meld-grid')),
         );
+        final leftBotRect = tester.getRect(
+          find.byKey(const ValueKey('seat-Oyuncu 4')),
+        );
+        final rightBotRect = tester.getRect(
+          find.byKey(const ValueKey('seat-Oyuncu 2')),
+        );
+        expect(leftBotRect.right, lessThanOrEqualTo(runGridRect.left));
+        expect(rightBotRect.left, greaterThanOrEqualTo(groupGridRect.right));
+        final leftUpperDiscardTarget = tester.getRect(
+          find.byKey(const ValueKey('discard-target-Oyuncu 3')),
+        );
+        final leftLowerDiscardTarget = tester.getRect(
+          find.byKey(const ValueKey('discard-target-Oyuncu 4')),
+        );
+        final rightUpperDiscardTarget = tester.getRect(
+          find.byKey(const ValueKey('discard-target-Oyuncu 2')),
+        );
+        expect(leftBotRect.overlaps(leftUpperDiscardTarget), isFalse);
+        expect(leftBotRect.overlaps(leftLowerDiscardTarget), isFalse);
+        expect(rightBotRect.overlaps(rightUpperDiscardTarget), isFalse);
         final openingCaptionCenter = tester.getCenter(
           find.byKey(const ValueKey('opening-rule-caption')),
         );
@@ -196,7 +241,7 @@ void main() {
         final gridViewers = tester.widgetList<InteractiveViewer>(
           find.byType(InteractiveViewer),
         );
-        expect(gridViewers, hasLength(2));
+        expect(gridViewers, hasLength(3));
         for (final gridViewer in gridViewers) {
           expect(gridViewer.panEnabled, isTrue);
           expect(gridViewer.scaleEnabled, isTrue);
@@ -240,9 +285,7 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  testWidgets('rack tile inserts between tiles and pushes right', (
-    tester,
-  ) async {
+  testWidgets('rack tile inserts using only its source gap', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -250,7 +293,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 2700));
 
-    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-1'));
     final targetSlot = find.byKey(const ValueKey('rack-slot-7'));
     final shiftedSlot = find.byKey(const ValueKey('rack-slot-8'));
     final sourceTile = find.descendant(
@@ -268,7 +311,7 @@ void main() {
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
       Offset(
-            targetRect.center.dx + targetRect.width * 0.25,
+            targetRect.center.dx + targetRect.width * 0.40,
             targetRect.center.dy,
           ) -
           tester.getCenter(sourceSlot),
@@ -276,7 +319,10 @@ void main() {
     await tester.pump();
 
     expect(
-      find.descendant(of: shiftedSlot, matching: find.byKey(sourceKey)),
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-8')),
+        matching: find.byKey(sourceKey),
+      ),
       findsOneWidget,
     );
     expect(
@@ -286,9 +332,49 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.pump(const Duration(milliseconds: 50));
   });
 
-  testWidgets('rack tile pushes occupied tiles to the left', (tester) async {
+  testWidgets('github rack drag uses an empty source placeholder', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final draggableFinder = find.descendant(
+      of: sourceSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final draggable = tester.widget<Draggable>(draggableFinder);
+    final placeholder = draggable.childWhenDragging as SizedBox;
+    expect(placeholder.width, greaterThan(0));
+    expect(placeholder.height, greaterThan(0));
+
+    final gesture = await tester.startGesture(tester.getCenter(sourceSlot));
+    await gesture.moveBy(const Offset(40, -40));
+    await tester.pump();
+    final sourceTileWhileDragging = find.descendant(
+      of: sourceSlot,
+      matching: find.byKey(const ValueKey('rack-visible-tile-0')),
+    );
+    expect(sourceTileWhileDragging, findsNothing);
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      find.descendant(
+        of: sourceSlot,
+        matching: find.byKey(const ValueKey('rack-visible-tile-0')),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('left edge drop inserts before the target tile', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -320,8 +406,97 @@ void main() {
 
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
-      Offset(targetRect.left + targetRect.width * 0.35, targetRect.center.dy) -
+      Offset(targetRect.left + targetRect.width * 0.10, targetRect.center.dy) -
           tester.getCenter(sourceSlot),
+    );
+    await tester.pump();
+
+    expect(
+      find.descendant(of: targetSlot, matching: find.byKey(sourceKey)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-8')),
+        matching: find.byKey(targetKey),
+      ),
+      findsOneWidget,
+    );
+    // Kenar bandındaki bırakma, çift dokunma tanıyıcısının kısa bekleme
+    // süresini başlatabilir; test kapanmadan bu süreyi tamamla.
+    await tester.pump(const Duration(milliseconds: 50));
+  });
+
+  testWidgets('dropping on a tile body pushes only that tile chain', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final targetSlot = find.byKey(const ValueKey('rack-slot-8'));
+    final sourceTile = find.descendant(
+      of: sourceSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final targetTile = find.descendant(
+      of: targetSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final sourceKey = tester.widget<Draggable>(sourceTile).key!;
+    final targetKey = tester.widget<Draggable>(targetTile).key!;
+
+    await tester.dragFrom(
+      tester.getCenter(sourceSlot),
+      tester.getCenter(targetSlot) - tester.getCenter(sourceSlot),
+    );
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-8')),
+        matching: find.byKey(sourceKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-slot-9')),
+        matching: find.byKey(targetKey),
+      ),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  });
+
+  testWidgets('rack body drop can push a six tile chain', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final targetSlot = find.byKey(const ValueKey('rack-slot-5'));
+    final sourceTile = find.descendant(
+      of: sourceSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final targetTile = find.descendant(
+      of: targetSlot,
+      matching: find.byWidgetPredicate((widget) => widget is Draggable),
+    );
+    final sourceKey = tester.widget<Draggable>(sourceTile).key!;
+    final targetKey = tester.widget<Draggable>(targetTile).key!;
+
+    await tester.dragFrom(
+      tester.getCenter(sourceSlot),
+      tester.getCenter(targetSlot) - tester.getCenter(sourceSlot),
     );
     await tester.pump();
 
@@ -336,6 +511,7 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.pump(const Duration(milliseconds: 50));
   });
 
   testWidgets('middle area shows pairs and an unlabeled draw tray', (
@@ -417,12 +593,76 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1800));
 
     expect(find.byKey(const ValueKey('timed-turn-countdown')), findsOneWidget);
-    expect(find.text('7 SN'), findsOneWidget);
+    expect(find.text('7 SN'), findsNothing);
 
     await tester.pump(const Duration(seconds: 7));
 
     expect(find.byKey(const ValueKey('timed-turn-countdown')), findsNothing);
     expect(find.textContaining('Süre doldu'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('katlamali mod guncel acilis hedeflerini gosterir', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameScreen(
+          startingPlayer: 0,
+          launchConfig: GameLaunchConfig.gameMode(
+            mode: OkeyGameMode.progressive,
+            id: 'progressive',
+            label: 'Katlamali',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final target = find.byKey(const ValueKey('progressive-opening-target'));
+    expect(target, findsOneWidget);
+    expect(
+      find.descendant(of: target, matching: find.text('PER: 101')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: target, matching: find.text('ÇİFT: 5')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('renk bonusu gridde buyuk gorunup mod basligina yerlesir', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameScreen(
+          startingPlayer: 0,
+          launchConfig: GameLaunchConfig.gameMode(
+            mode: OkeyGameMode.colorBonus101,
+            id: 'color-bonus-101',
+            label: 'Renkli 101',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('color-bonus-round-intro')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(milliseconds: 1400));
+    expect(find.byKey(const ValueKey('color-bonus-round-intro')), findsNothing);
+    expect(find.textContaining('RENKLİ •'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

@@ -129,8 +129,10 @@ class _TileBack extends StatelessWidget {
 }
 
 class _TableDiscardPile extends StatelessWidget {
+  final Key? targetKey;
   final List<Tile> tiles;
   final String label;
+  final String? keyLabel;
   final bool active;
   final ValueChanged<_RackDragData>? onDrop;
   final bool takeEnabled;
@@ -143,8 +145,10 @@ class _TableDiscardPile extends StatelessWidget {
   final Alignment visualAlignment;
 
   const _TableDiscardPile({
+    this.targetKey,
     required this.tiles,
     required this.label,
+    this.keyLabel,
     this.active = false,
     this.onDrop,
     this.takeEnabled = false,
@@ -159,10 +163,11 @@ class _TableDiscardPile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    key: ValueKey('discard-target-$label'),
+    key: ValueKey('discard-target-${keyLabel ?? label}'),
     width: hitWidth,
     height: hitHeight ?? 66,
     child: DragTarget<_RackDragData>(
+      key: targetKey,
       onWillAcceptWithDetails: (details) {
         final returningTakenTile =
             returnTileId != null &&
@@ -186,7 +191,7 @@ class _TableDiscardPile extends StatelessWidget {
         return Align(
           alignment: visualAlignment,
           child: SizedBox(
-            key: ValueKey('discard-$label'),
+            key: ValueKey('discard-${keyLabel ?? label}'),
             width: 38,
             height: 60,
             child: FittedBox(
@@ -244,15 +249,21 @@ class _TableDiscardPile extends StatelessWidget {
                                         Icon(
                                           Icons.undo_rounded,
                                           color: Colors.white,
-                                          size: 17,
+                                          size: 16,
                                         ),
-                                        Text(
-                                          'GERİ BIRAK',
-                                          maxLines: 1,
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 5.5,
-                                            fontWeight: FontWeight.w900,
+                                        SizedBox(height: 1),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            'GERİ\nBIRAK',
+                                            maxLines: 2,
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 6.4,
+                                              height: 0.88,
+                                              fontWeight: FontWeight.w900,
+                                            ),
                                           ),
                                         ),
                                       ],

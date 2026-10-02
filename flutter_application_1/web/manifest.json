@@ -3,10 +3,10 @@
     "short_name": "flutter_application_1",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#071B14",
+    "theme_color": "#071B14",
+    "description": "101 Okey",
+    "orientation": "landscape",
     "prefer_related_applications": false,
     "icons": [
         {

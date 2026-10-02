@@ -27,17 +27,24 @@ void main() {
     expect(progress.playerName, 'Gökde');
   });
 
-  test('görseldeki seviye bantları doğru unvan ve XP eşiğini verir', () {
+  test('seviye yükseldikçe XP eşikleri kademeli büyür', () {
     expect(progress.title, 'Learner');
+    expect(progress.xpForNextLevel, 75);
+
+    progress.reset(level: 2);
+    expect(progress.xpForNextLevel, 30);
+    progress.reset(level: 3);
+    expect(progress.xpForNextLevel, 50);
+    progress.reset(level: 4);
     expect(progress.xpForNextLevel, 50);
 
     progress.reset(level: 50);
     expect(progress.title, 'Pro');
-    expect(progress.xpForNextLevel, 100);
+    expect(progress.xpForNextLevel, 220);
 
     progress.reset(level: 95);
     expect(progress.title, 'Grandmaster');
-    expect(progress.xpForNextLevel, 150);
+    expect(progress.xpForNextLevel, 450);
   });
 
   test('Hemen Oyna sonuçtan bağımsız sabit XP verir', () {
@@ -71,7 +78,25 @@ void main() {
     expect(reward.coins, 300);
     expect(reward.levelsGained, 1);
     expect(progress.level, 10);
-    expect(progress.levelXp, 45);
+    expect(progress.levelXp, 20);
+  });
+
+  test('sonraki tur galibiyetleri daha fazla XP ve altın verir', () {
+    final reward = progress.recordCompletedGame(
+      config: const GameLaunchConfig.gameMode(
+        mode: OkeyGameMode.classic101,
+        id: 'classic-101',
+        label: 'Klasik 101',
+      ),
+      won: true,
+      openedHand: false,
+      finishedHand: false,
+      roundNumber: 3,
+    );
+
+    expect(reward.xp, 80);
+    expect(reward.coins, 400);
+    expect(reward.xpBreakdown, contains('Tur galibiyeti +20 XP'));
   });
 
   test('oda ücreti harcanır, yetersiz bakiye reddedilir ve ödül eklenir', () {

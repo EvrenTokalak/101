@@ -201,60 +201,75 @@ class RackSolver {
     List<_RackMeldCandidate> candidates,
   ) {
     if (candidates.isEmpty) return const [];
-    _RackPlan greedy(
-      List<_RackMeldCandidate> ordered, {
-      _RackMeldCandidate? seed,
-    }) {
-      final usedIds = <int>{};
-      var score = 0;
-      var usedTileCount = 0;
-      var jokerScore = 0;
-      final melds = <_RackMeldCandidate>[];
-      if (seed != null) {
-        usedIds.addAll(seed.tiles.map((tile) => tile.id));
-        score = Rules.meldValue(seed.tiles);
-        if (seed.tiles.any((tile) => tile.isOkey)) jokerScore = score;
-        usedTileCount = seed.tiles.length;
-        melds.add(seed);
+    // Onceki acgozlu secici, bir per iki daha degerli peri engellediginde en
+    // yuksek eli kacirabiliyordu. Istakadaki fiziksel taslari bit maskesiyle
+    // tarayarak cakismayan perlerin gercek en yuksek puanli birlesimini bul.
+    final tileIds = <int>{
+      for (final candidate in candidates)
+        for (final tile in candidate.tiles) tile.id,
+    }.toList();
+    final bitForId = <int, int>{
+      for (var index = 0; index < tileIds.length; index++)
+        tileIds[index]: 1 << index,
+    };
+    final masks = <int>[
+      for (final candidate in candidates)
+        candidate.tiles.fold<int>(0, (mask, tile) => mask | bitForId[tile.id]!),
+    ];
+    final candidatesByBit = <int, List<int>>{};
+    for (var index = 0; index < masks.length; index++) {
+      var bits = masks[index];
+      while (bits != 0) {
+        final bit = bits & -bits;
+        candidatesByBit.putIfAbsent(bit, () => <int>[]).add(index);
+        bits &= ~bit;
       }
-      for (final candidate in ordered) {
-        if (candidate.tiles.any((tile) => usedIds.contains(tile.id))) continue;
-        usedIds.addAll(candidate.tiles.map((tile) => tile.id));
-        score += Rules.meldValue(candidate.tiles);
-        if (candidate.tiles.any((tile) => tile.isOkey)) {
-          jokerScore += Rules.meldValue(candidate.tiles);
+    }
+    final memo = <int, _RackPlan>{0: const _RackPlan()};
+
+    _RackPlan solve(int availableMask) {
+      final cached = memo[availableMask];
+      if (cached != null) return cached;
+      int? pivot;
+      var smallestOptionCount = 1 << 30;
+      var remainingBits = availableMask;
+      while (remainingBits != 0) {
+        final bit = remainingBits & -remainingBits;
+        var optionCount = 0;
+        for (final index in candidatesByBit[bit] ?? const <int>[]) {
+          if (masks[index] & availableMask == masks[index]) optionCount++;
         }
-        usedTileCount += candidate.tiles.length;
-        melds.add(candidate);
+        if (optionCount < smallestOptionCount) {
+          pivot = bit;
+          smallestOptionCount = optionCount;
+          if (optionCount == 0) break;
+        }
+        remainingBits &= ~bit;
       }
-      return _RackPlan(
-        melds: melds,
-        score: score,
-        tileCount: usedTileCount,
-        jokerScore: jokerScore,
-      );
+
+      final pivotBit = pivot!;
+      var best = solve(availableMask & ~pivotBit);
+      for (final index in candidatesByBit[pivotBit] ?? const <int>[]) {
+        final candidateMask = masks[index];
+        if (candidateMask & availableMask != candidateMask) continue;
+        final candidate = candidates[index];
+        final tail = solve(availableMask & ~candidateMask);
+        final value = Rules.meldValue(candidate.tiles);
+        final plan = _RackPlan(
+          melds: [candidate, ...tail.melds],
+          score: value + tail.score,
+          tileCount: candidate.tiles.length + tail.tileCount,
+          jokerScore:
+              (candidate.tiles.any((tile) => tile.isOkey) ? value : 0) +
+              tail.jokerScore,
+        );
+        if (plan.isBetterThan(best)) best = plan;
+      }
+      memo[availableMask] = best;
+      return best;
     }
 
-    final ordered = List<_RackMeldCandidate>.from(candidates)
-      ..sort((a, b) {
-        final aUsesOkey = a.tiles.any((tile) => tile.isOkey);
-        final bUsesOkey = b.tiles.any((tile) => tile.isOkey);
-        if (aUsesOkey != bUsesOkey) return aUsesOkey ? -1 : 1;
-        if (aUsesOkey) {
-          final okeyValue = Rules.meldValue(b.tiles)
-              .compareTo(Rules.meldValue(a.tiles));
-          if (okeyValue != 0) return okeyValue;
-        }
-        final length = b.tiles.length.compareTo(a.tiles.length);
-        return length != 0
-            ? length
-            : Rules.meldValue(b.tiles).compareTo(Rules.meldValue(a.tiles));
-      });
-    var plan = greedy(ordered);
-    for (final seed in ordered.take(min(96, ordered.length))) {
-      final seeded = greedy(ordered, seed: seed);
-      if (seeded.isBetterThan(plan)) plan = seeded;
-    }
+    final plan = solve((1 << tileIds.length) - 1);
     final result = plan.melds.map((candidate) => candidate.tiles).toList();
     result.sort((a, b) => Rules.meldValue(b).compareTo(Rules.meldValue(a)));
     return result;
@@ -297,13 +312,13 @@ class _RackPlan {
   });
 
   bool isBetterThan(_RackPlan other) =>
-      jokerScore > other.jokerScore ||
-      (jokerScore == other.jokerScore && tileCount > other.tileCount) ||
-      (jokerScore == other.jokerScore &&
+      score > other.score ||
+      (score == other.score && jokerScore > other.jokerScore) ||
+      (score == other.score &&
+          jokerScore == other.jokerScore &&
+          tileCount > other.tileCount) ||
+      (score == other.score &&
+          jokerScore == other.jokerScore &&
           tileCount == other.tileCount &&
-          score > other.score) ||
-      (jokerScore == other.jokerScore &&
-          tileCount == other.tileCount &&
-          score == other.score &&
           melds.length < other.melds.length);
 }

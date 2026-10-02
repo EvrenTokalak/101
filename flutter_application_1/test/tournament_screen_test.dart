@@ -1,10 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_application_1/tournament.dart';
 import 'package:flutter_application_1/main.dart' as app;
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('turnuva sayacı ilk açılışta başlar', () async {
+    final firstDeadline = await initializeTournamentCycle();
+    expect(firstDeadline.isAfter(DateTime.now()), isTrue);
+    expect(
+      firstDeadline.difference(DateTime.now()),
+      lessThanOrEqualTo(const Duration(hours: 24)),
+    );
+  });
+
+  test('geçmiş turnuva süresi yeni döneme taşınır', () async {
+    SharedPreferences.setMockInitialValues({
+      'tournament.deadline_ms': DateTime.now()
+          .subtract(const Duration(hours: 25))
+          .millisecondsSinceEpoch,
+    });
+    final rolledDeadline = await initializeTournamentCycle();
+    expect(rolledDeadline.isAfter(DateTime.now()), isTrue);
+    expect(
+      rolledDeadline.difference(DateTime.now()),
+      lessThanOrEqualTo(const Duration(hours: 24)),
+    );
+  });
+
   testWidgets('turnuva ağacı geniş ve dar ekranlarda taşmadan görünür', (
     tester,
   ) async {
@@ -20,9 +46,9 @@ void main() {
       expect(find.text('ÇEYREK FİNAL'), findsOneWidget);
       expect(find.text('YARI FİNAL'), findsOneWidget);
       expect(find.text('FİNAL'), findsOneWidget);
-      expect(find.text('OYUNCU 2'), findsNWidgets(3));
-      expect(find.text('OYUNCU 3'), findsNWidgets(3));
-      expect(find.text('OYUNCU 4'), findsNWidgets(3));
+      expect(find.text('4 OYUNCU'), findsOneWidget);
+      expect(find.text('3 TUR'), findsWidgets);
+      expect(find.text('EN DÜŞÜK PUAN'), findsOneWidget);
       expect(find.textContaining('Rakip'), findsNothing);
       expect(find.byKey(const ValueKey('tournament-action')), findsOneWidget);
     }

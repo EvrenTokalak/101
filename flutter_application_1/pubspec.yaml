@@ -58,11 +58,58 @@ flutter:
 
   assets:
     - assets/sounds/
-    - images/rack2.png
+    - images/rack2.jpg
     - images/tas_ters.png
     - images/anamenu/menubg.png
-    - images/ui/
+    - images/ui/action_blue.png
+    - images/ui/action_gold.png
+    - images/ui/action_green.png
+    - images/ui/avatar_bot2.jpg
+    - images/ui/avatar_bot3.jpg
+    - images/ui/avatar_bot4.jpg
+    - images/ui/avatar_player.jpg
+    - images/ui/coin.png
+    - images/ui/end_round_banner.png
+    - images/ui/game_settings.png
+    - images/ui/settings.png
+    - images/ui/settings_close.png
+    - images/ui/settings_ok.png
+    - images/ui/settings_switch_off.png
+    - images/ui/settings_switch_on.png
+    - images/ui/home/avatar_frame.png
+    - images/ui/home/glossy_green_pill_opt.png
+    - images/ui/home/gold_bar.png
+    - images/ui/home/gold_icon.png
+    - images/ui/home/hemenoyna2.png
+    - images/ui/home/level_icon.png
+    - images/ui/home/logoasil.png
+    - images/ui/icons/gorevler.png
+    - images/ui/icons/gunluk_odul_opt.png
+    - images/ui/icons/katlamali.png
+    - images/ui/icons/klasik.png
+    - images/ui/icons/masa_sec.png
+    - images/ui/icons/oyun_modlari_yeni_opt.png
+    - images/ui/icons/renk_bonusu.png
+    - images/ui/icons/turnuva.png
+    - images/ui/icons/zamanli.png
     - images/rooms/
+    - images/store/racks/
+    - images/store/tiles/
+    - images/store/rack_skins/rack1.jpg
+    - images/store/rack_skins/rack2.jpg
+    - images/store/rack_skins/rack3.jpg
+    - images/store/rack_skins/rack4.jpg
+    - images/store/tile_skins/
+    - images/store/fake_okeys/
+    - images/store/backgrounds/
+
+  fonts:
+    - family: Baloo 2
+      fonts:
+        - asset: fonts/Baloo2-Variable.ttf
+          weight: 700
+        - asset: fonts/Baloo2-Variable.ttf
+          weight: 800
 
   # To add assets to your application, add an assets section, like this:
   # assets:

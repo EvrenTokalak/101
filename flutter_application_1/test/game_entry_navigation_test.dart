@@ -26,24 +26,22 @@ void main() {
     playerProgress.reset();
   });
 
-  testWidgets('Eliminasyon seçimi ayrı oyun modu olarak açılır', (
-    tester,
-  ) async {
+  testWidgets('Renkli seçim ayrı oyun modu olarak açılır', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const MaterialApp(home: GameModeSelectScreen()));
     await tester.pump(const Duration(milliseconds: 650));
 
     await tester.tap(
-      find.byKey(const ValueKey('game-mode-card-elimination-101')),
+      find.byKey(const ValueKey('game-mode-card-color-bonus-101')),
     );
     await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.byKey(const ValueKey('game-mode-start')));
     await pumpRouteTransition(tester);
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
-    expect(game.launchConfig.mode, OkeyGameMode.elimination101);
-    expect(game.launchConfig.modeLabel, 'Eliminasyon 101');
+    expect(game.launchConfig.mode, OkeyGameMode.colorBonus101);
+    expect(game.launchConfig.modeLabel, 'Renkli 101');
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
   });
@@ -60,7 +58,7 @@ void main() {
     await pumpRouteTransition(tester);
     expect(find.byType(GameModeSelectScreen), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('game-mode-card-elimination-101')),
+      find.byKey(const ValueKey('game-mode-card-color-bonus-101')),
       findsOneWidget,
     );
 

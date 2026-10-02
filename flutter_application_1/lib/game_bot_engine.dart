@@ -5,12 +5,14 @@ class BotTurnResult {
   final int openedMeldCount;
   final int processedTileCount;
   final String? openedType;
+  final int? openingValue;
 
   const BotTurnResult({
     required this.discarded,
     required this.openedMeldCount,
     required this.processedTileCount,
     required this.openedType,
+    required this.openingValue,
   });
 }
 
@@ -71,12 +73,23 @@ class _BotWorker {
     _pending.clear();
   }
 
+  /// Eller arasında bot isolate heap'ini tamamen bırakır. Devam eden bir istek
+  /// varsa onun Future zincirini yarım bırakmamak için mevcut işçi korunur.
+  bool releaseIfIdle() {
+    if (_pending.isNotEmpty || (_starting != null && _commands == null)) {
+      return false;
+    }
+    shutdown();
+    return true;
+  }
+
   Future<_BotComputation> calculate(
     BotPlayer bot,
     List<Meld> melds,
     bool allowOpening,
     int minimumStandardScore,
     int minimumPairCount,
+    TileColor? bonusColor,
   ) async {
     await _ensureStarted();
     final id = ++_serial;
@@ -90,6 +103,7 @@ class _BotWorker {
       allowOpening,
       minimumStandardScore,
       minimumPairCount,
+      bonusColor,
     ]);
     return await completer.future as _BotComputation;
   }
@@ -101,6 +115,7 @@ class _BotWorker {
     bool allowOpening,
     int minimumStandardScore,
     int minimumPairCount,
+    TileColor? bonusColor,
   ) async {
     await _ensureStarted();
     final id = ++_serial;
@@ -115,6 +130,7 @@ class _BotWorker {
       allowOpening,
       minimumStandardScore,
       minimumPairCount,
+      bonusColor,
     ]);
     return await completer.future as bool;
   }
@@ -152,6 +168,7 @@ void _botWorkerMain(SendPort output) {
           allowOpening: request[5]! as bool,
           minimumStandardScore: request[6]! as int,
           minimumPairCount: request[7]! as int,
+          bonusColor: request[8] as TileColor?,
         ),
       ]);
       return;
@@ -163,6 +180,7 @@ void _botWorkerMain(SendPort output) {
       allowOpening: request[4]! as bool,
       minimumStandardScore: request[5]! as int,
       minimumPairCount: request[6]! as int,
+      bonusColor: request[7] as TileColor?,
     );
     output.send(<Object?>[id, _BotComputation(result, bot, melds)]);
   });
@@ -175,6 +193,7 @@ Future<bool> _computeBotWantsDiscard(
   required bool allowOpening,
   required int minimumStandardScore,
   required int minimumPairCount,
+  TileColor? bonusColor,
 }) {
   if (kIsWeb) {
     return Future(
@@ -185,6 +204,7 @@ Future<bool> _computeBotWantsDiscard(
         allowOpening: allowOpening,
         minimumStandardScore: minimumStandardScore,
         minimumPairCount: minimumPairCount,
+        bonusColor: bonusColor,
       ),
     );
   }
@@ -195,6 +215,7 @@ Future<bool> _computeBotWantsDiscard(
     allowOpening,
     minimumStandardScore,
     minimumPairCount,
+    bonusColor,
   );
 }
 
@@ -214,9 +235,11 @@ Future<_BotComputation> _computeBotTurnInBackground(
   required bool allowOpening,
   required int minimumStandardScore,
   required int minimumPairCount,
+  TileColor? bonusColor,
 }) {
   BotPlayer cloneBot() => BotPlayer(
     name: sourceBot.name,
+    displayName: sourceBot.displayName,
     tileCount: sourceBot.tileCount,
     penalty: sourceBot.penalty,
     hasOpened: sourceBot.hasOpened,
@@ -235,6 +258,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
       allowOpening: allowOpening,
       minimumStandardScore: minimumStandardScore,
       minimumPairCount: minimumPairCount,
+      bonusColor: bonusColor,
     );
     return _BotComputation(result, bot, melds);
   }
@@ -250,6 +274,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
     allowOpening,
     minimumStandardScore,
     minimumPairCount,
+    bonusColor,
   );
 }
 
@@ -294,6 +319,7 @@ class BotEngine {
     bool allowOpening = true,
     int minimumStandardScore = 101,
     int minimumPairCount = 5,
+    TileColor? bonusColor,
   }) {
     if (bot.hasOpened) {
       if (_canProcess(discarded, tableMelds)) return true;
@@ -306,7 +332,7 @@ class BotEngine {
 
     final hand = [...bot.hand, discarded];
     final standard = _standardMeldsKeepingDiscard(hand);
-    final standardScore = _meldScore(standard);
+    final standardScore = _meldScore(standard, bonusColor: bonusColor);
     final standardUsesDiscard = standard
         .expand((meld) => meld)
         .any((tile) => tile.id == discarded.id);
@@ -324,17 +350,19 @@ class BotEngine {
     bool allowOpening = true,
     int minimumStandardScore = 101,
     int minimumPairCount = 5,
+    TileColor? bonusColor,
   }) {
     var openedMeldCount = 0;
     var processedTileCount = 0;
     String? openedType;
+    int? openingValue;
 
     final pairAreaIsOpen = Rules.canLayPairsAfterStandard(tableMelds);
 
     if (!bot.hasOpened) {
       final standard = _standardMeldsKeepingDiscard(bot.hand);
       final pairs = _pairsKeepingDiscard(bot.hand);
-      final standardScore = _meldScore(standard);
+      final standardScore = _meldScore(standard, bonusColor: bonusColor);
       final canOpenStandard =
           allowOpening && standardScore >= minimumStandardScore;
       final canOpenPairs = allowOpening && pairs.length >= minimumPairCount;
@@ -347,6 +375,7 @@ class BotEngine {
                     standard.expand((meld) => meld).length);
         final openingGroups = choosePairs ? pairs : standard;
         openedType = choosePairs ? 'cift' : 'seri';
+        openingValue = choosePairs ? pairs.length : standardScore;
         _moveGroupsToTable(bot, openingGroups, tableMelds, openedType);
         openedMeldCount = openingGroups.length;
         bot.hasOpened = true;
@@ -387,6 +416,7 @@ class BotEngine {
       openedMeldCount: openedMeldCount,
       processedTileCount: processedTileCount,
       openedType: openedType,
+      openingValue: openingValue,
     );
   }
 
@@ -506,8 +536,10 @@ class BotEngine {
     return value;
   }
 
-  static int _meldScore(List<List<Tile>> melds) =>
-      melds.fold(0, (sum, meld) => sum + Rules.meldValue(meld));
+  static int _meldScore(List<List<Tile>> melds, {TileColor? bonusColor}) =>
+      bonusColor == null
+      ? melds.fold(0, (sum, meld) => sum + Rules.meldValue(meld))
+      : Rules.coloredOpeningValue(melds, bonusColor);
 
   static List<List<Tile>> _standardMeldsKeepingDiscard(List<Tile> hand) {
     final direct = _standardMelds(hand);

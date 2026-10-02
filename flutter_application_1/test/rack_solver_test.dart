@@ -69,6 +69,24 @@ void main() {
     );
   });
 
+  test('okey toplam puani en yuksek yapan planda kullanilir', () {
+    final joker = tile(7, TileColor.yellow, isOkey: true);
+    final rack = [
+      tile(2, TileColor.red),
+      tile(3, TileColor.red),
+      for (var number = 9; number <= 13; number++) tile(number, TileColor.blue),
+      joker,
+    ];
+
+    final melds = RackSolver.standardMelds(rack);
+    final score = melds.fold(0, (sum, meld) => sum + Rules.meldValue(meld));
+    final jokerMeld = melds.singleWhere((meld) => meld.contains(joker));
+
+    expect(score, 64);
+    expect(Rules.meldValue(jokerMeld), 9);
+    expect(melds.every(Rules.isValidMeld), isTrue);
+  });
+
   test(
     'per diz sahte okeyi kendi renk ve sayısında normal taş olarak kullanır',
     () {

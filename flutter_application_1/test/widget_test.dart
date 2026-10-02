@@ -26,4 +26,61 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('ana menü mağaza sayfasını açar', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: MainMenuScreen()));
+    await tester.pump(const Duration(milliseconds: 750));
+
+    await tester.tap(find.byKey(const ValueKey('main-store-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 180));
+
+    expect(find.text('MAĞAZA'), findsOneWidget);
+    expect(find.byKey(const ValueKey('store-racks-tab')), findsOneWidget);
+    expect(find.byKey(const ValueKey('store-tiles-tab')), findsOneWidget);
+    expect(find.byKey(const ValueKey('store-backgrounds-tab')), findsOneWidget);
+    expect(find.byKey(const ValueKey('store-racks-list')), findsOneWidget);
+    expect(find.text('KLASİK AHŞAP'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('store-tiles-tab')));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.byKey(const ValueKey('store-tiles-list')), findsOneWidget);
+    expect(find.text('KLASİK TAŞ'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('store-backgrounds-tab')));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      find.byKey(const ValueKey('store-backgrounds-list')),
+      findsOneWidget,
+    );
+    expect(find.text('GECE MAVİSİ'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ana menu eylemleri referanstaki ikiye iki sirada gorunur', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: MainMenuScreen()));
+    await tester.pump(const Duration(milliseconds: 750));
+
+    final missions = tester.getCenter(find.text('GÖREVLER'));
+    final modes = tester.getCenter(find.text('OYUN MODLARI'));
+    final rooms = tester.getCenter(find.text('MASA SEÇ'));
+    final tournament = tester.getCenter(find.text('TURNUVALAR'));
+    final quickPlay = tester.getCenter(find.text('HEMEN OYNA'));
+
+    expect(missions.dy, closeTo(modes.dy, 0.1));
+    expect(rooms.dy, closeTo(tournament.dy, 0.1));
+    expect(missions.dy, lessThan(rooms.dy));
+    expect(rooms.dy, lessThan(quickPlay.dy));
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

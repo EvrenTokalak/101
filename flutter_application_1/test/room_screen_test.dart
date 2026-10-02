@@ -28,10 +28,27 @@ void main() {
       await tester.pump(const Duration(milliseconds: 700));
 
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
-      expect(find.text('Oda Seç'), findsOneWidget);
+      expect(find.text('MASA SEÇ'), findsOneWidget);
       expect(find.text('Odaya Gir'), findsOneWidget);
       expect(find.text('BAŞLANGIÇ'), findsOneWidget);
     }
+  });
+
+  testWidgets('son masa 25. seviyede açılır', (tester) async {
+    playerProgress.reset(level: 0);
+    addTearDown(playerProgress.reset);
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: RoomSelectScreen()));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('SEVİYE 25'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('room-card-3')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('25. SEVİYEDE AÇILIR'), findsOneWidget);
+    await tester.tap(find.text('Odaya Gir'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.textContaining('25. seviyede açılır'), findsOneWidget);
   });
 
   testWidgets('yetersiz altınla ücretli odaya girilemez', (tester) async {

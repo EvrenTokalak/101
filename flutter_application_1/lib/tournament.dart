@@ -1,10 +1,39 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_language.dart';
+import 'app_controls.dart';
 import 'game_launch.dart';
 import 'game_navigation.dart';
+
+const _tournamentCycleDuration = Duration(hours: 24);
+const _tournamentDeadlineKey = 'tournament.deadline_ms';
+
+Future<DateTime> initializeTournamentCycle() async {
+  final now = DateTime.now();
+  SharedPreferencesAsync? preferences;
+  int? saved;
+  try {
+    preferences = SharedPreferencesAsync();
+    saved = await preferences.getInt(_tournamentDeadlineKey);
+  } catch (_) {}
+  var deadline = saved == null
+      ? now.add(_tournamentCycleDuration)
+      : DateTime.fromMillisecondsSinceEpoch(saved);
+  while (!deadline.isAfter(now)) {
+    deadline = deadline.add(_tournamentCycleDuration);
+  }
+  try {
+    if (preferences == null) return deadline;
+    await preferences.setInt(
+      _tournamentDeadlineKey,
+      deadline.millisecondsSinceEpoch,
+    );
+  } catch (_) {}
+  return deadline;
+}
 
 class TournamentScreen extends StatefulWidget {
   const TournamentScreen({super.key});
@@ -19,7 +48,6 @@ class _TournamentScreenState extends State<TournamentScreen> {
   bool _eliminated = false;
   bool _champion = false;
   bool _matchStarted = false;
-  static const _deadlineKey = 'tournament.deadline_ms';
   DateTime? _deadline;
   Timer? _countdownTimer;
 
@@ -36,44 +64,35 @@ class _TournamentScreenState extends State<TournamentScreen> {
   }
 
   Future<void> _loadDeadline() async {
-    final preferences = SharedPreferencesAsync();
-    final millis = await preferences.getInt(_deadlineKey);
-    if (!mounted || millis == null) return;
-    final deadline = DateTime.fromMillisecondsSinceEpoch(millis);
-    if (deadline.isAfter(DateTime.now())) {
-      setState(() => _deadline = deadline);
-      _startTicker();
-    } else {
-      await preferences.remove(_deadlineKey);
-    }
+    final deadline = await initializeTournamentCycle();
+    if (!mounted) return;
+    setState(() => _deadline = deadline);
+    _startTicker();
   }
 
   Future<void> _activateCountdown() async {
     if (_deadline != null && _deadline!.isAfter(DateTime.now())) return;
-    final deadline = DateTime.now().add(const Duration(hours: 24));
+    final deadline = await initializeTournamentCycle();
+    if (!mounted) return;
     setState(() => _deadline = deadline);
-    await SharedPreferencesAsync().setInt(
-      _deadlineKey,
-      deadline.millisecondsSinceEpoch,
-    );
     _startTicker();
   }
 
   void _startTicker() {
     _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!mounted || _deadline == null) return;
       if (!TickerMode.valuesOf(context).enabled) return;
       if (!_deadline!.isAfter(DateTime.now())) {
-        _countdownTimer?.cancel();
+        final nextDeadline = await initializeTournamentCycle();
+        if (!mounted) return;
         setState(() {
-          _deadline = null;
+          _deadline = nextDeadline;
           _round = 0;
           _eliminated = false;
           _champion = false;
           _matchStarted = false;
         });
-        SharedPreferencesAsync().remove(_deadlineKey);
       } else {
         setState(() {});
       }
@@ -82,7 +101,7 @@ class _TournamentScreenState extends State<TournamentScreen> {
 
   String get _remainingText {
     final deadline = _deadline;
-    if (deadline == null) return 'İlk maçla 24 saat başlar';
+    if (deadline == null) return '--:--:--';
     final seconds = deadline
         .difference(DateTime.now())
         .inSeconds
@@ -90,7 +109,9 @@ class _TournamentScreenState extends State<TournamentScreen> {
     final hours = seconds ~/ 3600;
     final minutes = (seconds % 3600) ~/ 60;
     final secs = seconds % 60;
-    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')} kaldı';
+    final time =
+        '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    return appText('$time kaldı', '$time left');
   }
 
   Future<void> _startMatch() async {
@@ -151,38 +172,55 @@ class _TournamentScreenState extends State<TournamentScreen> {
                     remainingText: _remainingText,
                   ),
                   Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: box.maxWidth * 0.04,
-                        vertical: box.maxHeight * 0.025,
-                      ),
-                      child: Column(
-                        children: [
-                          Text(
-                            '${_round + 1}. AŞAMA · 3 EL',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w900,
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: SizedBox(
+                            width: 920,
+                            height: 360,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  appText(
+                                    '${_round + 1}. AŞAMA · 3 TUR',
+                                    'STAGE ${_round + 1} · 3 ROUNDS',
+                                  ),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  appText(
+                                    'Üç turun sonunda toplam puanı en düşük oyuncu bir sonraki aşamaya yükselir.',
+                                    'After three rounds, the player with the lowest total score advances.',
+                                  ),
+                                  style: const TextStyle(
+                                    color: Colors.white60,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                const _TournamentInfoStrip(),
+                                const SizedBox(height: 22),
+                                _StageTrack(
+                                  activeRound: _round,
+                                  eliminated: _eliminated,
+                                  champion: _champion,
+                                  compact: compact,
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            '3 el sonunda toplam puanı en düşük oyuncu ilerler.',
-                            style: TextStyle(
-                              color: Colors.white60,
-                              fontSize: 13,
-                            ),
-                          ),
-                          const Spacer(),
-                          _StageTrack(
-                            activeRound: _round,
-                            eliminated: _eliminated,
-                            champion: _champion,
-                            compact: compact,
-                          ),
-                          const Spacer(),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -211,6 +249,96 @@ class _TournamentScreenState extends State<TournamentScreen> {
       ),
     );
   }
+}
+
+class _TournamentInfoStrip extends StatelessWidget {
+  const _TournamentInfoStrip();
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Row(
+      children: [
+        _TournamentInfoChip(
+          icon: Icons.groups_rounded,
+          title: appText('4 OYUNCU', '4 PLAYERS'),
+          subtitle: appText('Bireysel masa', 'Solo table'),
+        ),
+        const SizedBox(width: 10),
+        _TournamentInfoChip(
+          icon: Icons.stacked_bar_chart_rounded,
+          title: appText('3 TUR', '3 ROUNDS'),
+          subtitle: appText('Her aşamada', 'Each stage'),
+        ),
+        const SizedBox(width: 10),
+        _TournamentInfoChip(
+          icon: Icons.south_rounded,
+          title: appText('EN DÜŞÜK PUAN', 'LOWEST SCORE'),
+          subtitle: appText('Aşamayı geçer', 'Advances'),
+        ),
+        const SizedBox(width: 10),
+        _TournamentInfoChip(
+          icon: Icons.emoji_events_rounded,
+          title: appText('ALTIN ÖDÜL', 'GOLD REWARD'),
+          subtitle: appText('Aşamayla artar', 'Grows by stage'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _TournamentInfoChip extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _TournamentInfoChip({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 222,
+    height: 92,
+    padding: const EdgeInsets.symmetric(horizontal: 15),
+    decoration: BoxDecoration(
+      color: Colors.black.withValues(alpha: 0.24),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0x66FFD76A)),
+    ),
+    child: Row(
+      children: [
+        Icon(icon, color: const Color(0xFFFFD76A), size: 32),
+        const SizedBox(width: 13),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _StageTrack extends StatelessWidget {
@@ -285,7 +413,13 @@ class _StageTrack extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      _TournamentScreenState._roundNames[index],
+                      appLanguage.isEnglish
+                          ? const [
+                              'QUARTER FINAL',
+                              'SEMI FINAL',
+                              'FINAL',
+                            ][index]
+                          : _TournamentScreenState._roundNames[index],
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: reached
@@ -320,19 +454,18 @@ class _TournamentHeader extends StatelessWidget {
     ),
     child: Row(
       children: [
-        IconButton(
-          key: const ValueKey('tournament-back'),
-          onPressed: onBack,
-          color: Colors.white,
-          icon: const Icon(Icons.arrow_back_rounded),
+        AppBackButton(
+          buttonKey: const ValueKey('tournament-back'),
+          onTap: onBack,
+          size: 42,
         ),
         Expanded(
           child: Column(
             children: [
-              const Text(
-                'ALTIN ISTAKA TURNUVASI',
+              Text(
+                appText('ALTIN ISTAKA TURNUVASI', 'GOLD RACK TOURNAMENT'),
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   color: Color(0xFFFFD76A),
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
@@ -340,7 +473,10 @@ class _TournamentHeader extends StatelessWidget {
                 ),
               ),
               Text(
-                '3 aşama · Her aşamada 3 el · $remainingText',
+                appText(
+                  '3 aşama · Her aşamada 3 tur · $remainingText',
+                  '3 stages · 3 rounds each · $remainingText',
+                ),
                 style: const TextStyle(color: Colors.white60, fontSize: 10),
               ),
             ],
@@ -376,10 +512,10 @@ class _TournamentAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final title = champion
-        ? 'TURNUVA ŞAMPİYONU!'
+        ? appText('TURNUVA ŞAMPİYONU!', 'TOURNAMENT CHAMPION!')
         : eliminated
-        ? 'TURNUVADAN ELENDİN'
-        : '$roundName · 4 KİŞİLİK MASA';
+        ? appText('TURNUVADAN ELENDİN', 'ELIMINATED')
+        : appText('$roundName · 4 KİŞİLİK MASA', '$roundName · 4 PLAYER TABLE');
     final titleWidget = Text(
       title,
       style: TextStyle(
@@ -406,10 +542,10 @@ class _TournamentAction extends StatelessWidget {
       ),
       label: Text(
         eliminated || champion
-            ? 'YENİDEN BAŞLA'
+            ? appText('YENİDEN BAŞLA', 'START OVER')
             : matchStarted
-            ? 'DEVAM ET'
-            : 'MAÇA BAŞLA',
+            ? appText('DEVAM ET', 'CONTINUE')
+            : appText('MAÇA BAŞLA', 'START MATCH'),
       ),
     );
 
@@ -430,7 +566,7 @@ class _TournamentAction extends StatelessWidget {
                   side: const BorderSide(color: Color(0xFFC99632)),
                 ),
                 icon: const Icon(Icons.refresh_rounded),
-                label: const Text('TEKRAR BAŞLA'),
+                label: Text(appText('TEKRAR BAŞLA', 'RESTART')),
               ),
               const SizedBox(width: 8),
               primaryButton,
