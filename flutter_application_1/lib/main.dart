@@ -7,22 +7,33 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_language.dart';
 import 'app_controls.dart';
+import 'app_settings_dialog.dart';
 import 'daily_login_rewards.dart';
 import 'game_launch.dart';
 import 'game.dart'
     show
+        GameScreen,
+        gameAutoArrangeRackEnabled,
+        gameOpponentPicturesEnabled,
+        gameSoundEffectsEnabled,
         gameVibrationEnabled,
         prewarmGameAudio,
         prewarmGameVisuals,
+        setGameAutoArrangeRackEnabled,
+        setGameOpponentPicturesEnabled,
+        setGameSoundEffectsEnabled,
         setGameVibrationEnabled;
 import 'game_mode_select.dart';
 import 'game_navigation.dart';
+import 'game_help_dialog.dart';
 import 'oda.dart' as oda;
 import 'opponent_name_session.dart';
 import 'performance_overlay.dart';
 import 'player_progress.dart';
+import 'progress_notifications.dart';
 import 'route_activity.dart';
 import 'store_cosmetics.dart';
+import 'startup_tutorial.dart';
 import 'tournament.dart';
 
 final _dailyTaskClock = _DailyTaskClock();
@@ -77,7 +88,18 @@ class _DailyTaskClock extends ChangeNotifier {
   Timer? _rolloverTimer;
   Future<void>? _initializing;
 
-  Future<void> initialize() => _initializing ??= _load();
+  Future<void> initialize() {
+    if (_deadline != null) {
+      if (_rolloverTimer == null) _scheduleRollover();
+      return Future.value();
+    }
+    return _initializing ??= _load();
+  }
+
+  void pause() {
+    _rolloverTimer?.cancel();
+    _rolloverTimer = null;
+  }
 
   Future<void> _load() async {
     final now = DateTime.now();
@@ -125,6 +147,7 @@ class _DailyTaskClock extends ChangeNotifier {
         next = next.add(_cycleDuration);
       } while (!next.isAfter(now));
       _deadline = next;
+      progressNotifications.refresh();
       _persist();
       _scheduleRollover();
       notifyListeners();
@@ -162,7 +185,8 @@ Future<void> main() async {
     _inboxNotifications.load(),
     initializeTournamentCycle(),
   ]);
-  _appSettings.value = _appSettings.value.copyWith(language: appLanguage.value);
+  await progressNotifications.load();
+  appSettings.value = appSettings.value.copyWith(language: appLanguage.value);
   await SystemChrome.setPreferredOrientations(const [
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
@@ -195,10 +219,6 @@ class OkeyColors {
   static const Color yellowTile = Color(0xFFCC8800);
 }
 
-final ValueNotifier<_MenuSettings> _appSettings = ValueNotifier(
-  const _MenuSettings(),
-);
-
 // ─── Ana Uygulama ─────────────────────────────────────────────────────────────
 class OkeyApp extends StatelessWidget {
   final Widget? home;
@@ -215,16 +235,18 @@ class OkeyApp extends StatelessWidget {
         scaffoldBackgroundColor: OkeyColors.tableDark,
       ),
       builder: (context, child) {
-        return ValueListenableBuilder<_MenuSettings>(
-          valueListenable: _appSettings,
+        return ValueListenableBuilder<AppSettings>(
+          valueListenable: appSettings,
           child: child,
           builder: (context, settings, appChild) {
             final mediaQuery = MediaQuery.of(context);
-            final content = MediaQuery(
-              data: mediaQuery.copyWith(
-                textScaler: TextScaler.linear(settings.fontScale),
+            final content = SettingsArtworkWarmup(
+              child: MediaQuery(
+                data: mediaQuery.copyWith(
+                  textScaler: appTextScaler(settings.fontScale),
+                ),
+                child: appChild ?? const SizedBox.shrink(),
               ),
-              child: appChild ?? const SizedBox.shrink(),
             );
             return ValueListenableBuilder<bool>(
               valueListenable: performanceOverlayEnabled,
@@ -305,8 +327,9 @@ class _SplashScreenState extends State<SplashScreen>
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(
-          pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: MainMenuScreen()),
+          pageBuilder: (_, _, _) => const ActiveRouteScene(
+            child: MainMenuScreen(showTutorialPrompt: true),
+          ),
           transitionDuration: const Duration(milliseconds: 200),
           transitionsBuilder: (_, anim, _, child) =>
               FadeTransition(opacity: anim, child: child),
@@ -691,7 +714,9 @@ class _LoadingDotsState extends State<_LoadingDots>
 //   Sağ sütun: ODA SEÇ / ÖZEL MASA / TURNUVALAR / ARKADAŞLAR
 // ═══════════════════════════════════════════════════════════════════════════════
 class MainMenuScreen extends StatefulWidget {
-  const MainMenuScreen({super.key});
+  final bool showTutorialPrompt;
+
+  const MainMenuScreen({super.key, this.showTutorialPrompt = false});
 
   @override
   State<MainMenuScreen> createState() => _MainMenuScreenState();
@@ -702,17 +727,18 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   late AnimationController _enterCtrl;
   late AnimationController _walletRewardCtrl;
   late Animation<double> _fadeIn;
-  late _MenuSettings _settings;
+  late AppSettings _settings;
   int _walletAnimationFrom = 0;
   int _walletAnimationTo = 0;
   int _walletRewardGain = 0;
   bool _navigating = false;
   bool _visualsPrewarmed = false;
+  bool _tutorialPromptScheduled = false;
 
   @override
   void initState() {
     super.initState();
-    _settings = _appSettings.value.copyWith(language: appLanguage.value);
+    _settings = appSettings.value.copyWith(language: appLanguage.value);
     _walletAnimationFrom = playerProgress.coins;
     _walletAnimationTo = playerProgress.coins;
     _enterCtrl = AnimationController(
@@ -729,12 +755,45 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       duration: const Duration(milliseconds: 1050),
     );
     unawaited(_inboxNotifications.load());
+    progressNotifications.addListener(_onProgressNotice);
+    unawaited(progressNotifications.load());
     prewarmGameAudio();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (widget.showTutorialPrompt && !_tutorialPromptScheduled) {
+      _tutorialPromptScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        if (!mounted || _navigating) return;
+        final showTutorial = await showGeneralDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          barrierLabel: 'Öğretici sorusu',
+          barrierColor: Colors.black.withValues(alpha: 0.68),
+          transitionDuration: const Duration(milliseconds: 240),
+          pageBuilder: (_, _, _) => const TutorialPromptDialog(),
+          transitionBuilder: (_, animation, _, child) => FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.94, end: 1).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+              ),
+              child: child,
+            ),
+          ),
+        );
+        if (showTutorial == true && mounted) {
+          await _launchTutorialGame();
+          if (mounted) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            if (mounted) await _showHomeFeatureTour();
+          }
+        }
+      });
+    }
     if (_visualsPrewarmed) return;
     _visualsPrewarmed = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -744,8 +803,60 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     });
   }
 
+  Future<void> _launchTutorialGame() async {
+    var completed = false;
+    await _withPausedScene(() async {
+      if (!mounted) return;
+      completed =
+          await Navigator.of(context).push<bool>(
+            PageRouteBuilder<bool>(
+              pageBuilder: (_, _, _) => const ActiveRouteScene(
+                child: GameScreen(launchConfig: GameLaunchConfig.tutorial()),
+              ),
+              transitionDuration: const Duration(milliseconds: 120),
+              reverseTransitionDuration: const Duration(milliseconds: 100),
+              transitionsBuilder: (_, animation, _, child) => SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0.035, 0),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            ),
+          ) ==
+          true;
+      opponentNameSession.reset();
+    });
+    if (completed && mounted) await _openProfile(requestName: true);
+  }
+
+  Future<void> _launchTutorialFromSettings() async {
+    if (!mounted) return;
+    final completed =
+        await Navigator.of(context).push<bool>(
+          PageRouteBuilder<bool>(
+            pageBuilder: (_, _, _) => const ActiveRouteScene(
+              child: GameScreen(launchConfig: GameLaunchConfig.tutorial()),
+            ),
+            transitionDuration: const Duration(milliseconds: 120),
+            reverseTransitionDuration: const Duration(milliseconds: 100),
+            transitionsBuilder: (_, animation, _, child) => SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.035, 0),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          ),
+        ) ==
+        true;
+    opponentNameSession.reset();
+    if (completed && mounted) await _openProfile(requestName: true);
+  }
+
   @override
   void dispose() {
+    progressNotifications.removeListener(_onProgressNotice);
     _enterCtrl.dispose();
     _walletRewardCtrl.dispose();
     super.dispose();
@@ -773,8 +884,44 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     try {
       await navigation();
     } finally {
-      if (mounted) setState(() => _navigating = false);
+      if (mounted) {
+        setState(() => _navigating = false);
+        _onProgressNotice();
+      }
     }
+  }
+
+  void _onProgressNotice() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _navigating ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      final notices = progressNotifications.takeToasts();
+      if (!_settings.notifications) return;
+      for (final notice in notices) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFF174C36),
+            duration: const Duration(seconds: 4),
+            content: Row(
+              children: [
+                Icon(
+                  notice.room
+                      ? Icons.table_restaurant_rounded
+                      : Icons.task_alt_rounded,
+                  color: OkeyColors.goldLight,
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Text(notice.title)),
+              ],
+            ),
+          ),
+        );
+      }
+    });
   }
 
   Future<void> _navigateToRoomSelect() async {
@@ -883,6 +1030,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     required String title,
     required String description,
     ValueChanged<String>? onEntryTap,
+    bool requestProfileName = false,
   }) async {
     await showGeneralDialog<void>(
       context: context,
@@ -890,25 +1038,23 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       barrierLabel: '$title penceresini kapat',
       barrierColor: Colors.black.withValues(alpha: 0.7),
       transitionDuration: const Duration(milliseconds: 250),
-      pageBuilder: (dialogContext, _, _) => _FeatureDialog(
-        icon: icon,
-        title: title,
-        description: description,
-        onEntryTap: onEntryTap,
+      pageBuilder: (dialogContext, _, _) => AnimatedBuilder(
+        animation: progressNotifications,
+        builder: (_, _) => _FeatureDialog(
+          icon: icon,
+          title: title,
+          description: description,
+          onEntryTap: onEntryTap,
+          requestProfileName: requestProfileName,
+          onMissionReward: _animateMissionReward,
+        ),
       ),
       transitionBuilder: (_, animation, _, child) {
         final scale = animation.drive(
-          TweenSequence<double>([
-            TweenSequenceItem(
-              tween: Tween(begin: 1.05, end: 0.988),
-              weight: 52,
-            ),
-            TweenSequenceItem(
-              tween: Tween(begin: 0.988, end: 1.008),
-              weight: 28,
-            ),
-            TweenSequenceItem(tween: Tween(begin: 1.008, end: 1), weight: 20),
-          ]),
+          Tween<double>(
+            begin: 0.94,
+            end: 1,
+          ).chain(CurveTween(curve: Curves.easeOutCubic)),
         );
         return FadeTransition(
           opacity: animation,
@@ -926,6 +1072,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       description:
           'Her gün giriş yaparak jeton ve özel ödüller kazanabilirsin.',
     );
+    _onProgressNotice();
     if (!mounted) return;
     final balanceAfter = playerProgress.coins;
     if (balanceAfter <= balanceBefore) return;
@@ -937,10 +1084,63 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     await _walletRewardCtrl.forward(from: 0);
   }
 
-  Future<void> _openProfile() => _openFeaturePopup(
+  Future<void> _animateMissionReward(int coins) async {
+    if (!mounted) return;
+    setState(() {
+      _walletAnimationFrom = playerProgress.coins - coins;
+      _walletAnimationTo = playerProgress.coins;
+      _walletRewardGain = coins;
+    });
+    try {
+      await _walletRewardCtrl.forward(from: 0).orCancel;
+    } on TickerCanceled {
+      // Closing the scene must not interrupt the already granted reward.
+    }
+  }
+
+  Future<HomeFeatureTourAction?> _showHomeFeatureStep({required bool daily}) =>
+      showGeneralDialog<HomeFeatureTourAction>(
+        context: context,
+        barrierDismissible: false,
+        barrierLabel: 'Ana menü özellikleri',
+        barrierColor: Colors.black.withValues(alpha: 0.58),
+        transitionDuration: const Duration(milliseconds: 240),
+        pageBuilder: (_, _, _) => HomeFeatureTourDialog(daily: daily),
+        transitionBuilder: (_, animation, _, child) => FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.97, end: 1).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            ),
+            child: child,
+          ),
+        ),
+      );
+
+  Future<void> _showHomeFeatureTour() async {
+    final firstAction = await _showHomeFeatureStep(daily: true);
+    if (!mounted || firstAction != HomeFeatureTourAction.openDailyReward) {
+      return;
+    }
+
+    await _openDailyReward();
+    if (!mounted) return;
+
+    final secondAction = await _showHomeFeatureStep(daily: false);
+    if (!mounted || secondAction != HomeFeatureTourAction.openMissions) return;
+    await _openFeaturePopup(
+      icon: Icons.task_alt_rounded,
+      title: 'GÖREVLER',
+      description:
+          'Günlük görevlerini tamamlayarak jeton ve tecrübe kazanabilirsin.',
+    );
+  }
+
+  Future<void> _openProfile({bool requestName = false}) => _openFeaturePopup(
     icon: Icons.person_rounded,
     title: 'PROFİLİM',
     description: 'Oyuncu bilgilerin, seviyen, başarıların ve istatistiklerin burada gösterilecek.',
+    requestProfileName: requestName,
   );
 
   Future<void> _openInbox() async {
@@ -952,6 +1152,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
           'Sistem mesajların ve ödül bildirimlerin burada gösterilecek.',
       onEntryTap: (entry) {
         selectedEntry = entry;
+        progressNotifications.markRead(entry);
         if (entry.startsWith('Turnuva')) {
           unawaited(_inboxNotifications.markTournamentRead());
         } else if (entry.startsWith('Hoş geldin')) {
@@ -967,6 +1168,14 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       await _navigateToTournament();
     } else if (selectedEntry!.startsWith('Hoş geldin')) {
       await _openProfile();
+    } else if (selectedEntry!.contains('masası açıldı')) {
+      await _navigateToRoomSelect();
+    } else if (selectedEntry!.startsWith('Görev tamamlandı')) {
+      await _openFeaturePopup(
+        icon: Icons.task_alt_rounded,
+        title: 'GÖREVLER',
+        description: 'Günlük görevlerin',
+      );
     }
   }
 
@@ -995,30 +1204,33 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   }
 
   Future<void> _openSettings() async {
-    final updatedSettings = await showGeneralDialog<_MenuSettings>(
+    final updatedSettings = await showGeneralDialog<AppSettings>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Ayarları kapat',
       barrierColor: Colors.black.withValues(alpha: 0.72),
       transitionDuration: const Duration(milliseconds: 280),
-      pageBuilder: (_, _, _) => _SettingsDialog(
+      pageBuilder: (_, _, _) => AppSettingsDialog(
         initial: _settings.copyWith(
-          showPerformance: performanceOverlayEnabled.value,
+          soundEffects: gameSoundEffectsEnabled,
           vibration: gameVibrationEnabled,
+          showOpponentPictures: gameOpponentPicturesEnabled,
+          autoArrangeRack: gameAutoArrangeRackEnabled,
         ),
+        onTutorial: () => unawaited(_launchTutorialFromSettings()),
       ),
       transitionBuilder: (_, animation, _, child) {
         final scale = animation.drive(
           TweenSequence<double>([
             TweenSequenceItem(
-              tween: Tween(begin: 1.05, end: 0.988),
+              tween: Tween(begin: 0.94, end: 0.988),
               weight: 52,
             ),
             TweenSequenceItem(
-              tween: Tween(begin: 0.988, end: 1.008),
+              tween: Tween(begin: 0.988, end: 0.998),
               weight: 28,
             ),
-            TweenSequenceItem(tween: Tween(begin: 1.008, end: 1), weight: 20),
+            TweenSequenceItem(tween: Tween(begin: 0.998, end: 1), weight: 20),
           ]),
         );
         return FadeTransition(
@@ -1030,12 +1242,106 @@ class _MainMenuScreenState extends State<MainMenuScreen>
 
     if (updatedSettings != null && mounted) {
       setState(() => _settings = updatedSettings);
-      _appSettings.value = updatedSettings;
+      appSettings.value = updatedSettings;
       setGameVibrationEnabled(updatedSettings.vibration);
-      performanceOverlayEnabled.value = updatedSettings.showPerformance;
+      setGameSoundEffectsEnabled(updatedSettings.soundEffects);
+      setGameOpponentPicturesEnabled(updatedSettings.showOpponentPictures);
+      setGameAutoArrangeRackEnabled(updatedSettings.autoArrangeRack);
       await appLanguage.setLanguage(updatedSettings.language);
     }
   }
+
+  Future<void> _openHelp() => showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Yardımı kapat',
+    barrierColor: Colors.black.withValues(alpha: 0.78),
+    transitionDuration: const Duration(milliseconds: 240),
+    pageBuilder: (_, _, _) => const GameHelpDialog(),
+    transitionBuilder: (_, animation, _, child) => FadeTransition(
+      opacity: animation,
+      child: ScaleTransition(
+        scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
+        child: child,
+      ),
+    ),
+  );
+
+  Widget _portraitHome() => SingleChildScrollView(
+    key: const ValueKey('responsive-home-scroll'),
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      children: [
+        _ProfileChip(onTap: _openProfile),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          alignment: WrapAlignment.center,
+          children: [
+            _IconBtn(
+              key: const ValueKey('main-wallet-button'),
+              icon: Icons.account_balance_wallet_rounded,
+              onTap: _showWalletComingSoon,
+            ),
+            _IconBtn(
+              key: const ValueKey('main-store-button'),
+              icon: Icons.shopping_cart_rounded,
+              onTap: _navigateToStore,
+            ),
+            AnimatedBuilder(
+              animation: Listenable.merge([
+                progressNotifications,
+                _inboxNotifications,
+                dailyLogin,
+              ]),
+              builder: (_, _) => _IconBtn(
+                icon: Icons.mail_outlined,
+                badgeCount: _settings.notifications
+                    ? _inboxNotifications.unreadCount +
+                          progressNotifications.unread.length +
+                          (dailyLogin.canClaimToday ? 1 : 0)
+                    : 0,
+                onTap: _openInbox,
+              ),
+            ),
+            _IconBtn(
+              key: const ValueKey('main-help-button'),
+              icon: Icons.help_rounded,
+              onTap: _openHelp,
+            ),
+            _IconBtn(
+              key: const ValueKey('main-settings-button'),
+              icon: Icons.settings_outlined,
+              onTap: _openSettings,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 150,
+          child: Image.asset('images/ui/home/logoasil.png'),
+        ),
+        _RightButtonColumn(
+          onSelectRoom: _navigateToRoomSelect,
+          onSelectMode: _navigateToGameModeSelect,
+          onTournament: _navigateToTournament,
+          onOpen: (icon, title, description) => _openFeaturePopup(
+            icon: icon,
+            title: title,
+            description: description,
+          ),
+        ),
+        const SizedBox(height: 18),
+        _HemenOynaButton(onTap: () => _navigateToGame()),
+        const SizedBox(height: 16),
+        _DailyRewardButton(
+          onTap: _openDailyReward,
+          showNotifications: _settings.notifications,
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1094,144 +1400,158 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                 SafeArea(
                   child: FadeTransition(
                     opacity: _fadeIn,
-                    child: Center(
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(
-                          width: 1100,
-                          height: 500,
-                          child: Stack(
-                            children: [
-                              Positioned.fill(
-                                child: _HomeTileDecorations(
-                                  enabled: _settings.homeEdgeTiles,
-                                ),
-                              ),
-                              Positioned(
-                                top: 16,
-                                left: 20,
-                                child: _ProfileChip(onTap: _openProfile),
-                              ),
-                              Positioned(
-                                top: 18,
-                                right: 20,
-                                child: AnimatedBuilder(
-                                  animation: _walletRewardCtrl,
-                                  builder: (context, _) {
-                                    final progress = Curves.easeOutCubic
-                                        .transform(_walletRewardCtrl.value);
-                                    final animatedBalance =
-                                        _walletAnimationFrom +
-                                        ((_walletAnimationTo -
-                                                    _walletAnimationFrom) *
-                                                progress)
-                                            .round();
-                                    return _TopRightBar(
-                                      coinBalance: animatedBalance,
-                                      onSettings: _openSettings,
-                                      onStore: _navigateToStore,
-                                      onWallet: _showWalletComingSoon,
-                                      onMessages: _openInbox,
-                                    );
-                                  },
-                                ),
-                              ),
-                              if (_walletRewardGain > 0)
-                                Positioned(
-                                  top: 69,
-                                  right: 304,
-                                  child: AnimatedBuilder(
-                                    animation: _walletRewardCtrl,
-                                    builder: (context, child) {
-                                      final value = _walletRewardCtrl.value;
-                                      return Transform.translate(
-                                        offset: Offset(0, -18 * value),
-                                        child: Opacity(
-                                          opacity: sin(pi * value)
-                                              .clamp(0.0, 1.0),
-                                          child: Transform.scale(
-                                            scale:
-                                                0.88 + 0.22 * sin(pi * value),
-                                            child: child,
+                    child: MediaQuery.sizeOf(context).aspectRatio < 1.2
+                        ? _portraitHome()
+                        : Center(
+                            child: FittedBox(
+                              fit: BoxFit.contain,
+                              child: SizedBox(
+                                width: 1100,
+                                height: 500,
+                                child: Stack(
+                                  children: [
+                                    Positioned.fill(
+                                      child: _HomeTileDecorations(
+                                        enabled: true,
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 16,
+                                      left: 20,
+                                      child: _ProfileChip(onTap: _openProfile),
+                                    ),
+                                    Positioned(
+                                      top: 18,
+                                      right: 20,
+                                      child: AnimatedBuilder(
+                                        animation: _walletRewardCtrl,
+                                        builder: (context, _) {
+                                          final progress = Curves.easeOutCubic
+                                              .transform(
+                                                _walletRewardCtrl.value,
+                                              );
+                                          final animatedBalance =
+                                              _walletAnimationFrom +
+                                              ((_walletAnimationTo -
+                                                          _walletAnimationFrom) *
+                                                      progress)
+                                                  .round();
+                                          return _TopRightBar(
+                                            coinBalance: animatedBalance,
+                                            notificationsEnabled:
+                                                _settings.notifications,
+                                            onSettings: _openSettings,
+                                            onHelp: _openHelp,
+                                            onStore: _navigateToStore,
+                                            onWallet: _showWalletComingSoon,
+                                            onMessages: _openInbox,
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    if (_walletRewardGain > 0)
+                                      Positioned(
+                                        top: 69,
+                                        right: 304,
+                                        child: AnimatedBuilder(
+                                          animation: _walletRewardCtrl,
+                                          builder: (context, child) {
+                                            final value =
+                                                _walletRewardCtrl.value;
+                                            return Transform.translate(
+                                              offset: Offset(0, -18 * value),
+                                              child: Opacity(
+                                                opacity: sin(pi * value)
+                                                    .clamp(0.0, 1.0),
+                                                child: Transform.scale(
+                                                  scale:
+                                                      0.88 +
+                                                      0.22 * sin(pi * value),
+                                                  child: child,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                          child: Container(
+                                            key: const ValueKey(
+                                              'main-wallet-reward-animation',
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 11,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF0A3A24),
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: OkeyColors.goldLight,
+                                              ),
+                                              boxShadow: const [
+                                                BoxShadow(
+                                                  color: Colors.black54,
+                                                  blurRadius: 7,
+                                                  offset: Offset(0, 3),
+                                                ),
+                                              ],
+                                            ),
+                                            child: Text(
+                                              '+${formatGameNumber(_walletRewardGain)}',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontFamily: 'Baloo 2',
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
                                           ),
                                         ),
-                                      );
-                                    },
-                                    child: Container(
-                                      key: const ValueKey(
-                                        'main-wallet-reward-animation',
                                       ),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 11,
-                                        vertical: 4,
+                                    Positioned(
+                                      left: 20,
+                                      top: 116,
+                                      child: _DailyRewardButton(
+                                        onTap: _openDailyReward,
+                                        showNotifications:
+                                            _settings.notifications,
                                       ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF0A3A24),
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: OkeyColors.goldLight,
-                                        ),
-                                        boxShadow: const [
-                                          BoxShadow(
-                                            color: Colors.black54,
-                                            blurRadius: 7,
-                                            offset: Offset(0, 3),
+                                    ),
+                                    const Positioned(
+                                      left: 145,
+                                      top: 118,
+                                      child: _HomeLogoArtwork(),
+                                    ),
+                                    Positioned(
+                                      right: 20,
+                                      top: 170,
+                                      width: 444,
+                                      child: Column(
+                                        children: [
+                                          _RightButtonColumn(
+                                            onSelectRoom: _navigateToRoomSelect,
+                                            onSelectMode:
+                                                _navigateToGameModeSelect,
+                                            onTournament: _navigateToTournament,
+                                            onOpen:
+                                                (icon, title, description) =>
+                                                    _openFeaturePopup(
+                                                      icon: icon,
+                                                      title: title,
+                                                      description: description,
+                                                    ),
+                                          ),
+                                          const SizedBox(height: 22),
+                                          _HemenOynaButton(
+                                            onTap: () => _navigateToGame(),
                                           ),
                                         ],
                                       ),
-                                      child: Text(
-                                        '+${formatGameNumber(_walletRewardGain)}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontFamily: 'Baloo 2',
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              Positioned(
-                                left: 20,
-                                top: 116,
-                                child: _DailyRewardButton(
-                                  onTap: _openDailyReward,
-                                ),
-                              ),
-                              const Positioned(
-                                left: 145,
-                                top: 118,
-                                child: _HomeLogoArtwork(),
-                              ),
-                              Positioned(
-                                right: 20,
-                                top: 170,
-                                width: 444,
-                                child: Column(
-                                  children: [
-                                    _RightButtonColumn(
-                                      onSelectRoom: _navigateToRoomSelect,
-                                      onSelectMode: _navigateToGameModeSelect,
-                                      onTournament: _navigateToTournament,
-                                      onOpen: (icon, title, description) =>
-                                          _openFeaturePopup(
-                                            icon: icon,
-                                            title: title,
-                                            description: description,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 28),
-                                    _HemenOynaButton(
-                                      onTap: () => _navigateToGame(),
                                     ),
                                   ],
                                 ),
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
                   ),
                 ),
               ],
@@ -1323,7 +1643,11 @@ class _HomeTileDecorations extends StatelessWidget {
 
 class _DailyRewardButton extends StatelessWidget {
   final VoidCallback onTap;
-  const _DailyRewardButton({required this.onTap});
+  final bool showNotifications;
+  const _DailyRewardButton({
+    required this.onTap,
+    required this.showNotifications,
+  });
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -1364,7 +1688,7 @@ class _DailyRewardButton extends StatelessWidget {
                 filterQuality: FilterQuality.medium,
               ),
             ),
-            if (dailyLogin.canClaimToday)
+            if (showNotifications && dailyLogin.canClaimToday)
               Positioned(
                 top: 4,
                 right: 3,
@@ -1999,7 +2323,7 @@ class _ProfileChip extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         child: SizedBox(
           width: 286,
-          height: 96,
+          height: 96 + (MediaQuery.textScalerOf(context).scale(64) - 64),
           child: Stack(
             alignment: Alignment.centerLeft,
             children: [
@@ -2025,7 +2349,7 @@ class _ProfileChip extends StatelessWidget {
                     ),
                   ),
                   child: MediaQuery.withClampedTextScaling(
-                    maxScaleFactor: 1,
+                    maxScaleFactor: 1.25,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -2156,13 +2480,17 @@ class _ProfileChip extends StatelessWidget {
 
 class _TopRightBar extends StatelessWidget {
   final int coinBalance;
+  final bool notificationsEnabled;
   final VoidCallback onSettings;
+  final VoidCallback onHelp;
   final VoidCallback onStore;
   final VoidCallback onWallet;
   final VoidCallback onMessages;
   const _TopRightBar({
     required this.coinBalance,
+    required this.notificationsEnabled,
     required this.onSettings,
+    required this.onHelp,
     required this.onStore,
     required this.onWallet,
     required this.onMessages,
@@ -2175,6 +2503,7 @@ class _TopRightBar extends StatelessWidget {
         playerProgress,
         dailyLogin,
         _inboxNotifications,
+        progressNotifications,
       ]),
       builder: (context, _) => Row(
         mainAxisSize: MainAxisSize.min,
@@ -2190,12 +2519,26 @@ class _TopRightBar extends StatelessWidget {
                 alignment: Alignment.center,
                 children: [
                   Positioned.fill(
-                    child: Image.asset(
-                      'images/ui/home/gold_bar.png',
-                      fit: BoxFit.fill,
-                      cacheWidth: 336,
-                      cacheHeight: 64,
-                      filterQuality: FilterQuality.low,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(17),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0xFF252525), Color(0xFF090909)],
+                        ),
+                        border: Border.all(
+                          color: const Color(0xFF8C8C8C),
+                          width: 1,
+                        ),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black45,
+                            blurRadius: 5,
+                            offset: Offset(0, 3),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   Positioned(
@@ -2211,7 +2554,7 @@ class _TopRightBar extends StatelessWidget {
                   ),
                   Positioned(
                     left: 52,
-                    right: 37,
+                    right: 42,
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
@@ -2223,6 +2566,23 @@ class _TopRightBar extends StatelessWidget {
                           fontWeight: FontWeight.w900,
                         ),
                       ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 38,
+                    top: 9,
+                    bottom: 9,
+                    child: Container(width: 1, color: Colors.white54),
+                  ),
+                  const Positioned(
+                    right: 7,
+                    child: Icon(
+                      Icons.add_rounded,
+                      size: 29,
+                      color: Colors.white,
+                      shadows: [
+                        Shadow(color: Colors.black87, offset: Offset(0, 2)),
+                      ],
                     ),
                   ),
                 ],
@@ -2244,13 +2604,25 @@ class _TopRightBar extends StatelessWidget {
           _IconBtn(
             icon: Icons.mail_outlined,
             displayIcon: Icons.notifications_rounded,
-            badgeCount:
-                _inboxNotifications.unreadCount +
-                (dailyLogin.canClaimToday ? 1 : 0),
+            badgeCount: notificationsEnabled
+                ? _inboxNotifications.unreadCount +
+                      progressNotifications.unread.length +
+                      (dailyLogin.canClaimToday ? 1 : 0)
+                : 0,
             onTap: onMessages,
           ),
           const SizedBox(width: 13),
-          _IconBtn(icon: Icons.settings_outlined, onTap: onSettings),
+          _IconBtn(
+            key: const ValueKey('main-help-button'),
+            icon: Icons.help_rounded,
+            onTap: onHelp,
+          ),
+          const SizedBox(width: 13),
+          _IconBtn(
+            key: const ValueKey('main-settings-button'),
+            icon: Icons.settings_outlined,
+            onTap: onSettings,
+          ),
         ],
       ),
     );
@@ -2338,7 +2710,9 @@ class _IconBtn extends StatelessWidget {
 }
 
 class _ProfileNameEditor extends StatefulWidget {
-  const _ProfileNameEditor();
+  final bool requestName;
+
+  const _ProfileNameEditor({this.requestName = false});
 
   @override
   State<_ProfileNameEditor> createState() => _ProfileNameEditorState();
@@ -2347,11 +2721,18 @@ class _ProfileNameEditor extends StatefulWidget {
 class _ProfileNameEditorState extends State<_ProfileNameEditor> {
   late final TextEditingController _controller;
   String? _errorText;
+  bool _saved = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: playerProgress.playerName);
+    _controller = TextEditingController(
+      text:
+          widget.requestName &&
+              playerProgress.playerName == defaultPlayerProfileName
+          ? ''
+          : playerProgress.playerName,
+    );
   }
 
   @override
@@ -2364,6 +2745,7 @@ class _ProfileNameEditorState extends State<_ProfileNameEditor> {
     final saved = playerProgress.updatePlayerName(_controller.text);
     setState(() {
       _errorText = saved ? null : 'İsim 1-18 karakter arasında olmalı.';
+      _saved = saved;
     });
     if (saved) {
       _controller.text = playerProgress.playerName;
@@ -2375,69 +2757,550 @@ class _ProfileNameEditorState extends State<_ProfileNameEditor> {
   }
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => LayoutBuilder(
     key: const ValueKey('profile-name-editor'),
-    padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+    builder: (context, bounds) {
+      final field = TextField(
+        key: const ValueKey('profile-name-field'),
+        controller: _controller,
+        autofocus: widget.requestName,
+        maxLength: 18,
+        textInputAction: TextInputAction.done,
+        scrollPadding: const EdgeInsets.only(bottom: 120),
+        onChanged: (value) => setState(() {
+          _saved = false;
+          _errorText = value.characters.length >= 18
+              ? '18 karakter sınırına ulaştın.'
+              : null;
+        }),
+        onSubmitted: (_) => _save(),
+        style: const TextStyle(
+          color: OkeyColors.cream,
+          fontSize: 22,
+          fontWeight: FontWeight.w900,
+        ),
+        decoration: InputDecoration(
+          hintText: widget.requestName ? 'İsmini yaz' : 'Oyuncu adı',
+          hintStyle: const TextStyle(color: Colors.white54, fontSize: 16),
+          errorText: _errorText,
+          errorMaxLines: 2,
+          counterText: '',
+          isDense: true,
+          filled: true,
+          fillColor: const Color(0xFF07382C),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 14,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFF478775), width: 1.5),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: OkeyColors.goldLight, width: 2),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFFDB836D)),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: OkeyColors.goldLight, width: 2),
+          ),
+        ),
+      );
+      final save = SizedBox(
+        height: 49,
+        child: FilledButton.icon(
+          key: const ValueKey('profile-name-save'),
+          onPressed: _save,
+          style: FilledButton.styleFrom(
+            backgroundColor: _saved
+                ? const Color(0xFF2E9E51)
+                : OkeyColors.goldLight,
+            foregroundColor: _saved ? Colors.white : OkeyColors.buttonBrown,
+            elevation: 5,
+            shadowColor: Colors.black87,
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            side: BorderSide(
+              color: _saved ? const Color(0xFF82DEA0) : const Color(0xFFFFEBA2),
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          icon: _saved
+              ? const Icon(Icons.check_rounded, size: 18)
+              : const SizedBox.shrink(),
+          label: Text(
+            appText('KAYDET', 'SAVE', german: 'SPEICHERN'),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+        ),
+      );
+      if (bounds.maxWidth < 270) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            field,
+            const SizedBox(height: 6),
+            Align(alignment: Alignment.centerRight, child: save),
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: field),
+          const SizedBox(width: 14),
+          save,
+        ],
+      );
+    },
+  );
+}
+
+class _ProfileSplitPanel extends StatelessWidget {
+  final List<_FeatureEntry> careerEntries;
+  final bool requestName;
+
+  const _ProfileSplitPanel({
+    required this.careerEntries,
+    this.requestName = false,
+  });
+
+  Future<void> _showAvatarPicker(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (pickerContext) {
+      final popupSize = appPopupSize(pickerContext);
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        child: Container(
+          key: const ValueKey('profile-avatar-picker'),
+          width: popupSize.width * 0.72,
+          height: popupSize.height * 0.52,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF174C36), Color(0xFF071F18)],
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: OkeyColors.gold, width: 2),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black87,
+                blurRadius: 24,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.account_circle_rounded,
+                      color: OkeyColors.goldLight,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        appText('PROFİL FOTOĞRAFI', 'PROFILE PICTURE'),
+                        style: const TextStyle(
+                          color: OkeyColors.cream,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    AppCloseButton(
+                      onTap: () => Navigator.of(pickerContext).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                AnimatedBuilder(
+                  animation: playerProgress,
+                  builder: (context, _) => Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: List.generate(playerAvatarAssets.length, (index) {
+                      final selected =
+                          index == playerProgress.playerAvatarIndex;
+                      return GestureDetector(
+                        key: ValueKey('profile-avatar-$index'),
+                        onTap: () {
+                          playerProgress.updatePlayerAvatar(index);
+                          Navigator.of(pickerContext).pop();
+                        },
+                        child: Container(
+                          width: 54,
+                          height: 54,
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: selected
+                                ? OkeyColors.goldLight.withValues(alpha: 0.18)
+                                : Colors.black26,
+                            border: Border.all(
+                              color: selected
+                                  ? OkeyColors.goldLight
+                                  : Colors.white24,
+                              width: selected ? 3 : 1,
+                            ),
+                          ),
+                          child: ClipOval(
+                            child: Image.asset(
+                              playerAvatarAssets[index],
+                              fit: BoxFit.cover,
+                              cacheWidth: 96,
+                              cacheHeight: 96,
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: playerProgress,
+    builder: (context, _) => LayoutBuilder(
+      builder: (context, bounds) {
+        const columns = 3;
+        final compact = bounds.maxHeight < 260;
+        final avatarSize = compact ? 96.0 : 106.0;
+        final stats = [
+          (
+            'games',
+            appText('Oynanan Oyun', 'Games Played'),
+            formatGameNumber(playerProgress.gamesPlayed),
+            Icons.casino_rounded,
+          ),
+          (
+            'results',
+            appText('Galibiyet / Mağlubiyet', 'Wins / Losses'),
+            '${playerProgress.gamesWon} / ${playerProgress.gamesPlayed - playerProgress.gamesWon}',
+            Icons.emoji_events_rounded,
+          ),
+          (
+            'rate',
+            appText('Kazanma Oranı', 'Win Rate'),
+            '%${(playerProgress.winRate * 100).round()}',
+            Icons.percent_rounded,
+          ),
+          (
+            'xp',
+            appText('Toplam XP', 'Total XP'),
+            formatGameNumber(playerProgress.totalXpEarned),
+            Icons.star_rounded,
+          ),
+          (
+            'opened',
+            appText('Açılan El', 'Hands Opened'),
+            formatGameNumber(playerProgress.handsOpened),
+            Icons.view_week_rounded,
+          ),
+          (
+            'finished',
+            appText('Bitirilen El', 'Hands Finished'),
+            formatGameNumber(playerProgress.handsFinished),
+            Icons.done_all_rounded,
+          ),
+        ];
+        return Column(
+          children: [
+            Row(
+              key: const ValueKey('profile-overview-card'),
+              children: [
+                SizedBox(
+                  width: avatarSize + 4,
+                  height: avatarSize + 4,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        width: avatarSize,
+                        height: avatarSize,
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFFFFE492), Color(0xFFC18B26)],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black54,
+                              blurRadius: 7,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Image.asset(
+                            playerProgress.playerAvatarAsset,
+                            fit: BoxFit.cover,
+                            cacheWidth: 220,
+                            cacheHeight: 220,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: GestureDetector(
+                          key: const ValueKey('profile-avatar-edit'),
+                          onTap: () {
+                            FocusScope.of(context).unfocus();
+                            _showAvatarPicker(context);
+                          },
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF074435),
+                              border: Border.all(
+                                color: OkeyColors.goldLight,
+                                width: 2,
+                              ),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.edit_rounded,
+                              size: 21,
+                              color: OkeyColors.cream,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 18),
+                Expanded(child: _ProfileNameEditor(requestName: requestName)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: Color(0xFF397765)),
+            const SizedBox(height: 12),
+            Expanded(
+              child: LayoutBuilder(
+                key: const ValueKey('profile-career-panel'),
+                builder: (context, grid) {
+                  final cardWidth =
+                      (grid.maxWidth - (columns - 1) * 10) / columns;
+                  final cardHeight = (grid.maxHeight - 10) / 2;
+                  return Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final entry in stats)
+                        SizedBox(
+                          width: cardWidth,
+                          height: cardHeight,
+                          child: _ProfileStatCard(
+                            id: entry.$1,
+                            label: entry.$2,
+                            value: entry.$3,
+                            icon: entry.$4,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+class _ProfileStatCard extends StatelessWidget {
+  final String id, label, value;
+  final IconData icon;
+  const _ProfileStatCard({
+    required this.id,
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  Widget _statVisual() {
+    if (id == 'results') {
+      return Image.asset('images/ui/icons/turnuva.png', fit: BoxFit.contain);
+    }
+    if (id == 'xp') {
+      return const Stack(
+        alignment: Alignment.center,
+        children: [
+          Icon(
+            Icons.star_rounded,
+            size: 54,
+            color: OkeyColors.goldLight,
+            shadows: [
+              Shadow(
+                color: Colors.black54,
+                blurRadius: 3,
+                offset: Offset(0, 3),
+              ),
+            ],
+          ),
+          Text(
+            'XP',
+            style: TextStyle(
+              color: OkeyColors.buttonBrown,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      );
+    }
+    if (id == 'games' || id == 'opened' || id == 'finished') {
+      final numbers = id == 'games'
+          ? ['1', '0', '1']
+          : id == 'opened'
+          ? ['3', '7', '11']
+          : ['13', '13', '13'];
+      return FittedBox(
+        child: SizedBox(
+          width: 58,
+          height: 46,
+          child: Stack(
+            children: [
+              for (var i = 0; i < 3; i++)
+                Positioned(
+                  left: i * 16.0,
+                  top: i == 1 ? 2 : 8,
+                  child: Transform.rotate(
+                    angle: (i - 1) * 0.12,
+                    child: Container(
+                      width: 25,
+                      height: 35,
+                      alignment: Alignment.topCenter,
+                      padding: const EdgeInsets.only(top: 4),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFFFFF5D9), Color(0xFFD3BE8D)],
+                        ),
+                        border: Border.all(color: const Color(0xFFE8D6A3)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black54,
+                            blurRadius: 2,
+                            offset: Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        numbers[i],
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          color: [
+                            Colors.black87,
+                            Color(0xFFB32922),
+                            Color(0xFF194A91),
+                          ][i],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    return Icon(
+      icon,
+      color: OkeyColors.goldLight,
+      size: 44,
+      shadows: const [
+        Shadow(color: Colors.black54, blurRadius: 3, offset: Offset(0, 3)),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: ValueKey('profile-stat-$id'),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
     decoration: BoxDecoration(
       gradient: const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xFF184C37), Color(0xFF0A2A20)],
+        colors: [Color(0xFF104A3A), Color(0xFF063A2C)],
       ),
-      borderRadius: BorderRadius.circular(11),
-      border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.45)),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.46),
-          blurRadius: 7,
-          offset: const Offset(0, 4),
-        ),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFF3C7B68), width: 1.2),
+      boxShadow: const [
+        BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
       ],
     ),
     child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: TextField(
-            key: const ValueKey('profile-name-field'),
-            controller: _controller,
-            maxLength: 18,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _save(),
-            style: const TextStyle(
-              color: OkeyColors.cream,
-              fontWeight: FontWeight.bold,
-            ),
-            decoration: InputDecoration(
-              labelText: 'Oyuncu adı',
-              labelStyle: const TextStyle(color: OkeyColors.goldLight),
-              errorText: _errorText,
-              counterStyle: const TextStyle(color: Colors.white38),
-              isDense: true,
-              enabledBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white30),
-              ),
-              focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: OkeyColors.goldLight, width: 2),
-              ),
-            ),
+        SizedBox(
+          width: 48,
+          height: 58,
+          child: FittedBox(
+            child: SizedBox(width: 54, height: 52, child: _statVisual()),
           ),
         ),
         const SizedBox(width: 8),
-        Padding(
-          padding: const EdgeInsets.only(top: 3),
-          child: FilledButton(
-            key: const ValueKey('profile-name-save'),
-            onPressed: _save,
-            style: FilledButton.styleFrom(
-              backgroundColor: OkeyColors.gold,
-              foregroundColor: OkeyColors.buttonBrown,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-            ),
-            child: const Text(
-              'KAYDET',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: OkeyColors.cream,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      height: 1.15,
+                    ),
+                  ),
+                ),
+              ),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: OkeyColors.cream,
+                  fontSize: 36,
+                  fontWeight: FontWeight.w900,
+                  height: 1.05,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -2445,177 +3308,167 @@ class _ProfileNameEditorState extends State<_ProfileNameEditor> {
   );
 }
 
-class _ProfileSplitPanel extends StatelessWidget {
-  final List<_FeatureEntry> careerEntries;
-
-  const _ProfileSplitPanel({required this.careerEntries});
+class _ProfileDialog extends StatelessWidget {
+  final bool requestName;
+  const _ProfileDialog({this.requestName = false});
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: playerProgress,
-    builder: (context, _) => IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            flex: 5,
-            child: Container(
-              key: const ValueKey('profile-overview-card'),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF174C36), Color(0xFF09271E)],
-                ),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: OkeyColors.gold.withValues(alpha: 0.45),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.52),
-                    blurRadius: 10,
-                    offset: const Offset(0, 6),
-                  ),
-                  BoxShadow(
-                    color: OkeyColors.goldLight.withValues(alpha: 0.08),
-                    blurRadius: 4,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'PROFİL BİLGİLERİ',
-                      style: TextStyle(
-                        color: OkeyColors.goldLight,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: 110,
-                    height: 110,
-                    padding: const EdgeInsets.all(3),
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [OkeyColors.goldLight, OkeyColors.goldDark],
-                      ),
-                    ),
-                    child: ClipOval(
-                      child: Image.asset(
-                        playerProgress.playerAvatarAsset,
-                        fit: BoxFit.cover,
-                        cacheWidth: 150,
-                        cacheHeight: 150,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(playerAvatarAssets.length, (index) {
-                      final selected =
-                          index == playerProgress.playerAvatarIndex;
-                      return GestureDetector(
-                        key: ValueKey('profile-avatar-$index'),
-                        onTap: () => playerProgress.updatePlayerAvatar(index),
-                        child: Container(
-                          width: 46,
-                          height: 46,
-                          margin: const EdgeInsets.symmetric(horizontal: 4),
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: selected
-                                  ? OkeyColors.goldLight
-                                  : Colors.white24,
-                              width: selected ? 2 : 1,
-                            ),
-                          ),
-                          child: ClipOval(
-                            child: Image.asset(
-                              playerAvatarAssets[index],
-                              fit: BoxFit.cover,
-                              cacheWidth: 72,
-                              cacheHeight: 72,
-                            ),
-                          ),
+  Widget build(BuildContext context) => SafeArea(
+    child: AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      padding: EdgeInsets.fromLTRB(
+        12,
+        12,
+        12,
+        12 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: LayoutBuilder(
+        builder: (context, bounds) {
+          final panelSize = appSettingsPanelSize(bounds);
+          return Center(
+            child: SizedBox(
+              key: const ValueKey('feature-dialog-PROFİLİM'),
+              width: panelSize.width,
+              height: panelSize.height,
+              child: FittedBox(
+                child: SizedBox(
+                  width: 900,
+                  height: 900 * 941 / 1671,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      width: 900,
+                      height: 900 * 941 / 1671,
+                      padding: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(24),
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFFFFEBA2),
+                            Color(0xFFC39132),
+                            Color(0xFFE7BD59),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
-                      );
-                    }),
-                  ),
-                  const SizedBox(height: 7),
-                  const _ProfileNameEditor(),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 6,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF174C36), Color(0xFF09271E)],
-                ),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: OkeyColors.gold.withValues(alpha: 0.45),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.52),
-                    blurRadius: 10,
-                    offset: const Offset(0, 6),
-                  ),
-                  BoxShadow(
-                    color: OkeyColors.goldLight.withValues(alpha: 0.08),
-                    blurRadius: 4,
-                    offset: const Offset(0, -1),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      appText('KARİYER İSTATİSTİKLERİ', 'CAREER STATISTICS'),
-                      style: const TextStyle(
-                        color: OkeyColors.goldLight,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1,
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black87,
+                            blurRadius: 28,
+                            offset: Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(19),
+                          gradient: const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF0B5140), Color(0xFF032B20)],
+                          ),
+                          border: Border.all(color: const Color(0xFF41856D)),
+                        ),
+                        child: Column(
+                          children: [
+                            SizedBox(
+                              height: 42,
+                              child: Stack(
+                                children: [
+                                  Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 48,
+                                      ),
+                                      child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Text(
+                                          appText('PROFİLİM', 'MY PROFILE'),
+                                          style: const TextStyle(
+                                            color: Color(0xFFFFEFBD),
+                                            fontSize: 38,
+                                            fontWeight: FontWeight.w900,
+                                            shadows: [
+                                              Shadow(
+                                                color: Colors.black87,
+                                                blurRadius: 3,
+                                                offset: Offset(0, 3),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: AppCloseButton(
+                                      buttonKey: const ValueKey(
+                                        'profile-close-button',
+                                      ),
+                                      onTap: () => Navigator.of(context).pop(),
+                                      size: 38,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Expanded(
+                              child: MediaQuery.viewInsetsOf(context).bottom > 0
+                                  ? SingleChildScrollView(
+                                      child: SizedBox(
+                                        height: 420,
+                                        child: _ProfileSplitPanel(
+                                          careerEntries: const [],
+                                          requestName: requestName,
+                                        ),
+                                      ),
+                                    )
+                                  : _ProfileSplitPanel(
+                                      careerEntries: const [],
+                                      requestName: requestName,
+                                    ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: 220,
+                              height: 40,
+                              child: FilledButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: OkeyColors.goldLight,
+                                  foregroundColor: OkeyColors.buttonBrown,
+                                  elevation: 5,
+                                  shadowColor: Colors.black87,
+                                  side: const BorderSide(
+                                    color: Color(0xFFFFEBA2),
+                                    width: 1.5,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'TAMAM',
+                                  style: TextStyle(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 7),
-                  ...careerEntries.indexed.expand(
-                    (item) => [
-                      if (item.$1 > 0) const SizedBox(height: 7),
-                      _FeatureEntryCard(entry: item.$2, compact: true),
-                    ],
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ],
+          );
+        },
       ),
     ),
   );
@@ -2626,12 +3479,16 @@ class _FeatureDialog extends StatelessWidget {
   final String title;
   final String description;
   final ValueChanged<String>? onEntryTap;
+  final bool requestProfileName;
+  final Future<void> Function(int)? onMissionReward;
 
   const _FeatureDialog({
     required this.icon,
     required this.title,
     required this.description,
     this.onEntryTap,
+    this.requestProfileName = false,
+    this.onMissionReward,
   });
 
   String get _displayTitle => switch (title) {
@@ -2649,16 +3506,6 @@ class _FeatureDialog extends StatelessWidget {
   List<_FeatureEntry> get _entries => switch (title) {
     'GÜNLÜK GİRİŞ ÖDÜLÜ' => const [],
     'PROFİLİM' => [
-      _FeatureEntry(
-        Icons.military_tech_rounded,
-        '${appText('Seviye', 'Level')} ${playerProgress.level} • ${playerProgress.title}',
-        playerProgress.isMaxLevel
-            ? appText('En yüksek seviyeye ulaşıldı', 'Maximum level reached')
-            : '${playerProgress.levelXp} / ${playerProgress.xpForNextLevel} XP',
-        playerProgress.isMaxLevel
-            ? 'MAX'
-            : '%${(playerProgress.levelProgress * 100).round()}',
-      ),
       _FeatureEntry(
         Icons.sports_esports_rounded,
         '${playerProgress.gamesPlayed} ${appText('oyun', 'games')}',
@@ -2699,6 +3546,13 @@ class _FeatureDialog extends StatelessWidget {
       ),
     ],
     'GELEN KUTUSU' => [
+      for (final notice in progressNotifications.unread.reversed)
+        _FeatureEntry(
+          notice.room ? Icons.table_restaurant_rounded : Icons.task_alt_rounded,
+          notice.title,
+          '',
+          'YENİ',
+        ),
       if (dailyLogin.canClaimToday)
         const _FeatureEntry(
           Icons.card_giftcard_rounded,
@@ -2767,25 +3621,14 @@ class _FeatureDialog extends StatelessWidget {
         null,
       ),
     ],
-    'GÖREVLER' => const [
-      _FeatureEntry(
-        Icons.casino_rounded,
-        '3 oyun oyna',
-        'Ödül: 350 jeton',
-        '1/3',
-      ),
-      _FeatureEntry(
-        Icons.grid_view_rounded,
-        '5 kez per aç',
-        'Ödül: 500 jeton',
-        '2/5',
-      ),
-      _FeatureEntry(
-        Icons.emoji_events_rounded,
-        'Bir oyun kazan',
-        'Ödül: 750 jeton',
-        '0/1',
-      ),
+    'GÖREVLER' => [
+      for (final mission in progressNotifications.missions)
+        _FeatureEntry(
+          mission.complete ? Icons.task_alt_rounded : Icons.casino_rounded,
+          mission.title,
+          'Ödül: ${mission.reward} jeton',
+          '${mission.current}/${mission.target}',
+        ),
     ],
     _ => const [
       _FeatureEntry(
@@ -2800,19 +3643,15 @@ class _FeatureDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.sizeOf(context);
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final isDailyReward = title == 'GÜNLÜK GİRİŞ ÖDÜLÜ';
     final isProfile = title == 'PROFİLİM';
+    if (isProfile) return _ProfileDialog(requestName: requestProfileName);
+    final popupSize = appPopupSize(context);
     final dialogWidth = isDailyReward
         ? min(640.0, screenSize.width - 24)
-        : isProfile
-        ? min(720.0, screenSize.width - 24)
-        : min(430.0, screenSize.width - 44);
+        : popupSize.width;
     final dailyRewardHeight = min(360.0, screenSize.height - 16);
-    final maxHeight = isDailyReward
-        ? dailyRewardHeight
-        : isProfile
-        ? max(300.0, min(540.0, screenSize.height - 32))
-        : max(300.0, min(590.0, screenSize.height - 32));
     final standardDialogContent = Column(
       children: [
         if (title != 'GÖREVLER') ...[
@@ -2835,16 +3674,13 @@ class _FeatureDialog extends StatelessWidget {
           const _DailyLoginRewardPanel(),
           const SizedBox(height: 4),
         ],
-        if (!isProfile)
+        if (title == 'GÖREVLER') _MissionPanel(onReward: onMissionReward),
+        if (!isProfile && title != 'GÖREVLER')
           ..._entries.map(
-            (entry) => title == 'GÖREVLER'
-                ? _MissionEntryCard(entry: entry)
-                : _FeatureEntryCard(
-                    entry: entry,
-                    onTap: onEntryTap == null
-                        ? null
-                        : () => onEntryTap!(entry.title),
-                  ),
+            (entry) => _FeatureEntryCard(
+              entry: entry,
+              onTap: onEntryTap == null ? null : () => onEntryTap!(entry.title),
+            ),
           ),
         if (title == 'GELEN KUTUSU' && _entries.isEmpty)
           Padding(
@@ -2861,163 +3697,272 @@ class _FeatureDialog extends StatelessWidget {
           ),
       ],
     );
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          key: ValueKey('feature-dialog-$title'),
-          width: dialogWidth,
-          constraints: BoxConstraints(maxHeight: maxHeight),
-          margin: EdgeInsets.symmetric(horizontal: isDailyReward ? 8 : 16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: isProfile
-                  ? const [Color(0xFF123C2E), Color(0xFF071B14)]
-                  : const [Color(0xFF0E3528), Color(0xFF061B14)],
-            ),
-            borderRadius: BorderRadius.circular(isProfile ? 24 : 20),
-            border: Border.all(
-              color: OkeyColors.gold,
-              width: isProfile ? 3 : 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isProfile ? 0.74 : 0.68),
-                blurRadius: isProfile ? 34 : 30,
-                spreadRadius: isProfile ? 4 : 3,
-                offset: Offset(0, isProfile ? 14 : 0),
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: isProfile ? keyboardInset : 0),
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            key: ValueKey('feature-dialog-$title'),
+            width: dialogWidth,
+            height: isDailyReward
+                ? null
+                : isProfile && keyboardInset > 0
+                ? min(popupSize.height, screenSize.height - keyboardInset - 12)
+                : popupSize.height,
+            constraints: isDailyReward
+                ? BoxConstraints(maxHeight: dailyRewardHeight)
+                : null,
+            margin: isDailyReward
+                ? const EdgeInsets.symmetric(horizontal: 8)
+                : null,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isProfile
+                    ? const [Color(0xFF123C2E), Color(0xFF071B14)]
+                    : const [Color(0xFF0E3528), Color(0xFF061B14)],
               ),
-              BoxShadow(
-                color: OkeyColors.gold.withValues(alpha: 0.14),
-                blurRadius: 20,
+              borderRadius: BorderRadius.circular(isProfile ? 24 : 20),
+              border: Border.all(
+                color: OkeyColors.gold,
+                width: isProfile ? 3 : 2,
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: isProfile ? MainAxisSize.min : MainAxisSize.max,
-            children: [
-              Container(
-                height: isProfile ? 62 : 72,
-                padding: const EdgeInsets.fromLTRB(18, 8, 10, 8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  border: Border(
-                    bottom: BorderSide(
-                      color: OkeyColors.gold.withValues(alpha: 0.35),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha: isProfile ? 0.74 : 0.68,
+                  ),
+                  blurRadius: isProfile ? 34 : 30,
+                  spreadRadius: isProfile ? 4 : 3,
+                  offset: Offset(0, isProfile ? 14 : 0),
+                ),
+                BoxShadow(
+                  color: OkeyColors.gold.withValues(alpha: 0.14),
+                  blurRadius: 20,
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Container(
+                  height: isProfile ? 62 : 72,
+                  padding: EdgeInsets.fromLTRB(isProfile ? 14 : 18, 8, 10, 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    border: Border(
+                      bottom: BorderSide(
+                        color: OkeyColors.gold.withValues(alpha: 0.35),
+                      ),
                     ),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: isProfile ? 46 : 54,
-                      height: isProfile ? 46 : 54,
-                      decoration: BoxDecoration(
-                        gradient: const RadialGradient(
-                          colors: [Color(0xFF0A593B), Color(0xFF032A1D)],
-                        ),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: OkeyColors.goldLight.withValues(alpha: 0.7),
-                        ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black54,
-                            blurRadius: 6,
-                            offset: Offset(0, 3),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: isProfile ? 46 : 54,
+                        height: isProfile ? 46 : 54,
+                        decoration: BoxDecoration(
+                          gradient: const RadialGradient(
+                            colors: [Color(0xFF0A593B), Color(0xFF032A1D)],
                           ),
-                        ],
-                      ),
-                      child: Icon(
-                        icon,
-                        color: OkeyColors.goldLight,
-                        size: isProfile ? 25 : 29,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _displayTitle,
-                        style: TextStyle(
-                          color: OkeyColors.cream,
-                          fontSize: isProfile ? 19 : 23,
-                          fontWeight: FontWeight.w900,
-                          fontFamily: 'Georgia',
-                          letterSpacing: 1.1,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: OkeyColors.goldLight.withValues(alpha: 0.7),
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black54,
+                              blurRadius: 6,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          icon,
+                          color: OkeyColors.goldLight,
+                          size: isProfile ? 25 : 29,
                         ),
                       ),
-                    ),
-                    AppCloseButton(
-                      onTap: () => Navigator.of(context).pop(),
-                      size: isProfile ? 40 : 42,
-                    ),
-                  ],
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _displayTitle,
+                          style: TextStyle(
+                            color: OkeyColors.cream,
+                            fontSize: isProfile ? 19 : 23,
+                            fontWeight: FontWeight.w900,
+                            fontFamily: 'Georgia',
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ),
+                      AppCloseButton(
+                        onTap: () => Navigator.of(context).pop(),
+                        size: isDailyReward ? 42 : 40,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Divider(
-                height: 1,
-                color: OkeyColors.gold.withValues(alpha: 0.25),
-              ),
-              Flexible(
-                fit: isProfile ? FlexFit.loose : FlexFit.tight,
-                child: isProfile
-                    ? Scrollbar(
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                          child: _ProfileSplitPanel(careerEntries: _entries),
-                        ),
-                      )
-                    : isDailyReward
-                    ? Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                        child: Center(child: standardDialogContent),
-                      )
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-                        child: standardDialogContent,
-                      ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: isProfile ? 42 : 48,
-                  child: FilledButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: OkeyColors.goldLight,
-                      foregroundColor: OkeyColors.buttonBrown,
-                      elevation: isProfile ? 7 : 0,
-                      shadowColor: Colors.black87,
-                      shape: RoundedRectangleBorder(
-                        side: isProfile
-                            ? BorderSide(
-                                color: OkeyColors.gold.withValues(alpha: 0.95),
-                                width: 1.4,
+                Divider(
+                  height: 1,
+                  color: OkeyColors.gold.withValues(alpha: 0.25),
+                ),
+                Flexible(
+                  fit: isDailyReward ? FlexFit.loose : FlexFit.tight,
+                  child: isProfile
+                      ? keyboardInset > 0
+                            ? SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
+                                child: SizedBox(
+                                  width: max(1.0, dialogWidth - 16),
+                                  child: _ProfileSplitPanel(
+                                    careerEntries: _entries,
+                                    requestName: requestProfileName,
+                                  ),
+                                ),
                               )
-                            : BorderSide.none,
-                        borderRadius: BorderRadius.circular(10),
+                            : LayoutBuilder(
+                                builder: (context, _) => Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    8,
+                                    8,
+                                    8,
+                                    6,
+                                  ),
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    alignment: Alignment.topCenter,
+                                    child: SizedBox(
+                                      width: max(1.0, dialogWidth - 16),
+                                      child: _ProfileSplitPanel(
+                                        careerEntries: _entries,
+                                        requestName: requestProfileName,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              )
+                      : isDailyReward
+                      ? Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                          child: LayoutBuilder(
+                            builder: (context, bounds) => FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: SizedBox(
+                                width: bounds.maxWidth,
+                                child: standardDialogContent,
+                              ),
+                            ),
+                          ),
+                        )
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
+                          child: standardDialogContent,
+                        ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    isProfile ? 10 : 14,
+                    isProfile ? 8 : 10,
+                    isProfile ? 10 : 14,
+                    isProfile ? 10 : 14,
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: isProfile ? 42 : 48,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: OkeyColors.goldLight,
+                        foregroundColor: OkeyColors.buttonBrown,
+                        elevation: isProfile ? 7 : 0,
+                        shadowColor: Colors.black87,
+                        shape: RoundedRectangleBorder(
+                          side: isProfile
+                              ? BorderSide(
+                                  color: OkeyColors.gold.withValues(
+                                    alpha: 0.95,
+                                  ),
+                                  width: 1.4,
+                                )
+                              : BorderSide.none,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      appText('TAMAM', 'DONE'),
-                      style: TextStyle(
-                        fontSize: isProfile ? 14 : 17,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.8,
+                      child: Text(
+                        appText('TAMAM', 'DONE'),
+                        style: TextStyle(
+                          fontSize: isProfile ? 14 : 17,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
+  }
+}
+
+Future<void> _playRewardCoinFlight(
+  BuildContext context,
+  AnimationController controller,
+  Offset start,
+) async {
+  final overlay = Overlay.of(context);
+  final screen = MediaQuery.sizeOf(context);
+  final overlayBox = overlay.context.findRenderObject() as RenderBox;
+  final origin = overlayBox.globalToLocal(start);
+  final end = overlayBox.globalToLocal(
+    Offset(screen.width < 600 ? screen.width / 2 : screen.width - 205, 42),
+  );
+  final entry = OverlayEntry(
+    builder: (_) => AnimatedBuilder(
+      animation: controller,
+      child: RepaintBoundary(
+        key: const ValueKey('reward-coin-flight'),
+        child: Image.asset(
+          'images/ui/coin.png',
+          width: 34,
+          height: 34,
+          cacheWidth: 68,
+          cacheHeight: 68,
+        ),
+      ),
+      builder: (_, child) {
+        final progress = Curves.easeInOutCubic.transform(controller.value);
+        final position = Offset.lerp(origin, end, progress)!;
+        return Positioned(
+          left: position.dx - 17,
+          top: position.dy - 17 - sin(progress * pi) * 48,
+          child: IgnorePointer(
+            child: Opacity(
+              opacity: (1 - progress * 0.55).clamp(0.0, 1.0),
+              child: Transform.scale(
+                scale: 1 + sin(progress * pi) * 0.28,
+                child: child,
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+  overlay.insert(entry);
+  try {
+    await controller.forward(from: 0).orCancel;
+  } finally {
+    entry.remove();
+    entry.dispose();
   }
 }
 
@@ -3036,7 +3981,6 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
     vsync: this,
     duration: const Duration(milliseconds: 620),
   );
-  OverlayEntry? _coinFlightEntry;
 
   Offset? _activeRewardCenter() {
     final source = _activeRewardKey.currentContext?.findRenderObject();
@@ -3045,53 +3989,15 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
   }
 
   Future<void> _playCoinFlight(Offset start) async {
-    final overlay = Overlay.of(context);
-    final screen = MediaQuery.sizeOf(context);
-    final end = Offset(screen.width - 205, 42);
-    _coinFlightEntry?.remove();
-    _coinFlightEntry = OverlayEntry(
-      builder: (_) => AnimatedBuilder(
-        animation: _coinFlightController,
-        builder: (_, child) {
-          final progress = Curves.easeInOutCubic.transform(
-            _coinFlightController.value,
-          );
-          final position = Offset.lerp(start, end, progress)!;
-          final arc = sin(progress * pi) * 48;
-          return Positioned(
-            left: position.dx - 17,
-            top: position.dy - 17 - arc,
-            child: IgnorePointer(
-              child: Opacity(
-                opacity: (1 - progress * 0.55).clamp(0.0, 1.0),
-                child: Transform.scale(
-                  scale: 1 + sin(progress * pi) * 0.28,
-                  child: child,
-                ),
-              ),
-            ),
-          );
-        },
-        child: RepaintBoundary(
-          child: Image.asset(
-            'images/ui/coin.png',
-            width: 34,
-            height: 34,
-            cacheWidth: 68,
-            cacheHeight: 68,
-          ),
-        ),
-      ),
-    );
-    overlay.insert(_coinFlightEntry!);
-    await _coinFlightController.forward(from: 0);
-    _coinFlightEntry?.remove();
-    _coinFlightEntry = null;
+    try {
+      await _playRewardCoinFlight(context, _coinFlightController, start);
+    } on TickerCanceled {
+      // The popup was closed while its reward animation was running.
+    }
   }
 
   @override
   void dispose() {
-    _coinFlightEntry?.remove();
     _coinFlightController.dispose();
     super.dispose();
   }
@@ -3287,6 +4193,7 @@ class _DailyTaskCountdownState extends State<_DailyTaskCountdown> {
   @override
   void dispose() {
     _displayTimer?.cancel();
+    _dailyTaskClock.pause();
     super.dispose();
   }
 
@@ -3310,13 +4217,18 @@ class _DailyTaskCountdownState extends State<_DailyTaskCountdown> {
             size: 19,
           ),
           const SizedBox(width: 8),
-          Text(
-            'YENİLENME  ${_dailyTaskClock.remainingText}',
-            style: const TextStyle(
-              color: OkeyColors.goldLight,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.7,
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                'YENİLENME  ${_dailyTaskClock.remainingText}',
+                style: const TextStyle(
+                  color: OkeyColors.goldLight,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.7,
+                ),
+              ),
             ),
           ),
         ],
@@ -3337,13 +4249,8 @@ class _FeatureEntry {
 class _FeatureEntryCard extends StatelessWidget {
   final _FeatureEntry entry;
   final VoidCallback? onTap;
-  final bool compact;
 
-  const _FeatureEntryCard({
-    required this.entry,
-    this.onTap,
-    this.compact = false,
-  });
+  const _FeatureEntryCard({required this.entry, this.onTap});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -3351,11 +4258,8 @@ class _FeatureEntryCard extends StatelessWidget {
     behavior: HitTestBehavior.opaque,
     onTap: onTap,
     child: Container(
-      margin: EdgeInsets.only(bottom: compact ? 6 : 9),
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 10 : 13,
-        vertical: compact ? 7 : 12,
-      ),
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: onTap == null ? 0.055 : 0.085),
         borderRadius: BorderRadius.circular(12),
@@ -3365,31 +4269,27 @@ class _FeatureEntryCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            entry.icon,
-            color: OkeyColors.goldLight,
-            size: compact ? 21 : 25,
-          ),
-          SizedBox(width: compact ? 8 : 11),
+          Icon(entry.icon, color: OkeyColors.goldLight, size: 25),
+          const SizedBox(width: 11),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   entry.title,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: OkeyColors.cream,
-                    fontSize: compact ? 12.5 : 15,
+                    fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 if (entry.subtitle.isNotEmpty) ...[
-                  SizedBox(height: compact ? 1 : 3),
+                  const SizedBox(height: 3),
                   Text(
                     entry.subtitle,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.white54,
-                      fontSize: compact ? 9.5 : 11.5,
+                      fontSize: 11.5,
                       height: 1.3,
                     ),
                   ),
@@ -3407,9 +4307,9 @@ class _FeatureEntryCard extends StatelessWidget {
               ),
               child: Text(
                 entry.badge!,
-                style: TextStyle(
+                style: const TextStyle(
                   color: OkeyColors.goldLight,
-                  fontSize: compact ? 9 : 10,
+                  fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -3421,10 +4321,145 @@ class _FeatureEntryCard extends StatelessWidget {
   );
 }
 
+class _MissionPanel extends StatefulWidget {
+  final Future<void> Function(int)? onReward;
+  const _MissionPanel({this.onReward});
+  @override
+  State<_MissionPanel> createState() => _MissionPanelState();
+}
+
+class _MissionPanelState extends State<_MissionPanel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _flight = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 620),
+  );
+  final List<GlobalKey> _claimKeys = List.generate(3, (_) => GlobalKey());
+  String? _claiming;
+  String? _removing;
+
+  @override
+  void initState() {
+    super.initState();
+    // A previously interrupted claim has already credited its coins.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final mission in progressNotifications.missions) {
+        if (mission.claimed) {
+          progressNotifications.replaceClaimedMission(mission.id);
+        }
+      }
+    });
+  }
+
+  Future<void> _claim(DailyMission mission) async {
+    if (_claiming != null) return;
+    final box = _claimKeys[mission.slot].currentContext?.findRenderObject();
+    final start = box is RenderBox
+        ? box.localToGlobal(box.size.center(Offset.zero))
+        : null;
+    final reward = progressNotifications.claimMission(mission.id);
+    if (reward == null) return;
+    setState(() => _claiming = mission.id);
+    try {
+      if (start != null) await _playRewardCoinFlight(context, _flight, start);
+      if (!mounted) return;
+      if (widget.onReward != null) {
+        await widget.onReward!(reward.reward);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('+${reward.reward} Altın kazandın'),
+          backgroundColor: OkeyColors.tableMid,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      setState(() => _removing = mission.id);
+      await Future<void>.delayed(const Duration(milliseconds: 280));
+    } on TickerCanceled {
+      // Coins were credited once; finalize the replacement on dismissal.
+    } finally {
+      progressNotifications.replaceClaimedMission(mission.id);
+      if (mounted) {
+        setState(() {
+          _claiming = null;
+          _removing = null;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _flight.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: progressNotifications,
+    builder: (_, _) => Column(
+      children: [
+        for (final mission in progressNotifications.missions)
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 350),
+            reverseDuration: Duration.zero,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0.12, 0),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            ),
+            child: AnimatedOpacity(
+              key: ValueKey('mission-generation-${mission.id}'),
+              opacity: _removing == mission.id ? 0 : 1,
+              duration: const Duration(milliseconds: 280),
+              child: AnimatedSlide(
+                offset: _removing == mission.id
+                    ? const Offset(-0.12, 0)
+                    : Offset.zero,
+                duration: const Duration(milliseconds: 280),
+                child: _MissionEntryCard(
+                  entry: _FeatureEntry(
+                    mission.complete
+                        ? Icons.task_alt_rounded
+                        : Icons.casino_rounded,
+                    mission.title,
+                    'Ödül: ${mission.reward} jeton',
+                    '${mission.current}/${mission.target}',
+                  ),
+                  claimKey: _claimKeys[mission.slot],
+                  claimed: mission.claimed,
+                  onClaim:
+                      mission.complete && !mission.claimed && _claiming == null
+                      ? () => _claim(mission)
+                      : null,
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 class _MissionEntryCard extends StatelessWidget {
   final _FeatureEntry entry;
+  final GlobalKey? claimKey;
+  final VoidCallback? onClaim;
+  final bool claimed;
 
-  const _MissionEntryCard({required this.entry});
+  const _MissionEntryCard({
+    required this.entry,
+    this.claimKey,
+    this.onClaim,
+    this.claimed = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3436,7 +4471,7 @@ class _MissionEntryCard extends StatelessWidget {
     return Container(
       key: ValueKey('mission-progress-${entry.title}'),
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
+      padding: const EdgeInsets.fromLTRB(10, 11, 10, 12),
       decoration: BoxDecoration(
         color: const Color(0xFF0B2D22),
         borderRadius: BorderRadius.circular(13),
@@ -3453,7 +4488,7 @@ class _MissionEntryCard extends StatelessWidget {
             ),
             child: Icon(entry.icon, color: OkeyColors.goldLight, size: 25),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3475,12 +4510,14 @@ class _MissionEntryCard extends StatelessWidget {
                       size: 15,
                     ),
                     const SizedBox(width: 5),
-                    Text(
-                      rewardText,
-                      style: const TextStyle(
-                        color: OkeyColors.goldLight,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w800,
+                    Expanded(
+                      child: Text(
+                        rewardText,
+                        style: const TextStyle(
+                          color: OkeyColors.goldLight,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],
@@ -3501,6 +4538,35 @@ class _MissionEntryCard extends StatelessWidget {
               ],
             ),
           ),
+          if (current >= target) ...[
+            const SizedBox(width: 8),
+            SizedBox(
+              key: claimKey,
+              width: 88,
+              child: FilledButton(
+                key: ValueKey('mission-claim-${entry.title}'),
+                onPressed: onClaim,
+                style: FilledButton.styleFrom(
+                  backgroundColor: OkeyColors.goldLight,
+                  foregroundColor: OkeyColors.buttonBrown,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 10,
+                  ),
+                  elevation: 4,
+                  shadowColor: Colors.black87,
+                ),
+                child: Text(
+                  claimed ? 'ALINDI ✓' : 'ÖDÜLÜ AL',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -3509,38 +4575,38 @@ class _MissionEntryCard extends StatelessWidget {
 
 class _MenuSettings {
   final bool soundEffects;
-  final bool music;
+  final bool notifications;
   final bool vibration;
-  final bool homeEdgeTiles;
-  final bool showPerformance;
+  final bool showOpponentPictures;
+  final bool autoArrangeRack;
   final double fontScale;
   final AppLanguage language;
 
   const _MenuSettings({
     this.soundEffects = true,
-    this.music = true,
+    this.notifications = true,
     this.vibration = true,
-    this.homeEdgeTiles = true,
-    this.showPerformance = false,
+    this.showOpponentPictures = true,
+    this.autoArrangeRack = false,
     this.fontScale = 1,
     this.language = AppLanguage.turkish,
   });
 
   _MenuSettings copyWith({
     bool? soundEffects,
-    bool? music,
+    bool? notifications,
     bool? vibration,
-    bool? homeEdgeTiles,
-    bool? showPerformance,
+    bool? showOpponentPictures,
+    bool? autoArrangeRack,
     double? fontScale,
     AppLanguage? language,
   }) {
     return _MenuSettings(
       soundEffects: soundEffects ?? this.soundEffects,
-      music: music ?? this.music,
+      notifications: notifications ?? this.notifications,
       vibration: vibration ?? this.vibration,
-      homeEdgeTiles: homeEdgeTiles ?? this.homeEdgeTiles,
-      showPerformance: showPerformance ?? this.showPerformance,
+      showOpponentPictures: showOpponentPictures ?? this.showOpponentPictures,
+      autoArrangeRack: autoArrangeRack ?? this.autoArrangeRack,
       fontScale: (fontScale ?? this.fontScale).clamp(0.85, 1.25),
       language: language ?? this.language,
     );
@@ -3558,8 +4624,8 @@ class _SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<_SettingsDialog> {
   late _MenuSettings _settings;
 
-  String _st(String tr, String en) =>
-      _settings.language == AppLanguage.english ? en : tr;
+  String _st(String tr, String en, {String? de}) =>
+      localizedText(_settings.language, tr, en, german: de);
 
   @override
   void initState() {
@@ -3645,12 +4711,15 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                                       }),
                                     ),
                                     _toggleCard(
-                                      title: _st('MÜZİK', 'MUSIC'),
-                                      value: _settings.music,
-                                      icon: Icons.music_note_rounded,
+                                      title: _st(
+                                        'BİLDİRİMLER',
+                                        'NOTIFICATIONS',
+                                      ),
+                                      value: _settings.notifications,
+                                      icon: Icons.notifications_active_rounded,
                                       onChanged: (value) => setState(() {
                                         _settings = _settings.copyWith(
-                                          music: value,
+                                          notifications: value,
                                         );
                                       }),
                                     ),
@@ -3668,23 +4737,28 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                                   SizedBox(height: compact ? 4 : 10),
                                   _settingsGridRow(
                                     _toggleCard(
-                                      title: _st('KENAR TAŞLARI', 'EDGE TILES'),
-                                      value: _settings.homeEdgeTiles,
-                                      icon: Icons.style_rounded,
+                                      title: _st(
+                                        'RAKİP RESİMLERİ',
+                                        'OPPONENT PICTURES',
+                                      ),
+                                      value: _settings.showOpponentPictures,
+                                      icon: Icons.account_circle_rounded,
                                       onChanged: (value) => setState(() {
                                         _settings = _settings.copyWith(
-                                          homeEdgeTiles: value,
+                                          showOpponentPictures: value,
                                         );
                                       }),
                                     ),
                                     _toggleCard(
-                                      title: _st('PERFORMANS', 'PERFORMANCE'),
-                                      value: _settings.showPerformance,
-                                      icon: Icons.monitor_heart_rounded,
-                                      showOffBadge: true,
+                                      title: _st(
+                                        'OTOMATİK ISTAKA DİZİMİ',
+                                        'AUTO ARRANGE RACK',
+                                      ),
+                                      value: _settings.autoArrangeRack,
+                                      icon: Icons.auto_fix_high_rounded,
                                       onChanged: (value) => setState(() {
                                         _settings = _settings.copyWith(
-                                          showPerformance: value,
+                                          autoArrangeRack: value,
                                         );
                                       }),
                                     ),
@@ -3737,7 +4811,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         SizedBox(width: _compactLayout ? 9 : 12),
         Expanded(
           child: MediaQuery.withClampedTextScaling(
-            maxScaleFactor: 1,
+            maxScaleFactor: 1.25,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3756,10 +4830,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             ),
           ),
         ),
-        AppCloseButton(
-          onTap: () => Navigator.of(context).pop(),
-          size: _compactLayout ? 30 : 38,
-        ),
+        AppCloseButton(onTap: () => Navigator.of(context).pop()),
       ],
     ),
   );
@@ -3844,6 +4915,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               selected: _settings.language == AppLanguage.english,
               onTap: () => setState(() {
                 _settings = _settings.copyWith(language: AppLanguage.english);
+              }),
+            ),
+            const SizedBox(width: 4),
+            _LanguageChoice(
+              label: 'DE',
+              selected: _settings.language == AppLanguage.german,
+              onTap: () => setState(() {
+                _settings = _settings.copyWith(language: AppLanguage.german);
               }),
             ),
           ],
@@ -4101,7 +5180,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         if (!_compactLayout)
           Text(
             _st('101 Okey yazı önizlemesi', '101 Okey text preview'),
-            textScaler: TextScaler.linear(_settings.fontScale),
+            textScaler: appTextScaler(_settings.fontScale),
             style: const TextStyle(
               color: Colors.white70,
               fontSize: 11,
@@ -4113,7 +5192,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   );
 
   Widget _buildFooter() => MediaQuery.withClampedTextScaling(
-    maxScaleFactor: 1,
+    maxScaleFactor: 1.25,
     child: Container(
       height: _compactLayout ? 46 : 58,
       padding: EdgeInsets.fromLTRB(
@@ -4299,18 +5378,21 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
           },
           onTapCancel: () => _pressController.reverse(),
           child: Container(
-            width: 352,
-            height: 68,
+            width: 318,
+            height: 60,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(23),
-              image: const DecorationImage(
-                image: ResizeImage(
-                  AssetImage('images/ui/home/glossy_green_pill_opt.png'),
-                  width: 872,
-                  height: 210,
-                ),
-                fit: BoxFit.fill,
+              borderRadius: BorderRadius.circular(19),
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xFF64C653),
+                  Color(0xFF279C3D),
+                  Color(0xFF08752D),
+                ],
+                stops: [0, 0.55, 1],
               ),
+              border: Border.all(color: OkeyColors.goldLight, width: 1.6),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.55),
@@ -4320,33 +5402,18 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
               ],
             ),
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(width: 14),
-                SizedBox(
-                  width: 59,
-                  height: 56,
-                  child: Image.asset(
-                    'images/ui/home/hemenoyna2.png',
-                    width: 54,
-                    height: 56,
-                    fit: BoxFit.contain,
-                    cacheWidth: 120,
-                    // Yalnız genişliği sınırla; iki ekseni birlikte zorlamak
-                    // kaynak görselin oranını bozuyordu.
-                    filterQuality: FilterQuality.medium,
-                  ),
-                ),
-                const SizedBox(width: 6),
                 Expanded(
                   child: Center(
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        appLanguage.isEnglish ? 'PLAY NOW' : 'HEMEN OYNA',
+                        appText('HEMEN OYNA', 'PLAY NOW'),
                         maxLines: 1,
                         style: const TextStyle(
                           color: Color(0xFFFFF4E8),
-                          fontSize: 27,
+                          fontSize: 25,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.25,
                           shadows: _homeButtonTextShadows,
@@ -4355,7 +5422,7 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
               ],
             ),
           ),
@@ -4391,8 +5458,8 @@ class _RightButtonColumn extends StatelessWidget {
       ),
       (
         Icons.category_rounded,
-        'images/ui/icons/oyun_modlari_yeni_opt.png',
-        appText('OYUN MODLARI', 'GAME MODES'),
+        'görseller/icon/oyun_modlari_kompakt.png',
+        appText('OYUN\nMODLARI', 'GAME\nMODES', german: 'SPIEL\nMODI'),
         appText(
           'Klasik 101, zamanlı, renkli ve katlamalı oyun seçeneklerini buradan seçebilirsin.',
           'Choose Classic, Timed, Color Bonus or Progressive mode.',
@@ -4401,7 +5468,7 @@ class _RightButtonColumn extends StatelessWidget {
       (
         Icons.emoji_events_rounded,
         'images/ui/icons/turnuva.png',
-        appText('TURNUVALAR', 'TOURNAMENTS'),
+        appText('TURNUVA', 'TOURNAMENT'),
         appText(
           'Turnuva aşamalarını, ödülleri ve sıralamayı burada takip edebilirsin.',
           'Follow tournament stages, rewards and standings.',
@@ -4424,6 +5491,7 @@ class _RightButtonColumn extends StatelessWidget {
         icon: icon,
         assetPath: assetPath,
         label: label,
+        showIcon: true,
         onTap: index == 0
             ? onSelectRoom
             : index == 1
@@ -4434,19 +5502,43 @@ class _RightButtonColumn extends StatelessWidget {
       );
     }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [buttonAt(3), buttonAt(1)],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [buttonAt(0), buttonAt(2)],
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        if (bounds.maxWidth < 400) {
+          return Column(
+            children: [
+              for (final index in [3, 1, 0, 2])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: buttonAt(index),
+                  ),
+                ),
+            ],
+          );
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(child: buttonAt(3)),
+                const SizedBox(width: 8),
+                Expanded(child: buttonAt(1)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: buttonAt(0)),
+                const SizedBox(width: 8),
+                Expanded(child: buttonAt(2)),
+              ],
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -4456,12 +5548,14 @@ class _RightSideButton extends StatefulWidget {
   final String? assetPath;
   final String label;
   final VoidCallback onTap;
+  final bool showIcon;
 
   const _RightSideButton({
     required this.icon,
     this.assetPath,
     required this.label,
     required this.onTap,
+    this.showIcon = true,
   });
 
   @override
@@ -4543,47 +5637,15 @@ class _RightSideButtonState extends State<_RightSideButton>
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.only(left: 7, right: 9),
+            padding: const EdgeInsets.only(left: 14, right: 7),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.start,
               children: [
-                SizedBox(
-                  width:
-                      widget.assetPath ==
-                          'images/ui/icons/oyun_modlari_yeni_opt.png'
-                      ? 68
-                      : 46,
-                  height: 44,
-                  child: widget.assetPath == null
-                      ? Icon(widget.icon, color: OkeyColors.goldLight, size: 32)
-                      : Image.asset(
-                          widget.assetPath!,
-                          width:
-                              widget.assetPath ==
-                                  'images/ui/icons/oyun_modlari_yeni_opt.png'
-                              ? 68
-                              : 46,
-                          height: 44,
-                          fit: BoxFit.contain,
-                          cacheWidth:
-                              widget.assetPath ==
-                                  'images/ui/icons/oyun_modlari_yeni_opt.png'
-                              ? 136
-                              : 92,
-                          cacheHeight: 88,
-                          filterQuality: FilterQuality.low,
-                        ),
-                ),
-                const SizedBox(width: 7),
                 Expanded(
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: SizedBox(
-                      width:
-                          widget.assetPath ==
-                              'images/ui/icons/oyun_modlari_yeni_opt.png'
-                          ? 72
-                          : double.infinity,
+                      width: double.infinity,
                       child: Text(
                         widget.label,
                         maxLines: 2,
@@ -4602,6 +5664,33 @@ class _RightSideButtonState extends State<_RightSideButton>
                     ),
                   ),
                 ),
+                if (widget.showIcon) ...[
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    key: ValueKey('home-action-icon-${widget.label}'),
+                    width: 46,
+                    height: 44,
+                    child: widget.assetPath == null
+                        ? Icon(
+                            widget.icon,
+                            color: OkeyColors.goldLight,
+                            size: 32,
+                          )
+                        : Transform.scale(
+                            scale:
+                                widget.assetPath ==
+                                    'görseller/icon/oyun_modlari_kompakt.png'
+                                ? 1.40
+                                : 1,
+                            child: Image.asset(
+                              widget.assetPath!,
+                              fit: BoxFit.contain,
+                              cacheWidth: 168,
+                              filterQuality: FilterQuality.medium,
+                            ),
+                          ),
+                  ),
+                ],
               ],
             ),
           ),

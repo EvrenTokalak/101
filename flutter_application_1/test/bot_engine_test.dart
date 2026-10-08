@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
@@ -270,5 +272,108 @@ void main() {
     expect(result.discarded, isNotNull);
     expect(bot.hasOpened, isFalse);
     expect(bot.hand, hasLength(9));
+  });
+
+  test('açık bot yandan taşı yalnız aynı turda kullanabilecekse alır', () {
+    final bot = BotPlayer(
+      name: 'Bot',
+      hasOpened: true,
+      openType: 'seri',
+      hand: [
+        tile(5, TileColor.red),
+        tile(6, TileColor.red),
+        tile(13, TileColor.yellow),
+      ],
+    );
+
+    expect(
+      BotEngine.wantsDiscard(bot, tile(8, TileColor.red), const <Meld>[]),
+      isFalse,
+    );
+    expect(
+      BotEngine.wantsDiscard(bot, tile(7, TileColor.red), const <Meld>[]),
+      isTrue,
+    );
+  });
+
+  test('bot masadaki okeyi alıp aynı turda yeniden işler', () {
+    final okey = tile(12, TileColor.blue, isOkey: true);
+    final bot = BotPlayer(
+      name: 'Bot',
+      hasOpened: true,
+      openType: 'seri',
+      hand: [
+        tile(5, TileColor.red),
+        tile(7, TileColor.red),
+        tile(13, TileColor.yellow),
+      ],
+    );
+    final table = [
+      Meld(
+        tiles: [tile(4, TileColor.red), okey, tile(6, TileColor.red)],
+        type: 'seri',
+      ),
+    ];
+
+    final result = BotEngine.play(bot, table);
+
+    expect(result.processedTileCount, 3);
+    expect(table.single.tiles.any((item) => item.id == okey.id), isTrue);
+    expect(
+      table.single.tiles.map((item) => item.number),
+      containsAll([4, 5, 6, 7]),
+    );
+  });
+
+  test('zor ve temkinli bot rakibin beklediği taşı atmaz', () {
+    final dangerous = tile(6, TileColor.red);
+    final safe = tile(13, TileColor.yellow);
+    final bot = BotPlayer(
+      name: 'Temkinli Bot',
+      difficulty: BotDifficulty.hard,
+      personality: BotPersonality.cautious,
+      hasOpened: true,
+      openType: 'seri',
+      hand: [dangerous, safe],
+      opponentTakes: [tile(5, TileColor.red)],
+    );
+
+    final result = BotEngine.play(bot, <Meld>[]);
+
+    expect(result.discarded?.id, safe.id);
+    expect(bot.hand.single.id, dangerous.id);
+  });
+
+  test('bot motoru rastgele ellerde geçerli masa üretir', () {
+    final random = Random(101);
+    for (var iteration = 0; iteration < 150; iteration++) {
+      final deck = buildDeck();
+      deck.shuffle(random);
+      final bot = BotPlayer(
+        name: 'Simülasyon Botu',
+        difficulty:
+            BotDifficulty.values[iteration % BotDifficulty.values.length],
+        personality:
+            BotPersonality.values[iteration % BotPersonality.values.length],
+        hasOpened: true,
+        openType: 'seri',
+        hand: deck.take(22).toList(),
+      );
+      final table = <Meld>[];
+
+      final result = BotEngine.play(bot, table);
+
+      expect(result.discarded, isNotNull, reason: 'simülasyon $iteration');
+      expect(bot.tileCount, bot.hand.length, reason: 'simülasyon $iteration');
+      expect(
+        table.every(
+          (meld) => meld.type == 'cift'
+              ? Rules.isValidPair(meld.tiles)
+              : Rules.isValidMeld(meld.tiles),
+        ),
+        isTrue,
+        reason: 'simülasyon $iteration',
+      );
+    }
   });
 }

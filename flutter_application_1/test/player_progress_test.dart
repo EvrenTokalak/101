@@ -17,6 +17,7 @@ void main() {
     expect(freshProgress.level, 0);
     expect(freshProgress.title, 'Beginner');
     expect(freshProgress.xpForNextLevel, 30);
+    expect(freshProgress.coins, 25600);
   });
 
   test('profil adı düzenlenir ve geçersiz değerler reddedilir', () {
@@ -34,9 +35,13 @@ void main() {
     progress.reset(level: 2);
     expect(progress.xpForNextLevel, 30);
     progress.reset(level: 3);
-    expect(progress.xpForNextLevel, 50);
+    expect(progress.xpForNextLevel, 30);
     progress.reset(level: 4);
     expect(progress.xpForNextLevel, 50);
+    progress.reset(level: 7);
+    expect(progress.xpForNextLevel, 50);
+    progress.reset(level: 8);
+    expect(progress.xpForNextLevel, 75);
 
     progress.reset(level: 50);
     expect(progress.title, 'Pro');
@@ -81,7 +86,7 @@ void main() {
     expect(progress.levelXp, 20);
   });
 
-  test('sonraki tur galibiyetleri daha fazla XP ve altın verir', () {
+  test('sonraki turlarda Excel dışı ek XP ve altın verilmez', () {
     final reward = progress.recordCompletedGame(
       config: const GameLaunchConfig.gameMode(
         mode: OkeyGameMode.classic101,
@@ -94,9 +99,9 @@ void main() {
       roundNumber: 3,
     );
 
-    expect(reward.xp, 80);
-    expect(reward.coins, 400);
-    expect(reward.xpBreakdown, contains('Tur galibiyeti +20 XP'));
+    expect(reward.xp, 60);
+    expect(reward.coins, 300);
+    expect(reward.xpBreakdown, isNot(contains('Tur galibiyeti +20 XP')));
   });
 
   test('oda ücreti harcanır, yetersiz bakiye reddedilir ve ödül eklenir', () {

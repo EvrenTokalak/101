@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'game_launch.dart';
 
 const defaultPlayerProfileName = 'Evren';
+const initialPlayerCoins = 25600;
 const playerAvatarAssets = <String>[
   'images/ui/avatar_player.jpg',
   'images/ui/avatar_bot2.jpg',
@@ -17,35 +18,34 @@ class LevelBand {
   final int minLevel;
   final int maxLevel;
   final String title;
-  final int xpPerLevel;
 
-  const LevelBand(this.minLevel, this.maxLevel, this.title, this.xpPerLevel);
+  const LevelBand(this.minLevel, this.maxLevel, this.title);
 
   bool contains(int level) => level >= minLevel && level <= maxLevel;
 }
 
 const levelBands = <LevelBand>[
-  LevelBand(0, 2, 'Beginner', 30),
-  LevelBand(3, 4, 'Rookie', 30),
-  LevelBand(5, 9, 'Learner', 50),
-  LevelBand(10, 14, 'Novice', 50),
-  LevelBand(15, 19, 'Trainee', 50),
-  LevelBand(20, 24, 'Initiate', 50),
-  LevelBand(25, 29, 'Apprentice', 50),
-  LevelBand(30, 34, 'Graduate', 50),
-  LevelBand(35, 39, 'Aficionado', 50),
-  LevelBand(40, 44, 'Talented', 50),
-  LevelBand(45, 49, 'Skilled', 50),
-  LevelBand(50, 54, 'Pro', 100),
-  LevelBand(55, 59, 'Specialist', 100),
-  LevelBand(60, 64, 'All-Star', 100),
-  LevelBand(65, 69, 'Superstar', 100),
-  LevelBand(70, 74, 'Genius', 100),
-  LevelBand(75, 79, 'Master', 100),
-  LevelBand(80, 84, 'Maestro', 100),
-  LevelBand(85, 89, 'Expert', 100),
-  LevelBand(90, 94, 'Champion', 100),
-  LevelBand(95, 99, 'Grandmaster', 150),
+  LevelBand(0, 2, 'Beginner'),
+  LevelBand(3, 4, 'Rookie'),
+  LevelBand(5, 9, 'Learner'),
+  LevelBand(10, 14, 'Novice'),
+  LevelBand(15, 19, 'Trainee'),
+  LevelBand(20, 24, 'Initiate'),
+  LevelBand(25, 29, 'Apprentice'),
+  LevelBand(30, 34, 'Graduate'),
+  LevelBand(35, 39, 'Aficionado'),
+  LevelBand(40, 44, 'Talented'),
+  LevelBand(45, 49, 'Skilled'),
+  LevelBand(50, 54, 'Pro'),
+  LevelBand(55, 59, 'Specialist'),
+  LevelBand(60, 64, 'All-Star'),
+  LevelBand(65, 69, 'Superstar'),
+  LevelBand(70, 74, 'Genius'),
+  LevelBand(75, 79, 'Master'),
+  LevelBand(80, 84, 'Maestro'),
+  LevelBand(85, 89, 'Expert'),
+  LevelBand(90, 94, 'Champion'),
+  LevelBand(95, 99, 'Grandmaster'),
 ];
 
 class GameReward {
@@ -73,11 +73,11 @@ class PlayerProgressController extends ChangeNotifier {
   static const _handsOpenedKey = 'progress.hands_opened';
   static const _handsFinishedKey = 'progress.hands_finished';
   static const _totalXpKey = 'progress.total_xp';
-  static const _hundredThousandGrantKey = 'progress.grant_100k_v1';
+  static const _economyV2MigrationKey = 'progress.economy_v2';
 
   SharedPreferencesAsync? _preferences;
 
-  int _coins = 100000;
+  int _coins = initialPlayerCoins;
   int _level = 0;
   int _levelXp = 0;
   int _gamesPlayed = 0;
@@ -117,12 +117,10 @@ class PlayerProgressController extends ChangeNotifier {
   Future<void> load() async {
     final preferences = _preferences ??= SharedPreferencesAsync();
 
-    _coins = (await preferences.getInt(_coinsKey) ?? _coins).clamp(0, 1 << 31);
-    if (await preferences.getBool(_hundredThousandGrantKey) != true) {
-      _coins = 100000;
-      await preferences.setInt(_coinsKey, _coins);
-      await preferences.setBool(_hundredThousandGrantKey, true);
-    }
+    _coins = (await preferences.getInt(_coinsKey) ?? initialPlayerCoins).clamp(
+      0,
+      1 << 31,
+    );
     _level = (await preferences.getInt(_levelKey) ?? _level).clamp(0, 99);
     _levelXp = (await preferences.getInt(_levelXpKey) ?? _levelXp).clamp(
       0,
@@ -143,6 +141,19 @@ class PlayerProgressController extends ChangeNotifier {
         );
     _totalXpEarned = (await preferences.getInt(_totalXpKey) ?? _totalXpEarned)
         .clamp(0, 1 << 31);
+    if (await preferences.getBool(_economyV2MigrationKey) != true) {
+      final untouchedLegacyProfile =
+          _coins == 100000 &&
+          _level == 0 &&
+          _levelXp == 0 &&
+          _gamesPlayed == 0 &&
+          _totalXpEarned == 0;
+      if (untouchedLegacyProfile) {
+        _coins = initialPlayerCoins;
+        await preferences.setInt(_coinsKey, _coins);
+      }
+      await preferences.setBool(_economyV2MigrationKey, true);
+    }
     final savedPlayerName = (await preferences.getString(_playerNameKey))
         ?.trim();
     if (savedPlayerName != null && savedPlayerName.isNotEmpty) {
@@ -247,18 +258,21 @@ class PlayerProgressController extends ChangeNotifier {
     required bool finishedHand,
     int roundNumber = 1,
   }) {
+    assert(roundNumber >= 1);
     final breakdown = <String>[];
     final baseXp = switch (config.entryPoint) {
       GameEntryPoint.quickPlay => 30,
       GameEntryPoint.gameMode => 30,
       GameEntryPoint.room => 35,
       GameEntryPoint.tournament => 50,
+      GameEntryPoint.tutorial => 0,
     };
     var earnedXp = baseXp;
     breakdown.add('Oyun tamamlama +$baseXp XP');
 
     // Hemen Oyna bilinçli olarak yalnız sabit tamamlama XP'si verir.
-    if (config.entryPoint != GameEntryPoint.quickPlay) {
+    if (config.entryPoint != GameEntryPoint.quickPlay &&
+        config.entryPoint != GameEntryPoint.tutorial) {
       if (won) {
         final bonus = config.isTournament ? 50 : 30;
         earnedXp += bonus;
@@ -276,14 +290,6 @@ class PlayerProgressController extends ChangeNotifier {
       }
     }
 
-    // İlk turdaki mevcut ekonomi korunur; sonraki galibiyetlerde tur bonusu
-    // kademeli artar.
-    final roundWinXp = won ? (roundNumber - 1).clamp(0, 20) * 10 : 0;
-    if (roundWinXp > 0) {
-      earnedXp += roundWinXp;
-      breakdown.add('Tur galibiyeti +$roundWinXp XP');
-    }
-
     final baseCoinReward = won
         ? switch (config.entryPoint) {
             GameEntryPoint.quickPlay => 150,
@@ -291,10 +297,10 @@ class PlayerProgressController extends ChangeNotifier {
             GameEntryPoint.room => (config.entryFee ?? 0) * 4,
             GameEntryPoint.tournament =>
               1000 * ((config.tournamentRound ?? 0) + 1),
+            GameEntryPoint.tutorial => 0,
           }
         : 0;
-    final roundCoinBonus = won ? (roundNumber - 1).clamp(0, 20) * 50 : 0;
-    final coinReward = baseCoinReward + roundCoinBonus;
+    final coinReward = baseCoinReward;
 
     final oldLevel = _level;
     _levelXp += earnedXp;
@@ -321,7 +327,7 @@ class PlayerProgressController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  void reset({int coins = 100000, int level = 0, int levelXp = 0}) {
+  void reset({int coins = initialPlayerCoins, int level = 0, int levelXp = 0}) {
     _coins = coins;
     _level = level.clamp(0, 99);
     _levelXp = levelXp;
@@ -341,9 +347,8 @@ final playerProgress = PlayerProgressController();
 /// XP eşiği unvandan bağımsız olarak doğrudan sayısal seviyeye göre büyür.
 /// Seviye 2'de 30 XP, seviye 3'e gelindiğinde 50 XP gerekir.
 int xpRequiredForLevel(int level) {
-  if (level <= 2) return 30;
-  if (level <= 4) return 50;
-  if (level <= 7) return 65;
+  if (level <= 3) return 30;
+  if (level <= 7) return 50;
   if (level <= 12) return 75;
   if (level <= 19) return 100;
   if (level <= 29) return 130;

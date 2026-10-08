@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, kIsWeb;
@@ -10,10 +11,13 @@ import 'package:audioplayers/audioplayers.dart';
 import 'game_launch.dart';
 import 'app_controls.dart';
 import 'app_language.dart';
+import 'app_settings_dialog.dart';
+import 'game_help_dialog.dart';
 import 'performance_overlay.dart';
 import 'player_progress.dart';
 import 'opponent_name_session.dart';
 import 'store_cosmetics.dart';
+import 'startup_tutorial.dart';
 
 part 'game_rack_solver.dart';
 part 'game_bot_engine.dart';
@@ -23,9 +27,78 @@ part 'game_table_widgets.dart';
 
 /// Ana menü ve oyun içi ayarlar arasında paylaşılan titreşim tercihi.
 bool gameVibrationEnabled = true;
+bool gameSoundEffectsEnabled = true;
+bool gameOpponentPicturesEnabled = true;
+bool gameAutoArrangeRackEnabled = false;
 
 void setGameVibrationEnabled(bool enabled) {
   gameVibrationEnabled = enabled;
+}
+
+void setGameSoundEffectsEnabled(bool enabled) {
+  gameSoundEffectsEnabled = enabled;
+}
+
+void setGameOpponentPicturesEnabled(bool enabled) {
+  gameOpponentPicturesEnabled = enabled;
+}
+
+void setGameAutoArrangeRackEnabled(bool enabled) {
+  gameAutoArrangeRackEnabled = enabled;
+}
+
+Uint8List? _applauseWavCache;
+
+Uint8List _buildApplauseWav() {
+  final cached = _applauseWavCache;
+  if (cached != null) return cached;
+  const sampleRate = 16000;
+  const seconds = 1.35;
+  final sampleCount = (sampleRate * seconds).round();
+  final pcmBytes = sampleCount * 2;
+  final data = ByteData(44 + pcmBytes);
+  void ascii(int offset, String value) {
+    for (var index = 0; index < value.length; index++) {
+      data.setUint8(offset + index, value.codeUnitAt(index));
+    }
+  }
+
+  ascii(0, 'RIFF');
+  data.setUint32(4, 36 + pcmBytes, Endian.little);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  data.setUint32(16, 16, Endian.little);
+  data.setUint16(20, 1, Endian.little);
+  data.setUint16(22, 1, Endian.little);
+  data.setUint32(24, sampleRate, Endian.little);
+  data.setUint32(28, sampleRate * 2, Endian.little);
+  data.setUint16(32, 2, Endian.little);
+  data.setUint16(34, 16, Endian.little);
+  ascii(36, 'data');
+  data.setUint32(40, pcmBytes, Endian.little);
+
+  final random = Random(101);
+  const clapStarts = <double>[0.02, 0.12, 0.25, 0.39, 0.55, 0.72, 0.90, 1.08];
+  for (var index = 0; index < sampleCount; index++) {
+    final time = index / sampleRate;
+    var sample = (random.nextDouble() * 2 - 1) * 0.025;
+    for (final start in clapStarts) {
+      final elapsed = time - start;
+      if (elapsed >= 0 && elapsed < 0.12) {
+        final envelope = exp(-elapsed * 33) * (1 - elapsed / 0.12);
+        final noise = random.nextDouble() * 2 - 1;
+        sample += noise * envelope * 0.72;
+      }
+    }
+    final crowdEnvelope = sin(min(1, time / seconds) * pi);
+    sample += (random.nextDouble() * 2 - 1) * crowdEnvelope * 0.06;
+    data.setInt16(
+      44 + index * 2,
+      (sample.clamp(-1.0, 1.0) * 32767).round(),
+      Endian.little,
+    );
+  }
+  return _applauseWavCache = data.buffer.asUint8List();
 }
 
 Future<void>? _gameAudioWarmup;
@@ -200,7 +273,7 @@ class _RackDragVisualState {
 
 // İşlenebilir taşın hem çizimi hem DragTarget hit testi aynı noktayı izler.
 // Böylece perin üzerindeki taş kabul edilir; altta kalan parmak değil.
-const double _meldDragLift = 38;
+const double _meldDragLift = 54;
 
 class _RackPushPreview {
   final int tileId;
@@ -218,16 +291,21 @@ class _RackPushPreview {
   });
 }
 
-enum _RackMoveKind { insert, push }
+enum _RackMoveKind { insert, pushLeft, pushRight }
 
 const int _maxRackPushTiles = 6;
 
-int _rackPushVacancy(List<int?> slots, int sourceSlot, int targetSlot) {
+int _rackPushVacancy(
+  List<int?> slots,
+  int sourceSlot,
+  int targetSlot, {
+  bool? towardRight,
+}) {
   final rowLength = _GameScreenState._rackRowLength;
   if (sourceSlot ~/ rowLength != targetSlot ~/ rowLength) return -1;
   final rowStart = (targetSlot ~/ rowLength) * rowLength;
   final rowEnd = rowStart + rowLength;
-  final pushRight = sourceSlot < targetSlot;
+  final pushRight = towardRight ?? sourceSlot < targetSlot;
   if (pushRight) {
     final searchEnd = min(rowEnd, targetSlot + _maxRackPushTiles + 1);
     for (var index = targetSlot + 1; index < searchEnd; index++) {
@@ -302,25 +380,40 @@ List<Tile> buildDeck() {
 // ═══════════════════════════════════════════════════════════════════════════
 // BOT
 // ═══════════════════════════════════════════════════════════════════════════
+enum BotDifficulty { easy, medium, hard }
+
+enum BotPersonality { aggressive, cautious, pairFocused }
+
 class BotPlayer {
   final String name;
   final String displayName;
+  final BotDifficulty difficulty;
+  final BotPersonality personality;
   int tileCount;
   int penalty;
   bool hasOpened;
   String openType;
   int turnsPlayed;
   List<Tile> hand;
+  List<Tile> seenDiscards;
+  List<Tile> opponentTakes;
   BotPlayer({
     required this.name,
     String? displayName,
+    this.difficulty = BotDifficulty.medium,
+    this.personality = BotPersonality.aggressive,
     this.tileCount = 21,
     this.penalty = 0,
     this.hasOpened = false,
     this.openType = '',
     this.turnsPlayed = 0,
-    this.hand = const [],
-  }) : displayName = displayName ?? name;
+    List<Tile>? hand,
+    List<Tile>? seenDiscards,
+    List<Tile>? opponentTakes,
+  }) : displayName = displayName ?? name,
+       hand = hand ?? <Tile>[],
+       seenDiscards = seenDiscards ?? <Tile>[],
+       opponentTakes = opponentTakes ?? <Tile>[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -690,11 +783,12 @@ class _BotDiscardMotion {
   });
 }
 
-enum _TableTileMotionKind { drawDeck, drawDiscard, open, process }
+enum _TableTileMotionKind { drawDeck, drawDiscard, open, process, discard }
 
 enum _GameSound { pick, place, arrange }
 
 class _TableTileMotion {
+  final Map<int, Rect> sourceRects;
   final List<Tile> tiles;
   final _TableTileMotionKind kind;
   final int playerIndex;
@@ -702,6 +796,7 @@ class _TableTileMotion {
   final int serial;
 
   const _TableTileMotion({
+    this.sourceRects = const {},
     required this.tiles,
     required this.kind,
     required this.playerIndex,
@@ -736,6 +831,20 @@ class _GameScreenState extends State<GameScreen> {
 
   bool get _isTournamentGame =>
       widget.tournamentMode || widget.launchConfig.isTournament;
+  bool get _isTutorialGame =>
+      widget.launchConfig.entryPoint == GameEntryPoint.tutorial;
+
+  bool _tutorialStepRequired(int requiredStep, String instruction) {
+    if (!_isTutorialGame || _tutorialStep == requiredStep) return true;
+    _msg_(instruction, duration: const Duration(milliseconds: 2200));
+    return false;
+  }
+
+  void _finishTutorialStep(int completedStep) {
+    if (!_isTutorialGame || _tutorialStep != completedStep || !mounted) return;
+    setState(() => _tutorialStep = completedStep + 1);
+  }
+
   bool get _hasThreeRoundLimit =>
       widget.launchConfig.entryPoint == GameEntryPoint.gameMode ||
       widget.launchConfig.entryPoint == GameEntryPoint.room;
@@ -761,6 +870,8 @@ class _GameScreenState extends State<GameScreen> {
   int _botDiscardMotionSerial = 0;
   final ValueNotifier<_TableTileMotion?> _tableTileMotion = ValueNotifier(null);
   int _tableTileMotionSerial = 0;
+  Timer? _tableMotionTimer;
+  Timer? _playerDiscardTimer;
   int? _dealAnimationSerial;
   int _dealAnimationCounter = 0;
   bool _dealInProgress = false;
@@ -780,10 +891,10 @@ class _GameScreenState extends State<GameScreen> {
   TileColor _roundBonusColor = TileColor.red;
 
   String get _roundBonusColorName => switch (_roundBonusColor) {
-    TileColor.red => 'KIRMIZI',
-    TileColor.blue => 'MAVİ',
-    TileColor.black => 'SİYAH',
-    TileColor.yellow => 'SARI',
+    TileColor.red => appText('KIRMIZI', 'RED', german: 'ROT'),
+    TileColor.blue => appText('MAVİ', 'BLUE', german: 'BLAU'),
+    TileColor.black => appText('SİYAH', 'BLACK', german: 'SCHWARZ'),
+    TileColor.yellow => appText('SARI', 'YELLOW', german: 'GELB'),
   };
 
   Color get _roundBonusDisplayColor => switch (_roundBonusColor) {
@@ -794,8 +905,34 @@ class _GameScreenState extends State<GameScreen> {
   };
 
   String get _tableModeLabel => _isColorBonusMode
-      ? 'RENKLİ • $_roundBonusColorName 2×'
-      : widget.launchConfig.modeLabel;
+      ? '${appText('RENKLİ', 'COLOR BONUS', german: 'FARBBONUS')} • $_roundBonusColorName 2×'
+      : switch (widget.launchConfig.mode) {
+          OkeyGameMode.standard => appText(
+            'Sıradan',
+            'Standard',
+            german: 'Standard',
+          ),
+          OkeyGameMode.classic101 => appText(
+            'Klasik 101',
+            'Classic 101',
+            german: 'Klassisch 101',
+          ),
+          OkeyGameMode.timed101 => appText(
+            'Zamanlı 101',
+            'Timed 101',
+            german: '101 auf Zeit',
+          ),
+          OkeyGameMode.colorBonus101 => appText(
+            'Renkli 101',
+            'Color Bonus 101',
+            german: 'Farbbonus 101',
+          ),
+          OkeyGameMode.progressive => appText(
+            'Katlamalı',
+            'Progressive',
+            german: 'Progressiv',
+          ),
+        };
   int _minimumStandardOpeningScore = 101;
   int _minimumPairOpeningCount = 5;
 
@@ -819,9 +956,24 @@ class _GameScreenState extends State<GameScreen> {
 
   // ── Botlar ────────────────────────────────────────────────────────────
   late final List<BotPlayer> _bots = [
-    BotPlayer(name: 'Oyuncu 2', displayName: opponentNameSession.names[0]),
-    BotPlayer(name: 'Oyuncu 3', displayName: opponentNameSession.names[1]),
-    BotPlayer(name: 'Oyuncu 4', displayName: opponentNameSession.names[2]),
+    BotPlayer(
+      name: 'Oyuncu 2',
+      displayName: opponentNameSession.names[0],
+      difficulty: BotDifficulty.medium,
+      personality: BotPersonality.aggressive,
+    ),
+    BotPlayer(
+      name: 'Oyuncu 3',
+      displayName: opponentNameSession.names[1],
+      difficulty: BotDifficulty.hard,
+      personality: BotPersonality.cautious,
+    ),
+    BotPlayer(
+      name: 'Oyuncu 4',
+      displayName: opponentNameSession.names[2],
+      difficulty: BotDifficulty.easy,
+      personality: BotPersonality.pairFocused,
+    ),
   ];
 
   // ── UI Seçim Modu ─────────────────────────────────────────────────────
@@ -835,9 +987,14 @@ class _GameScreenState extends State<GameScreen> {
     const _RackDragVisualState(),
   );
   final ValueNotifier<_RackPushPreview?> _rackPushPreview = ValueNotifier(null);
+  int _rackShiftSerial = 0;
+  Map<int, int> _rackShiftOrigins = const {};
+  String? _rackShiftLayoutSignature;
   bool _draggingProcessableTile = false;
   _RackDragData? _activeRackDragData;
   Offset? _lastRackDragGlobalPosition;
+  Rect? _rackDragSourceRect;
+  List<Rect?> _rackDragRowRects = const [];
   Offset? _pendingGridDragPosition;
   double _pendingRackDragTilt = 0;
   double _pendingRackDragLift = 0;
@@ -852,6 +1009,11 @@ class _GameScreenState extends State<GameScreen> {
   int? _processableSignature;
   int _tableRevision = 0;
   Set<int> _cachedProcessableTileIds = const {};
+  int _tutorialStep = 0;
+  int? _tutorialArrangeTileId;
+  int? _tutorialProcessTileId;
+  int? _tutorialFinishTileId;
+  int? _tutorialFinishSlot;
 
   String? _msg;
   String? _warningMsg;
@@ -878,49 +1040,21 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> _openGameSettings() async {
     _cancelTimedPlayerTurn();
-    final updated = await showGeneralDialog<GameSettings>(
+    final updated = await showGeneralDialog<AppSettings>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Oyun ayarlarını kapat',
       barrierColor: Colors.black.withValues(alpha: 0.72),
       transitionDuration: const Duration(milliseconds: 240),
-      pageBuilder: (_, _, _) => GameSettingsDialog(
-        initial: _gameSettings,
-        launchConfig: widget.launchConfig,
-        onChanged: (settings) {
-          if (!mounted) return;
-          setGameVibrationEnabled(settings.vibration);
-          final enableAutoPlay = !_gameSettings.autoPlay && settings.autoPlay;
-          setState(() {
-            _gameSettings = settings;
-            if (!settings.autoPlay && _autoPlayerBusy) {
-              _autoPlayerGeneration++;
-              _autoPlayerBusy = false;
-              if (_turn == 0) _botBusy = false;
-            }
-          });
-          if (enableAutoPlay) {
-            setState(_arrangeAutoPlayerRack);
-            _scheduleAutoPlayer();
-          }
-        },
-        onRestart: (settings) {
-          Navigator.of(context, rootNavigator: true).pop();
-          setGameVibrationEnabled(settings.vibration);
-          setState(() {
-            _gameSettings = settings;
-            _totalPenalty = 0;
-            _elCount = 0;
-            for (final bot in _bots) {
-              bot.penalty = 0;
-            }
-            _startNewRound();
-          });
-        },
-        onExitToMenu: () => Navigator.of(
-          context,
-          rootNavigator: true,
-        ).popUntil((route) => route.isFirst),
+      pageBuilder: (_, _, _) => AppSettingsDialog(
+        initial: appSettings.value.copyWith(
+          soundEffects: _gameSettings.sound,
+          vibration: _gameSettings.vibration,
+          showOpponentPictures: _gameSettings.showBots,
+        ),
+        onHome: _returnToMainMenu,
+        onRestart: _restartGameFromToolbar,
+        onTutorial: _openTutorialFromSettings,
       ),
       transitionBuilder: (_, animation, _, child) => FadeTransition(
         opacity: animation,
@@ -943,17 +1077,88 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
     if (updated != null && mounted) {
+      appSettings.value = updated;
+      setGameSoundEffectsEnabled(updated.soundEffects);
       setGameVibrationEnabled(updated.vibration);
-      setState(() => _gameSettings = updated);
+      setGameOpponentPicturesEnabled(updated.showOpponentPictures);
+      setGameAutoArrangeRackEnabled(updated.autoArrangeRack);
+      await appLanguage.setLanguage(updated.language);
+      if (!mounted) return;
+      setState(() {
+        _gameSettings = _gameSettings.copyWith(
+          sound: updated.soundEffects,
+          vibration: updated.vibration,
+          showBots: updated.showOpponentPictures,
+          gridMagnifier: updated.moveHints,
+          fontScale: updated.fontScale,
+        );
+      });
     }
     if (mounted) _startTimedPlayerTurn();
+  }
+
+  Future<void> _openGameHelp() async {
+    _cancelTimedPlayerTurn();
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Yardımı kapat',
+      barrierColor: Colors.black.withValues(alpha: 0.78),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, _, _) => const GameHelpDialog(),
+      transitionBuilder: (_, animation, _, child) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
+          child: child,
+        ),
+      ),
+    );
+    if (mounted && _turn == 0 && !_gameOverShown) _startTimedPlayerTurn();
+  }
+
+  void _restartGameFromToolbar() {
+    _cancelTimedPlayerTurn();
+    setState(() {
+      _totalPenalty = 0;
+      _elCount = 0;
+      for (final bot in _bots) {
+        bot.penalty = 0;
+      }
+      _startNewRound();
+    });
+  }
+
+  void _returnToMainMenu() {
+    _cancelTimedPlayerTurn();
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  void _openTutorialFromSettings() {
+    if (_isTutorialGame) {
+      _restartGameFromToolbar();
+      return;
+    }
+    unawaited(
+      Navigator.of(context).push<bool>(
+        MaterialPageRoute<bool>(
+          builder: (_) =>
+              const GameScreen(launchConfig: GameLaunchConfig.tutorial()),
+        ),
+      ),
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _gameSettings = GameSettings(vibration: gameVibrationEnabled);
+    _gameSettings = GameSettings(
+      sound: gameSoundEffectsEnabled,
+      vibration: gameVibrationEnabled,
+      showBots: gameOpponentPicturesEnabled,
+      gridMagnifier: appSettings.value.moveHints,
+    );
     unawaited(prewarmGameAudio());
     _startNewRound();
   }
@@ -964,7 +1169,9 @@ class _GameScreenState extends State<GameScreen> {
     if (_initialFontScaleApplied) return;
     _initialFontScaleApplied = true;
     final inheritedScale = MediaQuery.textScalerOf(context).scale(1);
-    _gameSettings = _gameSettings.copyWith(fontScale: inheritedScale);
+    _gameSettings = _gameSettings.copyWith(
+      fontScale: inheritedScale / appBaseFontScale,
+    );
   }
 
   @override
@@ -986,12 +1193,17 @@ class _GameScreenState extends State<GameScreen> {
     _rackDragVisual.dispose();
     _rackPushPreview.dispose();
     _tableTileMotion.dispose();
+    _tableMotionTimer?.cancel();
+    _playerDiscardTimer?.cancel();
     _playerTurnSeconds.dispose();
     super.dispose();
   }
 
   // ── Yeni El Başlat ────────────────────────────────────────────────────
   void _startNewRound() {
+    _tableMotionTimer?.cancel();
+    _playerDiscardTimer?.cancel();
+    _tableTileMotionSerial++;
     final hadPreviousRound = _elCount > 0;
     _roundGeneration++;
     final currentRoundGeneration = _roundGeneration;
@@ -1073,7 +1285,9 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
-    _startingPlayer = widget.startingPlayer ?? Random().nextInt(4);
+    _startingPlayer = _isTutorialGame
+        ? 0
+        : widget.startingPlayer ?? Random().nextInt(4);
 
     // Önce herkese 21, ardından başlayan oyuncuya 22. taş dağıtılır.
     _rack = List<Tile>.from(_deck.take(21));
@@ -1084,6 +1298,8 @@ class _GameScreenState extends State<GameScreen> {
       bot.hasOpened = false;
       bot.openType = '';
       bot.turnsPlayed = 0;
+      bot.seenDiscards = <Tile>[];
+      bot.opponentTakes = <Tile>[];
     }
     final extraTile = _deck.removeLast();
     if (_startingPlayer == 0) {
@@ -1092,12 +1308,81 @@ class _GameScreenState extends State<GameScreen> {
       _bots[_startingPlayer - 1].hand.add(extraTile);
     }
     _compactRackSlots();
-    if (_gameSettings.autoPlay) _arrangeAutoPlayerRack();
+    if (_gameSettings.autoPlay || gameAutoArrangeRackEnabled) {
+      _arrangeAutoPlayerRack();
+    }
     for (final bot in _bots) {
       bot.tileCount = bot.hand.length;
     }
 
     _tableMetds = [];
+    if (_isTutorialGame) {
+      // Eğitim eli oyunun ortasındaymış gibi az taşla başlar. Dört hazır per
+      // 105 puan eder; kırmızı 7 işlenir, çekilen sarı 13 ise son taş olarak atılır.
+      _rack = [
+        for (final color in [TileColor.red, TileColor.blue, TileColor.black])
+          for (var number = 10; number <= 12; number++)
+            Tile(number: number, color: color, id: _idCounter++),
+        for (var number = 1; number <= 3; number++)
+          Tile(number: number, color: TileColor.yellow, id: _idCounter++),
+        Tile(number: 7, color: TileColor.red, id: _idCounter++),
+      ];
+      final tutorialFinishTile = Tile(
+        number: 13,
+        color: TileColor.yellow,
+        id: _idCounter++,
+      );
+      _deck.add(tutorialFinishTile);
+      _tutorialFinishTileId = tutorialFinishTile.id;
+      _tableMetds.add(
+        Meld(
+          tiles: [
+            Tile(number: 4, color: TileColor.red, id: _idCounter++),
+            Tile(number: 5, color: TileColor.red, id: _idCounter++),
+            Tile(number: 6, color: TileColor.red, id: _idCounter++),
+          ],
+          type: 'seri',
+        ),
+      );
+      _tutorialStep = 0;
+      _tutorialFinishSlot = null;
+      _rackSlots = List<int?>.filled(_rackSlotCount, null);
+      void placeTutorialTiles(Iterable<Tile> tiles, int startSlot) {
+        var slot = startSlot;
+        for (final tile in tiles) {
+          _rackSlots[slot++] = tile.id;
+        }
+      }
+
+      placeTutorialTiles(
+        _rack.where((tile) => tile.color == TileColor.red && tile.number >= 10),
+        0,
+      );
+      placeTutorialTiles(
+        _rack.where((tile) => tile.color == TileColor.blue),
+        4,
+      );
+      placeTutorialTiles(
+        _rack.where((tile) => tile.color == TileColor.black),
+        8,
+      );
+      placeTutorialTiles(
+        _rack.where(
+          (tile) => tile.color == TileColor.yellow && tile.number <= 2,
+        ),
+        12,
+      );
+      final yellowThree = _rack.firstWhere(
+        (tile) => tile.color == TileColor.yellow && tile.number == 3,
+      );
+      _tutorialArrangeTileId = yellowThree.id;
+      _rackSlots[20] = yellowThree.id;
+      final processTile = _rack.firstWhere(
+        (tile) => tile.color == TileColor.red && tile.number == 7,
+      );
+      _tutorialProcessTileId = processTile.id;
+      _rackSlots[22] = processTile.id;
+    }
     _markTableChanged();
     _discarded = null;
     _discardPiles = List.generate(4, (_) => <Tile>[]);
@@ -1125,7 +1410,7 @@ class _GameScreenState extends State<GameScreen> {
 
     // Her el rastgele bir koltuktan başlar; başlayan oyuncu zaten 22 taşlıdır.
     _turn = _startingPlayer;
-    _drawnThisTurn = _turn == 0;
+    _drawnThisTurn = _isTutorialGame ? false : _turn == 0;
     final openingTurn = _turn;
     if (_useGameplayAnimations) {
       final serial = ++_dealAnimationCounter;
@@ -1260,8 +1545,9 @@ class _GameScreenState extends State<GameScreen> {
     final isBotMotion = playerIndex > 0;
     final visibleTileLimit = switch (kind) {
       _TableTileMotionKind.drawDeck || _TableTileMotionKind.drawDiscard => 1,
-      _TableTileMotionKind.process => isBotMotion ? 1 : 2,
-      _TableTileMotionKind.open => isBotMotion ? 1 : 4,
+      _TableTileMotionKind.discard => 1,
+      _TableTileMotionKind.process => isBotMotion ? 1 : tiles.length,
+      _TableTileMotionKind.open => isBotMotion ? 1 : tiles.length,
     };
     final visibleTiles = tiles.take(visibleTileLimit).toList();
     if (visibleTiles.isEmpty) return;
@@ -1274,7 +1560,21 @@ class _GameScreenState extends State<GameScreen> {
     }
     if (!_useGameplayAnimations) return;
     final serial = ++_tableTileMotionSerial;
-    _tableTileMotion.value = _TableTileMotion(
+    final motion = _TableTileMotion(
+      sourceRects: {
+        if (!isBotMotion)
+          for (final tile in visibleTiles)
+            if (_gameRectForKey(
+                  context,
+                  kind == _TableTileMotionKind.drawDeck
+                      ? const ValueKey('grid-deck-slot')
+                      : kind == _TableTileMotionKind.drawDiscard
+                      ? const ValueKey('discard-Oyuncu 4')
+                      : ValueKey('rack-tile-${tile.id}'),
+                )
+                case final Rect rect)
+              tile.id: rect,
+      },
       tiles: visibleTiles,
       kind: kind,
       playerIndex: playerIndex,
@@ -1283,17 +1583,33 @@ class _GameScreenState extends State<GameScreen> {
     );
     final clearDelay = switch (kind) {
       _TableTileMotionKind.drawDeck || _TableTileMotionKind.drawDiscard =>
-        Duration(milliseconds: isBotMotion ? 150 : 240),
+        Duration(milliseconds: isBotMotion ? 150 : 520),
+      _TableTileMotionKind.discard => const Duration(milliseconds: 520),
       _TableTileMotionKind.process => Duration(
-        milliseconds: isBotMotion ? 150 : 250,
+        milliseconds: isBotMotion ? 150 : 540,
       ),
       _TableTileMotionKind.open => Duration(
-        milliseconds: isBotMotion ? 180 : 330,
+        milliseconds: isBotMotion ? 180 : 620,
       ),
     };
-    Future.delayed(clearDelay, () {
-      if (!mounted || _tableTileMotion.value?.serial != serial) return;
-      _tableTileMotion.value = null;
+    _tableTileMotion.value = motion;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || serial != _tableTileMotionSerial) return;
+      // Newly created rack/table targets receive their size during this frame.
+      // Refresh the overlay once layout is ready, keeping landing tiles hidden.
+      _tableTileMotion.value = _TableTileMotion(
+        tiles: motion.tiles,
+        kind: motion.kind,
+        playerIndex: motion.playerIndex,
+        targetAlignment: motion.targetAlignment,
+        serial: motion.serial,
+        sourceRects: motion.sourceRects,
+      );
+      _tableMotionTimer?.cancel();
+      _tableMotionTimer = Timer(clearDelay, () {
+        if (!mounted || _tableTileMotion.value?.serial != serial) return;
+        _tableTileMotion.value = null;
+      });
     });
   }
 
@@ -1475,7 +1791,29 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  void _playApplause() {
+    if (!_gameSettings.sound) return;
+    final serial = ++_soundSerial;
+    unawaited(() async {
+      try {
+        await _soundPlayer.stop();
+        if (!mounted || serial != _soundSerial) return;
+        await _soundPlayer.play(
+          BytesSource(_buildApplauseWav()),
+          volume: 0.88,
+          mode: PlayerMode.lowLatency,
+        );
+      } catch (_) {
+        // Ses çıkışı olmayan test ortamlarında kutlama görseli devam eder.
+      }
+    }());
+  }
+
   void _tapTile(int tileId) {
+    if (_isTutorialGame && _tutorialStep < 3) {
+      _msg_('Önce ekrandaki öğretici adımını tamamla.');
+      return;
+    }
     if (_turn != 0) {
       _warn_('Sıra sende değil.');
       return;
@@ -1542,11 +1880,20 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _reorderRack(int tileId, int targetIndex, _RackMoveKind moveKind) {
+    if (_isTutorialGame && _tutorialStep != 1) {
+      _msg_('Önce ekrandaki sürükleme adımını tamamla.');
+      return;
+    }
+    if (_isTutorialGame && tileId != _tutorialArrangeTileId) {
+      _msg_('Bu adımda yalnız sarı 3 taşını sarı 1-2 taşlarının yanına taşı.');
+      return;
+    }
     final from = _rackSlots.indexOf(tileId);
     if (from == -1) return;
     final target = targetIndex.clamp(0, _rackSlotCount - 1);
     if (from == target) return;
     var moved = false;
+    final slotsBeforeMove = List<int?>.from(_rackSlots);
     setState(() {
       // Kaynak taşı önce kaldır. Böylece taşın bıraktığı gerçek boşluk da
       // zincirleme yerleştirme hesabına dahil edilir.
@@ -1575,7 +1922,12 @@ class _GameScreenState extends State<GameScreen> {
         _rackSlots[destination] = tileId;
         moved = true;
       } else {
-        final vacancy = _rackPushVacancy(_rackSlots, from, target);
+        final vacancy = _rackPushVacancy(
+          _rackSlots,
+          from,
+          target,
+          towardRight: moveKind == _RackMoveKind.pushRight,
+        );
         if (vacancy < 0) {
           _rackSlots[from] = tileId;
           return;
@@ -1592,9 +1944,56 @@ class _GameScreenState extends State<GameScreen> {
         _rackSlots[target] = tileId;
         moved = true;
       }
-      if (moved) _rackAnalysisSignature = null;
+      if (_isTutorialGame && moved) {
+        final allIds = _rack.map((tile) => tile.id).toSet();
+        final arranged = _rackGroups(allIds).any(
+          (group) =>
+              group.any((tile) => tile.id == _tutorialArrangeTileId) &&
+              Rules.isValidRun(group),
+        );
+        if (!arranged) {
+          _rackSlots = slotsBeforeMove;
+          moved = false;
+        }
+      }
+      if (moved) {
+        _rackAnalysisSignature = null;
+        _rackShiftSerial++;
+        // Only displaced neighbours slide one slot. The released tile follows
+        // the finger directly; no lift, bounce or long travel animation.
+        _rackShiftOrigins = {
+          for (var index = 0; index < _rackSlots.length; index++)
+            if (_rackSlots[index] != null &&
+                _rackSlots[index] != tileId &&
+                slotsBeforeMove.contains(_rackSlots[index]) &&
+                (slotsBeforeMove.indexOf(_rackSlots[index]) - index).abs() ==
+                    1 &&
+                slotsBeforeMove.indexOf(_rackSlots[index]) ~/ _rackRowLength ==
+                    index ~/ _rackRowLength)
+              _rackSlots[index]!:
+                  slotsBeforeMove.indexOf(_rackSlots[index]) - index,
+        };
+        _rackShiftLayoutSignature = _rackSlots.join(',');
+      }
     });
-    if (moved) _playInteractionFeedback(sound: _GameSound.place);
+    if (_isTutorialGame && !moved) {
+      _msg_('Sarı 3 taşını sarı 1-2 dizisinin hemen yanına bırak.');
+      return;
+    }
+    if (moved) {
+      _playInteractionFeedback(sound: _GameSound.place);
+      if (_isTutorialGame &&
+          _tutorialStep == 1 &&
+          tileId == _tutorialArrangeTileId) {
+        final allIds = _rack.map((tile) => tile.id).toSet();
+        final arranged = _rackGroups(allIds).any(
+          (group) =>
+              group.any((tile) => tile.id == _tutorialArrangeTileId) &&
+              Rules.isValidRun(group),
+        );
+        if (arranged) _finishTutorialStep(1);
+      }
+    }
   }
 
   int get _currentRackSignature => Object.hash(
@@ -1636,8 +2035,15 @@ class _GameScreenState extends State<GameScreen> {
 
   // ── Desteden Taş Çek ─────────────────────────────────────────────────
   void _drawFromDeck([int? targetSlot]) {
+    if (!_tutorialStepRequired(0, 'Önce ortadaki kapalı desteden taş çek.')) {
+      return;
+    }
     if (_turn != 0) {
       _msg_('Sıra sende değil.');
+      return;
+    }
+    if (_isTutorialGame && targetSlot == null) {
+      _msg_('Kapalı taşı ortadan tutup ıstakadaki boş yere sürükle.');
       return;
     }
     if (_drawnThisTurn) {
@@ -1652,17 +2058,28 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       final tile = _deck.removeLast();
       _rack.add(tile);
-      final usedInnerGap = _placeInRackSlot(tile, targetSlot);
-      _drawAttentionTileId = usedInnerGap ? tile.id : null;
-      if (usedInnerGap) _drawAttentionSerial++;
+      _placeInRackSlot(tile, targetSlot);
+      if (_isTutorialGame) {
+        _tutorialFinishSlot = _rackSlots.indexOf(tile.id);
+      }
+      _drawAttentionTileId = targetSlot == null ? tile.id : null;
+      if (_drawAttentionTileId != null) _drawAttentionSerial++;
+      if (targetSlot == null) {
+        _beginTableTileMotion(_TableTileMotionKind.drawDeck, [tile]);
+      }
       _drawnThisTurn = true;
       _tookDiscard = false;
     });
     _playInteractionFeedback(sound: _GameSound.pick);
+    _finishTutorialStep(0);
   }
 
   // ── Atılan Taşı Al (soldan çek) ───────────────────────────────────────
   void _takeDiscarded([int? targetSlot]) {
+    if (_isTutorialGame) {
+      _msg_('Bu adımda ortadaki kapalı desteden taş çek.');
+      return;
+    }
     if (_turn != 0) {
       _msg_('Sıra sende değil.');
       return;
@@ -1679,6 +2096,7 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       _takenDiscardTile = _discarded;
       final tile = _discarded!;
+      _recordDiscardTaken(0, tile);
       _rack.add(tile);
       final usedInnerGap = _placeInRackSlot(tile, targetSlot);
       _drawAttentionTileId = usedInnerGap ? tile.id : null;
@@ -1723,7 +2141,15 @@ class _GameScreenState extends State<GameScreen> {
   void _discardTile({
     bool celebrateCenterFinish = false,
     bool timedOut = false,
+    bool tutorialDrag = false,
   }) {
+    if (!_tutorialStepRequired(4, 'Önce işlek kırmızı 7 taşını işle.')) {
+      return;
+    }
+    if (_isTutorialGame && !tutorialDrag) {
+      _msg_('Son taşı tutup ortadaki taş atma alanına sürükle.');
+      return;
+    }
     if (_turn != 0) {
       _warn_('Sıra sende değil.');
       return;
@@ -1765,18 +2191,32 @@ class _GameScreenState extends State<GameScreen> {
       _drawnThisTurn = false;
       _tookDiscard = false;
       _takenDiscardTile = null;
+      if (!tutorialDrag) {
+        _beginTableTileMotion(_TableTileMotionKind.discard, [tile]);
+      }
     });
     _releaseTurnTransients();
     _playInteractionFeedback(strong: true);
 
     if (_rack.isEmpty) {
+      _playApplause();
+      if (_isTutorialGame) {
+        setState(() {
+          _showFinishCelebration = true;
+          _botBusy = true;
+        });
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) Navigator.of(context).pop(true);
+        });
+        return;
+      }
       if (celebrateCenterFinish && _useGameplayAnimations) {
         final serial = ++_finishCelebrationSerial;
         setState(() {
           _showFinishCelebration = true;
           _botBusy = true;
         });
-        Future.delayed(const Duration(milliseconds: 920), () {
+        Future.delayed(const Duration(milliseconds: 1500), () {
           if (!mounted || serial != _finishCelebrationSerial) return;
           setState(() => _showFinishCelebration = false);
           _endRoundPlayerWins();
@@ -1786,7 +2226,22 @@ class _GameScreenState extends State<GameScreen> {
       _endRoundPlayerWins();
       return;
     }
-    _nextTurn();
+    if (!tutorialDrag && _useGameplayAnimations) {
+      final generation = _roundGeneration;
+      setState(() => _botBusy = true);
+      _playerDiscardTimer?.cancel();
+      _playerDiscardTimer = Timer(const Duration(milliseconds: 540), () {
+        if (!mounted ||
+            generation != _roundGeneration ||
+            _turn != 0 ||
+            _gameOverShown) {
+          return;
+        }
+        _nextTurn();
+      });
+    } else {
+      _nextTurn();
+    }
   }
 
   bool _checkDiscardPenalty(Tile tile) {
@@ -1803,6 +2258,10 @@ class _GameScreenState extends State<GameScreen> {
     Set<int> tileIds, {
     List<List<Tile>>? detectedGroups,
   }) {
+    if (_isTutorialGame && _tutorialStep != 2) {
+      _msg_('Önce ekrandaki öğretici adımını tamamla.');
+      return;
+    }
     if (_turn != 0) {
       _msg_('Sıra sende değil.');
       return;
@@ -1851,16 +2310,15 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
+    final openedMelds = <Meld>[
+      for (int i = 0; i < groups.length; i++)
+        Meld(tiles: Rules.orderedMeld(groups[i], types[i]!), type: types[i]!),
+    ];
     setState(() {
       for (final tile in selected) {
         tile.selected = false;
       }
-      for (int i = 0; i < groups.length; i++) {
-        final type = types[i]!;
-        _tableMetds.add(
-          Meld(tiles: Rules.orderedMeld(groups[i], type), type: type),
-        );
-      }
+      _tableMetds.addAll(openedMelds);
       _markTableChanged();
       _clearRackSlots(tileIds);
       _rack.removeWhere((tile) => tileIds.contains(tile.id));
@@ -1873,6 +2331,7 @@ class _GameScreenState extends State<GameScreen> {
       _takenDiscardTile = null;
       _beginTableTileMotion(_TableTileMotionKind.open, selected);
     });
+    _finishTutorialStep(2);
     _msg_('${groups.length} per açıldı! ✓ ($openingValue puan)');
   }
 
@@ -1889,7 +2348,11 @@ class _GameScreenState extends State<GameScreen> {
     return pairedIds.length == selected.length ? pairs : null;
   }
 
-  void _openPairs(Set<int> tileIds, {List<List<Tile>>? detectedPairs}) {
+  void _openPairs(
+    Set<int> tileIds, {
+    List<List<Tile>>? detectedPairs,
+    bool animateMotion = true,
+  }) {
     if (_turn != 0) {
       _msg_('Sıra sende değil.');
       return;
@@ -1976,13 +2439,15 @@ class _GameScreenState extends State<GameScreen> {
       if (!layingPairsAfterStandard) _playerOpenType = 'cift';
       _tookDiscard = false;
       _takenDiscardTile = null;
-      _beginTableTileMotion(
-        wasAlreadyOpened
-            ? _TableTileMotionKind.process
-            : _TableTileMotionKind.open,
-        selected,
-        targetAlignment: wasAlreadyOpened ? const Alignment(0, -0.18) : null,
-      );
+      if (animateMotion) {
+        _beginTableTileMotion(
+          wasAlreadyOpened
+              ? _TableTileMotionKind.process
+              : _TableTileMotionKind.open,
+          selected,
+          targetAlignment: wasAlreadyOpened ? const Alignment(0, -0.18) : null,
+        );
+      }
     });
     _msg_(
       wasAlreadyOpened
@@ -2012,7 +2477,9 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   Set<int> get _processableTileIds {
-    if (_rack.isEmpty || _tableMetds.isEmpty) return const <int>{};
+    if (_rack.isEmpty || _tableMetds.isEmpty) {
+      return const <int>{};
+    }
     final signature = Object.hash(_currentRackSignature, _tableRevision);
     if (_processableSignature == signature) return _cachedProcessableTileIds;
     _cachedProcessableTileIds = Set<int>.unmodifiable({
@@ -2031,6 +2498,21 @@ class _GameScreenState extends State<GameScreen> {
     const retainedTiles = 8;
     if (pile.length > retainedTiles) {
       pile.removeRange(0, pile.length - retainedTiles);
+    }
+    for (var index = 0; index < _bots.length; index++) {
+      if (index + 1 == seat) continue;
+      final memory = _bots[index].seenDiscards;
+      memory.add(tile);
+      if (memory.length > 32) memory.removeAt(0);
+    }
+  }
+
+  void _recordDiscardTaken(int seat, Tile tile) {
+    for (var index = 0; index < _bots.length; index++) {
+      if (index + 1 == seat) continue;
+      final memory = _bots[index].opponentTakes;
+      memory.add(tile);
+      if (memory.length > 16) memory.removeAt(0);
     }
   }
 
@@ -2056,6 +2538,14 @@ class _GameScreenState extends State<GameScreen> {
     _pendingRackDragTilt = 0;
     _pendingRackDragLift = 0;
     _activeRackDragData = data;
+    _rackDragSourceRect = _gameRectForKey(
+      context,
+      ValueKey('rack-slot-${data.sourceSlot}'),
+    );
+    _rackDragRowRects = [
+      _gameRectForKey(context, const ValueKey('rack-slot-0')),
+      _gameRectForKey(context, ValueKey('rack-slot-$_rackRowLength')),
+    ];
     _lastRackDragGlobalPosition = null;
     final draggedIds = data.tileIds.isEmpty ? {data.tileId} : data.tileIds;
     _draggingProcessableTile = draggedIds.any(_processableTileIds.contains);
@@ -2065,7 +2555,7 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  void _updateGridDragZoom(_RackDragData _, DragUpdateDetails details) {
+  void _updateGridDragZoom(_RackDragData data, DragUpdateDetails details) {
     final targetTilt = (details.delta.dx * 0.035).clamp(-0.18, 0.18);
     final tilt = _pendingRackDragTilt * 0.55 + targetTilt.toDouble() * 0.45;
     Offset? localPosition;
@@ -2100,6 +2590,68 @@ class _GameScreenState extends State<GameScreen> {
     _lastRackDragGlobalPosition ??= details.globalPosition;
     final steppedTilt = (tilt / 0.025).round() * 0.025;
     _scheduleDragVisualFrame(localPosition, steppedTilt, lift);
+    _resolveRackEdgeOverlap(
+      data,
+      _lastRackDragGlobalPosition!,
+      details.delta.dx,
+    );
+  }
+
+  void _resolveRackEdgeOverlap(
+    _RackDragData data,
+    Offset center,
+    double deltaX,
+  ) {
+    if (deltaX.abs() < 0.1) return;
+    final source = _rackDragSourceRect;
+    if (source == null) return;
+    for (final rowStart in [0, _rackRowLength]) {
+      final first = _rackDragRowRects[rowStart ~/ _rackRowLength];
+      if (first == null || center.dy < first.top || center.dy > first.bottom) {
+        continue;
+      }
+      final localX = center.dx - first.left;
+      if (localX < 0 || localX >= first.width * _rackRowLength) return;
+      final fraction = (localX / first.width) % 1;
+      // Keep the narrow between-tile seam available for insertion.
+      if (fraction <= 0.08 || fraction >= 0.92) return;
+      final dragged = Rect.fromCenter(
+        center: center,
+        width: source.width - 1.2,
+        height: source.height,
+      );
+      final towardRight = deltaX > 0;
+      for (var index = rowStart; index < rowStart + _rackRowLength; index++) {
+        if (_rackSlots[index] == null || _rackSlots[index] == data.tileId) {
+          continue;
+        }
+        final target = first.shift(Offset((index - rowStart) * first.width, 0));
+        if (towardRight
+            ? target.center.dx <= center.dx
+            : target.center.dx >= center.dx) {
+          continue;
+        }
+        if (dragged.intersect(target).width < dragged.width * 0.05) continue;
+        final previewSlots = List<int?>.from(_rackSlots)
+          ..[data.sourceSlot] = null;
+        final vacancy = _rackPushVacancy(
+          previewSlots,
+          data.sourceSlot,
+          index,
+          towardRight: towardRight,
+        );
+        if (vacancy < 0) continue;
+        _rackPushPreview.value = _RackPushPreview(
+          tileId: data.tileId,
+          sourceSlot: data.sourceSlot,
+          targetSlot: index,
+          vacancySlot: vacancy,
+          kind: towardRight ? _RackMoveKind.pushRight : _RackMoveKind.pushLeft,
+        );
+        return;
+      }
+      return;
+    }
   }
 
   void _scheduleDragVisualFrame(
@@ -2111,7 +2663,9 @@ class _GameScreenState extends State<GameScreen> {
     _pendingRackDragTilt = rackTilt;
     _pendingRackDragLift = rackLift;
     final nowMicros = _dragVisualUpdateClock.elapsedMicroseconds;
-    if (nowMicros - _lastDragVisualUpdateMicros < 66000) return;
+    // Parmağı yaklaşık ekran yenileme hızında izle. Önceki 66 ms sınırı
+    // sürüklenen taşın kademe kademe sıçrıyormuş gibi görünmesine yol açıyordu.
+    if (nowMicros - _lastDragVisualUpdateMicros < 16000) return;
     _lastDragVisualUpdateMicros = nowMicros;
     if (_dragVisualFrameScheduled) return;
     _dragVisualFrameScheduled = true;
@@ -2133,6 +2687,12 @@ class _GameScreenState extends State<GameScreen> {
 
   void _endGridDragZoom() {
     final dragData = _activeRackDragData;
+    final edgePreview = _rackPushPreview.value;
+    if (dragData != null &&
+        edgePreview?.tileId == dragData.tileId &&
+        _rackSlots[dragData.sourceSlot] == dragData.tileId) {
+      _reorderRack(dragData.tileId, edgePreview!.targetSlot, edgePreview.kind);
+    }
     final globalPosition = _lastRackDragGlobalPosition;
     final discardRenderObject = _playerDiscardTargetKey.currentContext
         ?.findRenderObject();
@@ -2155,11 +2715,6 @@ class _GameScreenState extends State<GameScreen> {
     _rackDragVisual.value = const _RackDragVisualState();
     _rackPushPreview.value = null;
   }
-
-  bool get _canLayPairsAfterStandard =>
-      _playerOpened &&
-      _playerOpenType == 'seri' &&
-      Rules.canLayPairsAfterStandard(_tableMetds);
 
   bool _canDropOnMeld(int meldIndex, _RackDragData data) {
     if (!_playerOpened || _turn != 0 || !_drawnThisTurn) return false;
@@ -2208,18 +2763,36 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _dropOnPairArea(_RackDragData data) {
+    if (_isTutorialGame) {
+      _msg_('Bu eğitimde yalnız gösterilen seri açma adımlarını kullan.');
+      return;
+    }
     final tiles = _tilesForDrag(data);
     final replacementTarget = _pairReplacementTarget(tiles);
     if (replacementTarget >= 0) {
-      _tryAddToMeld(replacementTarget, tiles.map((tile) => tile.id).toSet());
+      _tryAddToMeld(
+        replacementTarget,
+        tiles.map((tile) => tile.id).toSet(),
+        animateMotion: false,
+      );
       return;
     }
     if (!_canLayTilesInPairArea(tiles)) return;
     final ids = tiles.map((tile) => tile.id).toSet();
-    _openPairs(ids, detectedPairs: _pairGroups(ids));
+    _openPairs(ids, detectedPairs: _pairGroups(ids), animateMotion: false);
   }
 
   void _enterAddMode() {
+    if (!_tutorialStepRequired(
+      3,
+      'Önce elini açmak için soldaki SERİ AÇ düğmesine bas.',
+    )) {
+      return;
+    }
+    if (_isTutorialGame) {
+      _msg_('Kırmızı 7 taşını tutup masadaki kırmızı 4-5-6 perine sürükle.');
+      return;
+    }
     if (_turn != 0 || _botBusy) {
       _msg_('Sıra sende değil.');
       return;
@@ -2288,6 +2861,7 @@ class _GameScreenState extends State<GameScreen> {
             ? '$processed seçili taş işlendi.'
             : '$processed taş otomatik işlendi.',
       );
+      _finishTutorialStep(3);
     }
   }
 
@@ -2373,6 +2947,10 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _undoProcessedMoves() {
+    if (_isTutorialGame) {
+      _msg_('Öğretici hamleleri geri alınamaz. Gösterilen adıma devam et.');
+      return;
+    }
     if (_processedMoves.isEmpty) return;
     if (_turn != 0 || !_drawnThisTurn) {
       _msg_('İşlenen taşlar yalnız taş atmadan önce geri alınabilir.');
@@ -2414,7 +2992,11 @@ class _GameScreenState extends State<GameScreen> {
     _tryAddToMeld(meldIdx, _selectedTileIds);
   }
 
-  void _tryAddToMeld(int meldIdx, Set<int> tileIds) {
+  void _tryAddToMeld(
+    int meldIdx,
+    Set<int> tileIds, {
+    bool animateMotion = true,
+  }) {
     final selected = _rack.where((tile) => tileIds.contains(tile.id)).toList();
     if (selected.isEmpty) {
       setState(() => _uiMode = 'normal');
@@ -2439,11 +3021,15 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       _placeTilesIntoMeld(meldIdx, selected);
       _uiMode = 'normal';
-      _beginTableTileMotion(
-        _TableTileMotionKind.process,
-        selected,
-        targetAlignment: _motionTargetForMeld(meld),
-      );
+      // A dropped tile already travelled with the pointer. Only button/tap
+      // processing needs an additional rack-to-table flight.
+      if (animateMotion) {
+        _beginTableTileMotion(
+          _TableTileMotionKind.process,
+          selected,
+          targetAlignment: _motionTargetForMeld(meld),
+        );
+      }
     });
     _msg_(
       swappedOkey
@@ -2453,6 +3039,21 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _dropOnMeld(int meldIndex, _RackDragData data) {
+    final tutorialDragIds = data.tileIds.isEmpty
+        ? <int>{data.tileId}
+        : data.tileIds;
+    if (_isTutorialGame &&
+        (_tutorialStep != 3 ||
+            tutorialDragIds.length != 1 ||
+            data.tileId != _tutorialProcessTileId ||
+            meldIndex < 0 ||
+            meldIndex >= _tableMetds.length ||
+            !_tableMetds[meldIndex].tiles.any(
+              (tile) => tile.color == TileColor.red && tile.number == 6,
+            ))) {
+      _msg_('Yalnız kırmızı 7 taşını kırmızı 4-5-6 perine sürükle.');
+      return;
+    }
     if (!_playerOpened) {
       _msg_('Başka bir pere işlemeden önce elini açmalısın.');
       return;
@@ -2462,10 +3063,17 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     final ids = _tilesForDrag(data).map((tile) => tile.id).toSet();
-    _tryAddToMeld(meldIndex, ids);
+    final rackLengthBefore = _rack.length;
+    _tryAddToMeld(meldIndex, ids, animateMotion: false);
+    if (_rack.length < rackLengthBefore) _finishTutorialStep(3);
   }
 
   void _dropToDiscard(_RackDragData data) {
+    if (_isTutorialGame &&
+        (_tutorialStep != 4 || data.tileId != _tutorialFinishTileId)) {
+      _msg_('Son olarak çektiğin sarı 13 taşını ortaya bırak.');
+      return;
+    }
     final index = _rack.indexWhere((tile) => tile.id == data.tileId);
     if (index == -1) return;
     setState(() {
@@ -2473,14 +3081,19 @@ class _GameScreenState extends State<GameScreen> {
         tile.selected = tile.id == data.tileId;
       }
     });
-    _discardTile(celebrateCenterFinish: _rack.length == 1);
+    _discardTile(celebrateCenterFinish: _rack.length == 1, tutorialDrag: true);
   }
 
   void _finishByCenterDrop(_RackDragData data) {
+    if (_isTutorialGame &&
+        (_tutorialStep != 4 || data.tileId != _tutorialFinishTileId)) {
+      _msg_('Son olarak çektiğin sarı 13 taşını ortaya bırak.');
+      return;
+    }
     if (_turn != 0 || !_drawnThisTurn || _rack.length != 1) return;
     if (_rack.single.id != data.tileId || data.tileIds.length != 1) return;
     setState(() => _rack.single.selected = true);
-    _discardTile(celebrateCenterFinish: true);
+    _discardTile(celebrateCenterFinish: true, tutorialDrag: true);
   }
 
   Set<int> _applyRackGroupLayout(List<List<Tile>> groups) {
@@ -2559,6 +3172,13 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _arrangeStandardMelds() {
+    if (!_tutorialStepRequired(1, 'Önce ortadaki kapalı desteden taş çek.')) {
+      return;
+    }
+    if (_isTutorialGame) {
+      _msg_('Sarı 3 taşını tutup sarı 1-2 taşlarının yanına sürükle.');
+      return;
+    }
     setState(() => _showRackPairCount = false);
     final groups = RackSolver.standardMelds(_rack);
     if (groups.isEmpty) {
@@ -2568,9 +3188,14 @@ class _GameScreenState extends State<GameScreen> {
     }
     _layoutRackGroups(groups);
     _playInteractionFeedback(sound: _GameSound.arrange);
+    _finishTutorialStep(1);
   }
 
   void _arrangePairs() {
+    if (_isTutorialGame) {
+      _msg_('Bu eğitim elinde SERİ DİZ düğmesini kullan.');
+      return;
+    }
     final pairs = RackSolver.pairs(_rack);
     setState(() => _showRackPairCount = true);
     if (pairs.isEmpty) {
@@ -2583,6 +3208,9 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _autoOpenStandardMelds() {
+    if (!_tutorialStepRequired(2, 'Önce sağdaki SERİ DİZ düğmesine bas.')) {
+      return;
+    }
     final allIds = _rack.map((tile) => tile.id).toSet();
     final groups = RackSolver.standardMeldsFromLayout(_rackGroups(allIds));
     if (groups.isEmpty) {
@@ -2593,7 +3221,39 @@ class _GameScreenState extends State<GameScreen> {
     _openStandardMelds(ids, detectedGroups: groups);
   }
 
+  bool get _canAutoOpenStandardMelds {
+    if (_isTutorialGame && _tutorialStep != 2) return false;
+    if (_playerOpened && _playerOpenType == 'cift') return false;
+    final groups = RackSolver.standardMeldsFromLayout(
+      _rackGroups(_rack.map((tile) => tile.id).toSet()),
+    );
+    final ids = groups.expand((group) => group).map((tile) => tile.id).toSet();
+    if (groups.isEmpty || ids.length >= _rack.length) return false;
+    if (_tookDiscard &&
+        _takenDiscardTile != null &&
+        !ids.contains(_takenDiscardTile!.id)) {
+      return false;
+    }
+    final score = _isColorBonusMode
+        ? Rules.coloredOpeningValue(groups, _roundBonusColor)
+        : Rules.validMeldTotal(groups);
+    return _playerOpened || score >= _minimumStandardOpeningScore;
+  }
+
+  bool get _canAutoOpenPairs {
+    if (_isTutorialGame) return false;
+    final pairs = RackSolver.pairsFromLayout(
+      _rackGroups(_rack.map((tile) => tile.id).toSet()),
+    );
+    return pairs.isNotEmpty &&
+        _canLayTilesInPairArea(pairs.expand((pair) => pair));
+  }
+
   void _autoOpenPairs() {
+    if (_isTutorialGame) {
+      _msg_('Bu eğitim elinde SERİ AÇ düğmesini kullan.');
+      return;
+    }
     final allIds = _rack.map((tile) => tile.id).toSet();
     final pairs = RackSolver.pairsFromLayout(_rackGroups(allIds));
     if (pairs.isEmpty) {
@@ -2741,11 +3401,9 @@ class _GameScreenState extends State<GameScreen> {
     final roundGeneration = _roundGeneration;
     if (!alreadyMarkedBusy) setState(() => _botBusy = true);
 
-    final botThinkTime = _gameSettings.autoPlay
-        ? const Duration(milliseconds: 110)
-        : _instantBotTurns
+    final botThinkTime = _instantBotTurns
         ? const Duration(milliseconds: 25)
-        : Duration(milliseconds: 650 + Random().nextInt(651));
+        : Duration(milliseconds: 1333 + Random().nextInt(1335));
     _botThinkTimer?.cancel();
     _botThinkTimer = Timer(botThinkTime, () async {
       _botThinkTimer = null;
@@ -2799,6 +3457,7 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           if (canTakeDiscard) {
             drawnTile = _discarded!;
+            _recordDiscardTaken(botIdx + 1, drawnTile!);
             final previousSeat = botIdx;
             if (_discardPiles[previousSeat].isNotEmpty &&
                 _discardPiles[previousSeat].last.id == drawnTile!.id) {
@@ -2958,7 +3617,7 @@ class _GameScreenState extends State<GameScreen> {
                 serial: ++_botDiscardMotionSerial,
               );
             });
-            Future.delayed(const Duration(milliseconds: 210), finishTurn);
+            Future.delayed(const Duration(milliseconds: 140), finishTurn);
           } else {
             finishTurn();
           }
@@ -2976,7 +3635,7 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       if (animatedDraw) {
-        Future.delayed(const Duration(milliseconds: 150), playAndDiscard);
+        Future.delayed(const Duration(milliseconds: 100), playAndDiscard);
       } else {
         playAndDiscard();
       }
@@ -3189,386 +3848,498 @@ class _GameScreenState extends State<GameScreen> {
     final eligibleMeldIndexes = myTurn && _uiMode == 'addMeld'
         ? _eligibleMeldIndexes
         : const <int>{};
-    final processableTileIds = _gameSettings.moveHints
-        ? _processableTileIds
-        : const <int>{};
+    final processableTileIds = _processableTileIds;
     final centerNotice =
         _warningMsg ??
         _msg ??
         (_uiMode == 'addMeld' ? 'İşlemek istediğin perdeye dokun' : null);
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF071B14),
-      body: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _clearRackSelection,
-        child: MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(_gameSettings.fontScale)),
-          child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, viewport) {
-                final sceneWidth = viewport.maxWidth;
-                final sceneHeight = viewport.maxHeight;
-                final edgeInset = sceneWidth * 0.012;
-                final actionPanelWidth = sceneWidth * 0.115;
-                final controlGap = max(3.0, sceneWidth * 0.003);
-                final rackHeight = sceneHeight * 0.29;
-                final infoPanelHeight = sceneHeight * 0.11;
-                final rackContentWidth =
-                    sceneWidth -
-                    edgeInset * 2 -
-                    actionPanelWidth * 2 -
-                    controlGap * 2 -
-                    8;
-                final normalRackTileWidth = max(
-                  1.0,
-                  rackContentWidth / _rackRowLength - 3.2,
-                );
-                final rackVisualTileWidth = max(
-                  1.0,
-                  ((rackContentWidth - 4) * 0.852) / _rackRowLength - 1.6,
-                );
-                final rackVisualTileHeight = min(
-                  rackVisualTileWidth * 1.58,
-                  max(1.0, (rackHeight - 6) / 2),
-                );
-                final gridTileWidth = normalRackTileWidth * 0.85;
+    return _TileMotionScope(
+      motion: _tableTileMotion,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF071B14),
+        body: Listener(
+          onPointerDown: (_) {
+            if (_drawAttentionTileId != null) {
+              setState(() => _drawAttentionTileId = null);
+            }
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _clearRackSelection,
+            child: MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: MediaQuery.textScalerOf(context)),
+              child: SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, viewport) {
+                    final sceneWidth = viewport.maxWidth;
+                    final sceneHeight = viewport.maxHeight;
+                    final edgeInset = sceneWidth * 0.012;
+                    final actionPanelWidth = sceneWidth * 0.115;
+                    final controlGap = max(3.0, sceneWidth * 0.003);
+                    final rackHeight = sceneHeight * 0.29;
+                    final infoPanelHeight = sceneHeight * 0.11;
+                    final rackContentWidth =
+                        sceneWidth -
+                        edgeInset * 2 -
+                        actionPanelWidth * 2 -
+                        controlGap * 2 -
+                        8;
+                    final normalRackTileWidth = max(
+                      1.0,
+                      rackContentWidth / _rackRowLength - 3.2,
+                    );
+                    final rackVisualTileWidth = max(
+                      1.0,
+                      ((rackContentWidth - 4) * 0.852) / _rackRowLength - 1.6,
+                    );
+                    final rackVisualTileHeight = min(
+                      rackVisualTileWidth * 1.58,
+                      max(1.0, (rackHeight - 6) / 2),
+                    );
+                    final gridTileWidth = normalRackTileWidth * 0.85;
 
-                return SizedBox.expand(
-                  child: Stack(
-                    children: [
-                      const Positioned.fill(
-                        child: ColoredBox(color: Color(0xFF071B14)),
-                      ),
-                      Positioned.fill(
-                        child: RepaintBoundary(
-                          child: storeCosmetics.backgroundColor != null
-                              ? ColoredBox(
-                                  color: storeCosmetics.backgroundColor!,
-                                )
-                              : Image.asset(
-                                  storeCosmetics.backgroundAsset,
-                                  fit: BoxFit.cover,
-                                  cacheWidth: _backgroundDecodeWidth(context),
-                                  gaplessPlayback: true,
-                                  filterQuality: FilterQuality.low,
-                                ),
-                        ),
-                      ),
-                      TickerMode(
-                        enabled: !_endDialogVisible,
-                        child: RepaintBoundary(
-                          child: _GameSceneEntrance(
-                            enabled: _useGameplayAnimations,
-                            child: Stack(
-                              children: [
-                                // ── Büyük oyun masası ───────────────────────────────────
-                                Positioned(
-                                  top: 0,
-                                  left: 0,
-                                  right: 0,
-                                  bottom: rackHeight,
-                                  child: Padding(
-                                    padding: EdgeInsets.fromLTRB(
-                                      edgeInset,
-                                      sceneHeight * 0.012,
-                                      edgeInset,
-                                      sceneHeight * 0.008,
-                                    ),
-                                    child: _TableArea(
-                                      melds: _tableMetds,
-                                      bots: _bots,
-                                      playerName: playerProgress.playerName,
-                                      activeTurn: _turn,
-                                      discardPiles: _discardPiles,
-                                      uiMode: _uiMode,
-                                      eligibleMeldIndexes: eligibleMeldIndexes,
-                                      onMeldTap: _addToMeld,
-                                      onMeldDrop: _dropOnMeld,
-                                      canAcceptMeldDrop: _canDropOnMeld,
-                                      onPairDrop: _dropOnPairArea,
-                                      canAcceptPairDrop: _canDropOnPairArea,
-                                      myTurn: myTurn,
-                                      drawnThisTurn: _drawnThisTurn,
-                                      onPlayerDiscardDrop: _dropToDiscard,
-                                      playerDiscardTargetKey:
-                                          _playerDiscardTargetKey,
-                                      canTakeDiscard:
-                                          myTurn &&
-                                          !_drawnThisTurn &&
-                                          _discarded != null,
-                                      onTakeDiscard: _takeDiscarded,
-                                      canReturnDiscard:
-                                          _tookDiscard &&
-                                          _takenDiscardTile != null &&
-                                          _rack.any(
-                                            (tile) =>
-                                                tile.id ==
-                                                _takenDiscardTile!.id,
-                                          ),
-                                      returnDiscardTileId:
-                                          _takenDiscardTile?.id,
-                                      onReturnDiscard: _returnTakenDiscard,
-                                      gridTileWidth: gridTileWidth,
-                                      gridKey: _meldGridKey,
-                                      dragVisual: _rackDragVisual,
-                                      botDiscardMotion: _botDiscardMotion,
-                                      tableTileMotion: _tableTileMotion,
-                                      bottomReservedSpace: infoPanelHeight,
-                                      gameModeLabel:
-                                          _isColorBonusMode &&
-                                              _showColorBonusIntro
-                                          ? ''
-                                          : _tableModeLabel,
-                                      minimumStandardOpeningScore:
-                                          _isProgressiveMode
-                                          ? _minimumStandardOpeningScore
-                                          : null,
-                                      minimumPairOpeningCount:
-                                          _isProgressiveMode
-                                          ? _minimumPairOpeningCount
-                                          : null,
-                                      deckCount: _deck.length,
-                                      indicator: _indicator,
-                                      perPoints: _playerOpened
-                                          ? _rackRemainingPoints
-                                          : _rackPerPoints,
-                                      showRemainingPoints: _playerOpened,
-                                      pairCount:
-                                          !_playerOpened && _showRackPairCount
-                                          ? _rackPairCount
-                                          : null,
-                                      canDraw: myTurn && !_drawnThisTurn,
-                                      onDraw: _drawFromDeck,
-                                      canFinishByCenterDrop:
-                                          canAct && _rack.length == 1,
-                                      onFinishByCenterDrop: _finishByCenterDrop,
-                                      dragTileWidth: rackVisualTileWidth,
-                                      dragTileHeight: rackVisualTileHeight,
-                                      showGrid: _gameSettings.showGrid,
-                                      showBots: _gameSettings.showBots,
-                                    ),
-                                  ),
-                                ),
-
-                                if (_isColorBonusMode && _showColorBonusIntro)
-                                  Positioned(
-                                    top: sceneHeight * 0.02,
-                                    left: edgeInset + 58,
-                                    right: edgeInset + 58,
-                                    bottom: rackHeight + 8,
-                                    child: _ColorBonusRoundIntro(
-                                      key: ValueKey(
-                                        'color-bonus-round-intro-$_roundGeneration',
+                    return SizedBox.expand(
+                      child: Stack(
+                        children: [
+                          const Positioned.fill(
+                            child: ColoredBox(color: Color(0xFF071B14)),
+                          ),
+                          Positioned.fill(
+                            child: RepaintBoundary(
+                              child: storeCosmetics.backgroundColor != null
+                                  ? ColoredBox(
+                                      color: storeCosmetics.backgroundColor!,
+                                    )
+                                  : Image.asset(
+                                      storeCosmetics.backgroundAsset,
+                                      fit: BoxFit.cover,
+                                      cacheWidth: _backgroundDecodeWidth(
+                                        context,
                                       ),
-                                      colorName: _roundBonusColorName,
-                                      color: _roundBonusDisplayColor,
-                                      onFinished: () {
-                                        if (!mounted || !_showColorBonusIntro) {
-                                          return;
-                                        }
-                                        setState(
-                                          () => _showColorBonusIntro = false,
-                                        );
-                                      },
+                                      gaplessPlayback: true,
+                                      filterQuality: FilterQuality.low,
                                     ),
-                                  ),
-
-                                if (_isTimedMode && myTurn)
-                                  Positioned(
-                                    left:
-                                        edgeInset +
-                                        actionPanelWidth +
-                                        controlGap,
-                                    right:
-                                        edgeInset +
-                                        actionPanelWidth +
-                                        controlGap,
-                                    bottom: rackHeight - 2,
-                                    height: 10,
-                                    child: _TimedRackCountdown(
-                                      key: ValueKey(
-                                        'timed-rack-$_playerTurnGeneration',
-                                      ),
-                                      seconds: _playerTurnSeconds,
-                                      active: myTurn,
-                                    ),
-                                  ),
-
-                                // ── Referanstaki gibi: kontroller + ahşap ıstaka ─────────
-                                Positioned(
-                                  left: 0,
-                                  right: 0,
-                                  bottom: 0,
-                                  height: rackHeight,
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: edgeInset,
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        SizedBox(
-                                          width: actionPanelWidth,
-                                          child: _RackActionPanel(
-                                            actions: [
-                                              _RackAction(
-                                                label: 'SERİ AÇ',
-                                                active:
-                                                    canAct &&
-                                                    !(_playerOpened &&
-                                                        _playerOpenType ==
-                                                            'cift'),
-                                                color: const Color(0xFF19862B),
-                                                onTap: _autoOpenStandardMelds,
-                                              ),
-                                              _RackAction(
-                                                label: 'ÇİFT AÇ',
-                                                active:
-                                                    canAct &&
-                                                    (!(_playerOpened &&
-                                                            _playerOpenType ==
-                                                                'seri') ||
-                                                        _canLayPairsAfterStandard),
-                                                color: const Color(0xFF9A650E),
-                                                onTap: _autoOpenPairs,
-                                              ),
-                                              _RackAction(
-                                                label: 'İŞLE',
-                                                active: !_dealInProgress,
-                                                color: const Color(0xFF08658F),
-                                                onTap: _enterAddMode,
-                                                secondaryLabel:
-                                                    _processedMoves.isNotEmpty
-                                                    ? 'GERİ AL'
-                                                    : null,
-                                                secondaryActive:
-                                                    !_dealInProgress &&
-                                                    _processedMoves.isNotEmpty,
-                                                secondaryColor: const Color(
-                                                  0xFF9A650E,
-                                                ),
-                                                secondaryOnTap:
-                                                    _undoProcessedMoves,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        SizedBox(width: controlGap),
-                                        Expanded(
-                                          child: IgnorePointer(
-                                            ignoring: _dealInProgress,
-                                            child: _gameSettings.showRack
-                                                ? _RackArea(
-                                                    rack: _rack,
-                                                    slots: _rackSlots,
-                                                    dealAnimationSerial:
-                                                        _dealAnimationSerial,
-                                                    onTileTap: _tapTile,
-                                                    onReorder: _reorderRack,
-                                                    onTileDragStart:
-                                                        _startGridDragZoom,
-                                                    onTileDragUpdate:
-                                                        _updateGridDragZoom,
-                                                    onTileDragEnd:
-                                                        _endGridDragZoom,
-                                                    dragVisual: _rackDragVisual,
-                                                    pushPreview:
-                                                        _rackPushPreview,
-                                                    processableTileIds:
-                                                        processableTileIds,
-                                                    drawAttentionTileId:
-                                                        _drawAttentionTileId,
-                                                    drawAttentionSerial:
-                                                        _drawAttentionSerial,
-                                                    canAcceptDeckDrop:
-                                                        myTurn &&
-                                                        !_drawnThisTurn,
-                                                    canAcceptDiscardDrop:
-                                                        myTurn &&
-                                                        !_drawnThisTurn &&
-                                                        _discarded != null,
-                                                    onDeckDropAt: _drawFromDeck,
-                                                    onDiscardDropAt:
-                                                        _takeDiscarded,
-                                                  )
-                                                : const SizedBox.expand(),
-                                          ),
-                                        ),
-                                        SizedBox(width: controlGap),
-                                        SizedBox(
-                                          width: actionPanelWidth,
-                                          child: _RackActionPanel(
-                                            actions: [
-                                              _RackAction(
-                                                label: 'SERİ DİZ',
-                                                active:
-                                                    !_dealInProgress &&
-                                                    _rack.length >= 3,
-                                                color: const Color(0xFF19862B),
-                                                onTap: _arrangeStandardMelds,
-                                              ),
-                                              _RackAction(
-                                                label: 'ÇİFT DİZ',
-                                                active:
-                                                    !_dealInProgress &&
-                                                    _rack.length >= 2,
-                                                color: const Color(0xFF9A650E),
-                                                onTap: _arrangePairs,
-                                              ),
-                                              _RackAction(
-                                                label: _drawnThisTurn
-                                                    ? 'TAŞ AT'
-                                                    : 'TAŞ ÇEK',
-                                                active: _drawnThisTurn
-                                                    ? canAct && sel == 1
-                                                    : myTurn &&
-                                                          _deck.isNotEmpty,
-                                                color: const Color(0xFF08658F),
-                                                onTap: _drawnThisTurn
-                                                    ? _discardTile
-                                                    : _drawFromDeck,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
                             ),
                           ),
-                        ),
-                      ),
+                          TickerMode(
+                            enabled: !_endDialogVisible,
+                            child: RepaintBoundary(
+                              child: _GameSceneEntrance(
+                                enabled: _useGameplayAnimations,
+                                child: Stack(
+                                  children: [
+                                    // ── Büyük oyun masası ───────────────────────────────────
+                                    Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      bottom: rackHeight,
+                                      child: Padding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          edgeInset,
+                                          sceneHeight * 0.012,
+                                          edgeInset,
+                                          sceneHeight * 0.008,
+                                        ),
+                                        child: _TableArea(
+                                          melds: _tableMetds,
+                                          bots: _bots,
+                                          playerName: playerProgress.playerName,
+                                          activeTurn: _turn,
+                                          discardPiles: _discardPiles,
+                                          uiMode: _uiMode,
+                                          eligibleMeldIndexes:
+                                              eligibleMeldIndexes,
+                                          onMeldTap: _addToMeld,
+                                          onMeldDrop: _dropOnMeld,
+                                          canAcceptMeldDrop: _canDropOnMeld,
+                                          onPairDrop: _dropOnPairArea,
+                                          canAcceptPairDrop: _canDropOnPairArea,
+                                          myTurn: myTurn,
+                                          drawnThisTurn: _drawnThisTurn,
+                                          onPlayerDiscardDrop: _dropToDiscard,
+                                          playerDiscardTargetKey:
+                                              _playerDiscardTargetKey,
+                                          canTakeDiscard:
+                                              myTurn &&
+                                              !_drawnThisTurn &&
+                                              _discarded != null,
+                                          onTakeDiscard: _takeDiscarded,
+                                          canReturnDiscard:
+                                              _tookDiscard &&
+                                              _takenDiscardTile != null &&
+                                              _rack.any(
+                                                (tile) =>
+                                                    tile.id ==
+                                                    _takenDiscardTile!.id,
+                                              ),
+                                          returnDiscardTileId:
+                                              _takenDiscardTile?.id,
+                                          onReturnDiscard: _returnTakenDiscard,
+                                          gridTileWidth: gridTileWidth,
+                                          gridKey: _meldGridKey,
+                                          dragVisual: _rackDragVisual,
+                                          botDiscardMotion: _botDiscardMotion,
+                                          tableTileMotion: _tableTileMotion,
+                                          bottomReservedSpace: infoPanelHeight,
+                                          gameModeLabel:
+                                              _isColorBonusMode &&
+                                                  _showColorBonusIntro
+                                              ? ''
+                                              : _tableModeLabel,
+                                          minimumStandardOpeningScore:
+                                              _isProgressiveMode
+                                              ? _minimumStandardOpeningScore
+                                              : null,
+                                          minimumPairOpeningCount:
+                                              _isProgressiveMode
+                                              ? _minimumPairOpeningCount
+                                              : null,
+                                          deckCount: _deck.length,
+                                          indicator: _indicator,
+                                          perPoints: _playerOpened
+                                              ? _rackRemainingPoints
+                                              : _rackPerPoints,
+                                          showRemainingPoints: _playerOpened,
+                                          pairCount:
+                                              !_playerOpened &&
+                                                  _showRackPairCount
+                                              ? _rackPairCount
+                                              : null,
+                                          canDraw: myTurn && !_drawnThisTurn,
+                                          onDraw: _drawFromDeck,
+                                          canFinishByCenterDrop:
+                                              canAct && _rack.length == 1,
+                                          onFinishByCenterDrop:
+                                              _finishByCenterDrop,
+                                          dragTileWidth: rackVisualTileWidth,
+                                          dragTileHeight: rackVisualTileHeight,
+                                          showGrid: _gameSettings.showGrid,
+                                          showBots: _gameSettings.showBots,
+                                          onHelp: _openGameHelp,
+                                        ),
+                                      ),
+                                    ),
 
-                      Positioned(
-                        top: 0,
-                        right: 0,
-                        child: _TopBar(onSettings: _openGameSettings),
-                      ),
+                                    if (_isColorBonusMode &&
+                                        _showColorBonusIntro)
+                                      Positioned(
+                                        top: sceneHeight * 0.02,
+                                        left: edgeInset + 58,
+                                        right: edgeInset + 58,
+                                        bottom: rackHeight + 8,
+                                        child: _ColorBonusRoundIntro(
+                                          key: ValueKey(
+                                            'color-bonus-round-intro-$_roundGeneration',
+                                          ),
+                                          colorName: _roundBonusColorName,
+                                          color: _roundBonusDisplayColor,
+                                          onFinished: () {
+                                            if (!mounted ||
+                                                !_showColorBonusIntro) {
+                                              return;
+                                            }
+                                            setState(
+                                              () =>
+                                                  _showColorBonusIntro = false,
+                                            );
+                                          },
+                                        ),
+                                      ),
 
-                      // Tüm oyun mesajları aynı merkezî bildirimde gösterilir.
-                      if (centerNotice != null)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: Align(
-                              alignment: const Alignment(0, -0.25),
-                              child: RepaintBoundary(
-                                child: _GameCenterNotice(text: centerNotice),
+                                    if (_isTimedMode && myTurn)
+                                      Positioned(
+                                        left:
+                                            edgeInset +
+                                            actionPanelWidth +
+                                            controlGap,
+                                        right:
+                                            edgeInset +
+                                            actionPanelWidth +
+                                            controlGap,
+                                        bottom: rackHeight - 2,
+                                        height: 10,
+                                        child: _TimedRackCountdown(
+                                          key: ValueKey(
+                                            'timed-rack-$_playerTurnGeneration',
+                                          ),
+                                          seconds: _playerTurnSeconds,
+                                          active: myTurn,
+                                        ),
+                                      ),
+
+                                    // ── Referanstaki gibi: kontroller + ahşap ıstaka ─────────
+                                    Positioned(
+                                      left: 0,
+                                      right: 0,
+                                      bottom: 0,
+                                      height: rackHeight,
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: edgeInset,
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            SizedBox(
+                                              width: actionPanelWidth,
+                                              child: _RackActionPanel(
+                                                actions: [
+                                                  _RackAction(
+                                                    buttonKey: const ValueKey(
+                                                      'tutorial-open-button',
+                                                    ),
+                                                    label: appText(
+                                                      'SERİ AÇ',
+                                                      'OPEN MELD',
+                                                      german: 'SATZ ÖFFNEN',
+                                                    ),
+                                                    active:
+                                                        canAct &&
+                                                        _canAutoOpenStandardMelds,
+                                                    color: const Color(
+                                                      0xFF19862B,
+                                                    ),
+                                                    onTap:
+                                                        _autoOpenStandardMelds,
+                                                  ),
+                                                  _RackAction(
+                                                    buttonKey: const ValueKey(
+                                                      'open-pairs-button',
+                                                    ),
+                                                    label: appText(
+                                                      'ÇİFT AÇ',
+                                                      'OPEN PAIRS',
+                                                      german: 'PAARE ÖFFNEN',
+                                                    ),
+                                                    active:
+                                                        canAct &&
+                                                        _canAutoOpenPairs,
+                                                    color: const Color(
+                                                      0xFF9A650E,
+                                                    ),
+                                                    onTap: _autoOpenPairs,
+                                                  ),
+                                                  _RackAction(
+                                                    label: appText(
+                                                      'İŞLE',
+                                                      'ADD',
+                                                      german: 'ANLEGEN',
+                                                    ),
+                                                    active: !_dealInProgress,
+                                                    color: const Color(
+                                                      0xFF08658F,
+                                                    ),
+                                                    onTap: _enterAddMode,
+                                                    secondaryLabel:
+                                                        _processedMoves
+                                                            .isNotEmpty
+                                                        ? appText(
+                                                            'GERİ AL',
+                                                            'UNDO',
+                                                            german:
+                                                                'RÜCKGÄNGIG',
+                                                          )
+                                                        : null,
+                                                    secondaryActive:
+                                                        !_dealInProgress &&
+                                                        _processedMoves
+                                                            .isNotEmpty,
+                                                    secondaryColor: const Color(
+                                                      0xFF9A650E,
+                                                    ),
+                                                    secondaryOnTap:
+                                                        _undoProcessedMoves,
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            SizedBox(width: controlGap),
+                                            Expanded(
+                                              child: IgnorePointer(
+                                                ignoring: _dealInProgress,
+                                                child: _gameSettings.showRack
+                                                    ? _RackArea(
+                                                        rack: _rack,
+                                                        slots: _rackSlots,
+                                                        dealAnimationSerial:
+                                                            _dealAnimationSerial,
+                                                        onTileTap: _tapTile,
+                                                        onReorder: _reorderRack,
+                                                        shiftSerial:
+                                                            _rackShiftSerial,
+                                                        shiftOrigins:
+                                                            _rackShiftLayoutSignature ==
+                                                                _rackSlots.join(
+                                                                  ',',
+                                                                )
+                                                            ? _rackShiftOrigins
+                                                            : const {},
+                                                        onTileDragStart:
+                                                            _startGridDragZoom,
+                                                        onTileDragUpdate:
+                                                            _updateGridDragZoom,
+                                                        onTileDragEnd:
+                                                            _endGridDragZoom,
+                                                        dragVisual:
+                                                            _rackDragVisual,
+                                                        pushPreview:
+                                                            _rackPushPreview,
+                                                        processableTileIds:
+                                                            processableTileIds,
+                                                        processableColor:
+                                                            _playerOpened
+                                                            ? OC.numGreen
+                                                            : OC.numRed,
+                                                        minimumStandardOpeningScore:
+                                                            _isProgressiveMode
+                                                            ? _minimumStandardOpeningScore
+                                                            : null,
+                                                        minimumPairOpeningCount:
+                                                            _isProgressiveMode
+                                                            ? _minimumPairOpeningCount
+                                                            : null,
+                                                        drawAttentionTileId:
+                                                            _drawAttentionTileId,
+                                                        drawAttentionSerial:
+                                                            _drawAttentionSerial,
+                                                        canAcceptDeckDrop:
+                                                            myTurn &&
+                                                            !_drawnThisTurn,
+                                                        canAcceptDiscardDrop:
+                                                            myTurn &&
+                                                            !_drawnThisTurn &&
+                                                            _discarded != null,
+                                                        onDeckDropAt:
+                                                            _drawFromDeck,
+                                                        onDiscardDropAt:
+                                                            _takeDiscarded,
+                                                      )
+                                                    : const SizedBox.expand(),
+                                              ),
+                                            ),
+                                            SizedBox(width: controlGap),
+                                            SizedBox(
+                                              width: actionPanelWidth,
+                                              child: _RackActionPanel(
+                                                actions: [
+                                                  _RackAction(
+                                                    label: appText(
+                                                      'SERİ DİZ',
+                                                      'SORT MELDS',
+                                                      german: 'SÄTZE SORTIEREN',
+                                                    ),
+                                                    active:
+                                                        !_dealInProgress &&
+                                                        _rack.length >= 3,
+                                                    color: const Color(
+                                                      0xFF19862B,
+                                                    ),
+                                                    onTap:
+                                                        _arrangeStandardMelds,
+                                                  ),
+                                                  _RackAction(
+                                                    label: appText(
+                                                      'ÇİFT DİZ',
+                                                      'SORT PAIRS',
+                                                      german: 'PAARE SORTIEREN',
+                                                    ),
+                                                    active:
+                                                        !_dealInProgress &&
+                                                        _rack.length >= 2,
+                                                    color: const Color(
+                                                      0xFF9A650E,
+                                                    ),
+                                                    onTap: _arrangePairs,
+                                                  ),
+                                                  _RackAction(
+                                                    label: _drawnThisTurn
+                                                        ? appText(
+                                                            'TAŞ AT',
+                                                            'DISCARD',
+                                                            german: 'ABLEGEN',
+                                                          )
+                                                        : appText(
+                                                            'TAŞ ÇEK',
+                                                            'DRAW',
+                                                            german: 'ZIEHEN',
+                                                          ),
+                                                    active: _drawnThisTurn
+                                                        ? canAct && sel == 1
+                                                        : myTurn &&
+                                                              _deck.isNotEmpty,
+                                                    color: const Color(
+                                                      0xFF08658F,
+                                                    ),
+                                                    onTap: _drawnThisTurn
+                                                        ? _discardTile
+                                                        : _drawFromDeck,
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
 
-                      if (_showFinishCelebration)
-                        const Positioned.fill(child: _FinishCelebration()),
-                    ],
-                  ),
-                );
-              },
+                          Positioned(
+                            top: 0,
+                            right: 0,
+                            child: _TopBar(onSettings: _openGameSettings),
+                          ),
+
+                          // Tüm oyun mesajları aynı merkezî bildirimde gösterilir.
+                          if (centerNotice != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: Align(
+                                  alignment: const Alignment(0, -0.25),
+                                  child: RepaintBoundary(
+                                    child: _GameCenterNotice(
+                                      text: centerNotice,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                          Positioned.fill(
+                            child: ValueListenableBuilder<_TableTileMotion?>(
+                              valueListenable: _tableTileMotion,
+                              builder: (context, motion, _) =>
+                                  motion == null || motion.playerIndex != 0
+                                  ? const SizedBox.shrink()
+                                  : _FlyingPlayerTiles(motion: motion),
+                            ),
+                          ),
+                          if (_showFinishCelebration)
+                            Positioned.fill(
+                              child: _FinishCelebration(
+                                tutorial: _isTutorialGame,
+                              ),
+                            ),
+
+                          if (_isTutorialGame && !_showFinishCelebration)
+                            InGameTutorialOverlay(
+                              step: _tutorialStep,
+                              finishSourceSlot: _tutorialFinishSlot,
+                              onExit: () => Navigator.of(context).pop(false),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
@@ -3585,27 +4356,37 @@ class _TopBar extends StatelessWidget {
   const _TopBar({required this.onSettings});
 
   @override
-  Widget build(BuildContext context) => _PressScale(
-    child: IconButton(
-      key: const ValueKey('game-settings-button'),
-      tooltip: 'Oyun ayarları',
-      onPressed: onSettings,
-      style: IconButton.styleFrom(
-        backgroundColor: Colors.transparent,
-        hoverColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        minimumSize: const Size(42, 42),
-        padding: EdgeInsets.zero,
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      _PressScale(
+        child: IconButton(
+          key: const ValueKey('game-settings-button'),
+          tooltip: appText(
+            'Oyun ayarları',
+            'Game settings',
+            german: 'Spieleinstellungen',
+          ),
+          onPressed: onSettings,
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            hoverColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            minimumSize: const Size(56, 56),
+            maximumSize: const Size(56, 56),
+            padding: EdgeInsets.zero,
+          ),
+          icon: Image.asset(
+            'images/ui/game_settings.png',
+            width: 54,
+            height: 54,
+            cacheWidth: 108,
+            cacheHeight: 108,
+            filterQuality: FilterQuality.low,
+          ),
+        ),
       ),
-      icon: Image.asset(
-        'images/ui/game_settings.png',
-        width: 40,
-        height: 40,
-        cacheWidth: 64,
-        cacheHeight: 64,
-        filterQuality: FilterQuality.low,
-      ),
-    ),
+    ],
   );
 }
 
@@ -3614,11 +4395,13 @@ class _TopBar extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 class _PlayerInfo extends StatefulWidget {
   final BotPlayer bot;
+  final int fakeOkeyValue;
   final bool active;
   final bool horizontal;
 
   const _PlayerInfo({
     required this.bot,
+    required this.fakeOkeyValue,
     required this.active,
     this.horizontal = false,
   });
@@ -3691,28 +4474,6 @@ class _PlayerInfoState extends State<_PlayerInfo> {
       clipBehavior: Clip.none,
       children: [
         _avatarFace,
-        Positioned(
-          right: -3,
-          bottom: -2,
-          child: Container(
-            width: 18,
-            height: 18,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF13201C),
-              border: Border.all(color: OC.gold, width: 1),
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              '${widget.bot.tileCount}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ),
         if (widget.active)
           Positioned(
             left: -2,
@@ -3729,17 +4490,64 @@ class _PlayerInfoState extends State<_PlayerInfo> {
       ],
     );
 
+    final remainingPoints = widget.bot.hasOpened
+        ? Rules.penaltyFor(widget.bot.hand, fakeOkeyValue: widget.fakeOkeyValue)
+        : null;
+    final details = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _nameTag,
+        if (widget.bot.hasOpened) ...[
+          const SizedBox(height: 3),
+          Container(
+            key: ValueKey('bot-status-badge-${widget.bot.name}'),
+            width: widget.horizontal ? 80 : 54,
+            height: 25,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF244E38), Color(0xFF102B20)],
+              ),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0x709BE8AD)),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x66000000),
+                  offset: Offset(0, 2),
+                  blurRadius: 3,
+                ),
+              ],
+            ),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '$remainingPoints',
+                key: ValueKey('bot-remaining-points-${widget.bot.name}'),
+                style: const TextStyle(
+                  color: Color(0xFFFFF4D7),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
     return Container(
       key: ValueKey('seat-${widget.bot.name}'),
       padding: const EdgeInsets.all(2),
       child: widget.horizontal
           ? Row(
               mainAxisSize: MainAxisSize.min,
-              children: [avatar, const SizedBox(width: 4), _nameTag],
+              children: [avatar, const SizedBox(width: 4), details],
             )
           : Column(
               mainAxisSize: MainAxisSize.min,
-              children: [avatar, const SizedBox(height: 3), _nameTag],
+              children: [avatar, const SizedBox(height: 3), details],
             ),
     );
   }
@@ -3792,6 +4600,7 @@ class _TableArea extends StatelessWidget {
   final double dragTileHeight;
   final bool showGrid;
   final bool showBots;
+  final VoidCallback onHelp;
 
   const _TableArea({
     required this.melds,
@@ -3837,6 +4646,7 @@ class _TableArea extends StatelessWidget {
     required this.dragTileHeight,
     required this.showGrid,
     required this.showBots,
+    required this.onHelp,
   });
 
   @override
@@ -3853,7 +4663,7 @@ class _TableArea extends StatelessWidget {
         const sideDiscardInset = 8.0;
         const upperDiscardTop = 46.0;
         final lowerLeftDiscardBottom = max(2.0, bottomReservedSpace - 104);
-        const sideProfileHeight = 72.0;
+        final sideProfileHeight = tableBox.maxHeight < 430 ? 86.0 : 110.0;
         const discardHitHeight = 66.0;
         final minimumProfileTop = upperDiscardTop + discardHitHeight + 8;
         double profileTopBefore(double lowerDiscardTop) {
@@ -3950,13 +4760,60 @@ class _TableArea extends StatelessWidget {
                           children: [
                             Expanded(
                               flex: 13,
-                              child: _GridTopCaption(
-                                key: ValueKey('opening-rule-caption'),
-                                text: minimumStandardOpeningScore == null
-                                    ? 'EL AÇMA: 101 PER • 5 ÇİFT'
-                                    : 'PER: $minimumStandardOpeningScore • '
-                                          'ÇİFT: $minimumPairOpeningCount',
-                                alignment: Alignment.centerLeft,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: _GridTopCaption(
+                                      key: const ValueKey(
+                                        'opening-rule-caption',
+                                      ),
+                                      text: minimumStandardOpeningScore == null
+                                          ? appText(
+                                              'EL AÇMA: 101 PER • 5 ÇİFT',
+                                              'OPEN: 101 MELD • 5 PAIRS',
+                                              german:
+                                                  'ÖFFNEN: 101 SATZ • 5 PAARE',
+                                            )
+                                          : appText(
+                                              'PER: $minimumStandardOpeningScore • ÇİFT: $minimumPairOpeningCount',
+                                              'MELD: $minimumStandardOpeningScore • PAIRS: $minimumPairOpeningCount',
+                                              german:
+                                                  'SATZ: $minimumStandardOpeningScore • PAARE: $minimumPairOpeningCount',
+                                            ),
+                                      alignment: Alignment.centerLeft,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  _PressScale(
+                                    child: IconButton(
+                                      key: const ValueKey('game-help-button'),
+                                      tooltip: appText(
+                                        'Nasıl oynanır?',
+                                        'How to play?',
+                                        german: 'Wie spielt man?',
+                                      ),
+                                      onPressed: onHelp,
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: const Color(
+                                          0xCC071B14,
+                                        ),
+                                        foregroundColor: Colors.white,
+                                        side: BorderSide(
+                                          color: OC.gold.withValues(
+                                            alpha: 0.75,
+                                          ),
+                                        ),
+                                        minimumSize: const Size(24, 24),
+                                        maximumSize: const Size(24, 24),
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.help_rounded,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                             Expanded(flex: 8, child: const SizedBox.shrink()),
@@ -3979,6 +4836,9 @@ class _TableArea extends StatelessWidget {
                           child: Center(
                             child: _PlayerInfo(
                               bot: bots[1],
+                              fakeOkeyValue: Rules.okeyNumberForIndicator(
+                                indicator?.number ?? 1,
+                              ),
                               active: activeTurn == 2,
                               horizontal: true,
                             ),
@@ -3988,18 +4848,40 @@ class _TableArea extends StatelessWidget {
                         Positioned(
                           left: 0,
                           top: leftProfileTop,
-                          child: _PlayerInfo(
-                            bot: bots[2],
-                            active: activeTurn == 3,
+                          child: SizedBox(
+                            width: 58,
+                            height: sideProfileHeight,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.topCenter,
+                              child: _PlayerInfo(
+                                bot: bots[2],
+                                fakeOkeyValue: Rules.okeyNumberForIndicator(
+                                  indicator?.number ?? 1,
+                                ),
+                                active: activeTurn == 3,
+                              ),
+                            ),
                           ),
                         ),
                       if (showBots)
                         Positioned(
                           right: 0,
                           top: rightProfileTop,
-                          child: _PlayerInfo(
-                            bot: bots[0],
-                            active: activeTurn == 1,
+                          child: SizedBox(
+                            width: 58,
+                            height: sideProfileHeight,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.topCenter,
+                              child: _PlayerInfo(
+                                bot: bots[0],
+                                fakeOkeyValue: Rules.okeyNumberForIndicator(
+                                  indicator?.number ?? 1,
+                                ),
+                                active: activeTurn == 1,
+                              ),
+                            ),
                           ),
                         ),
                       if (showBots)
@@ -4070,7 +4952,8 @@ class _TableArea extends StatelessWidget {
                       Positioned.fill(
                         child: ValueListenableBuilder<_TableTileMotion?>(
                           valueListenable: tableTileMotion,
-                          builder: (context, motion, _) => motion == null
+                          builder: (context, motion, _) =>
+                              motion == null || motion.playerIndex == 0
                               ? const SizedBox.shrink()
                               : RepaintBoundary(
                                   child: _FlyingTableTiles(motion: motion),
@@ -4558,15 +5441,16 @@ class _DeckStack extends StatelessWidget {
     final layerOffset = tileWidth * 0.046;
     return SizedBox(
       key: const ValueKey('draw-deck-stack'),
-      width: tileWidth + (layers - 1) * layerOffset,
-      height: tileHeight + (layers - 1) * layerOffset,
+      width: tileWidth,
+      height: tileHeight,
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           ...List.generate(
             layers,
             (i) => Positioned(
-              left: i * layerOffset,
-              top: i * layerOffset,
+              left: -(layers - 1 - i) * layerOffset,
+              top: -(layers - 1 - i) * layerOffset,
               child: _TileBack(
                 key: i == layers - 1 ? const ValueKey('draw-deck-tile') : null,
                 width: tileWidth,
@@ -4576,8 +5460,8 @@ class _DeckStack extends StatelessWidget {
             ),
           ),
           Positioned(
-            left: (layers - 1) * layerOffset,
-            top: (layers - 1) * layerOffset,
+            left: 0,
+            top: 0,
             width: tileWidth,
             height: tileHeight,
             child: Center(
@@ -4910,8 +5794,11 @@ class _GridDrawColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayTileWidth = dragTileWidth;
-    final displayTileHeight = dragTileHeight;
+    final displayTileHeight = min(dragTileHeight, max(1.0, height - 6));
+    final displayTileWidth = min(
+      dragTileWidth,
+      max(1.0, displayTileHeight / 1.46),
+    );
     final itemWidth = displayTileWidth;
     return Container(
       key: const ValueKey('table-draw-column'),
@@ -4943,92 +5830,78 @@ class _GridDrawColumn extends StatelessWidget {
               right: 2,
               bottom: 2,
               height: min(displayTileHeight * 1.22, area.maxHeight - 4),
-              child: GestureDetector(
+              child: SizedBox(
                 key: const ValueKey('expanded-deck-draw-hit-area'),
-                behavior: HitTestBehavior.opaque,
-                onTap: canDraw ? onDraw : null,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0A332F).withValues(alpha: 0.34),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: const Color(0xFFC48A31).withValues(alpha: 0.32),
-                      width: 1,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            if (minimumStandardOpeningScore != null &&
-                minimumPairOpeningCount != null)
-              Positioned(
-                left: (area.maxWidth - 4) / 4 + 8,
-                bottom: 4,
-                width: (area.maxWidth - 4) / 4,
-                height: min(displayTileHeight * 1.16, area.maxHeight - 8),
-                child: IgnorePointer(
-                  child: _ProgressiveOpeningBadge(
-                    standardScore: minimumStandardOpeningScore!,
-                    pairCount: minimumPairOpeningCount!,
-                  ),
-                ),
-              ),
-            Positioned(
-              right: 2,
-              bottom: 2,
-              child: DragTarget<_RackDragData>(
-                key: const ValueKey('center-finish-drop-target'),
-                onWillAcceptWithDetails: (details) =>
-                    canFinishByCenterDrop && details.data.tileIds.length == 1,
-                onAcceptWithDetails: (details) =>
-                    onFinishByCenterDrop(details.data),
-                builder: (context, candidates, rejected) => Container(
-                  padding: const EdgeInsets.all(1),
-                  decoration: BoxDecoration(
-                    color: candidates.isNotEmpty
-                        ? OC.okeyGold.withValues(alpha: 0.20)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(7),
-                    border: candidates.isNotEmpty
-                        ? Border.all(color: OC.okeyGold, width: 2)
-                        : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (indicator != null)
-                        SizedBox(
-                          key: const ValueKey('grid-indicator'),
-                          width: itemWidth,
-                          height: displayTileHeight,
-                          child: _TileWidget(
-                            tile: indicator!,
-                            w: displayTileWidth,
-                            h: displayTileHeight,
-                            onTap: null,
-                          ),
+                child: _DeckDrawHandle(
+                  enabled: canDraw,
+                  count: deckCount,
+                  onDraw: onDraw,
+                  feedbackWidth: dragTileWidth,
+                  feedbackHeight: dragTileHeight,
+                  displayWidth: displayTileWidth,
+                  displayHeight: displayTileHeight,
+                  child: DragTarget<_RackDragData>(
+                    key: const ValueKey('center-finish-drop-target'),
+                    onWillAcceptWithDetails: (details) =>
+                        canFinishByCenterDrop &&
+                        details.data.tileIds.length == 1,
+                    onAcceptWithDetails: (details) =>
+                        onFinishByCenterDrop(details.data),
+                    builder: (context, candidates, rejected) => Container(
+                      key: const ValueKey('indicator-deck-draw-hit-area'),
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: candidates.isNotEmpty
+                              ? const [Color(0x5557A978), Color(0x664F3A15)]
+                              : const [Color(0x55306A60), Color(0xAA0C302C)],
                         ),
-                      const SizedBox(width: 2),
-                      SizedBox(
-                        key: const ValueKey('grid-deck-slot'),
-                        width: itemWidth,
-                        height: displayTileHeight,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: canDraw ? onDraw : null,
-                          child: _DeckDrawHandle(
-                            enabled: canDraw,
-                            count: deckCount,
-                            onDraw: onDraw,
-                            feedbackWidth: dragTileWidth,
-                            feedbackHeight: dragTileHeight,
-                            displayWidth: displayTileWidth,
-                            displayHeight: displayTileHeight,
-                          ),
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(
+                          color: candidates.isNotEmpty
+                              ? OC.okeyGold
+                              : const Color(0x887BA396),
+                          width: candidates.isNotEmpty ? 2 : 1,
                         ),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (indicator != null)
+                            SizedBox(
+                              key: const ValueKey('grid-indicator'),
+                              width: itemWidth,
+                              height: displayTileHeight,
+                              child: _TileWidget(
+                                tile: indicator!,
+                                w: displayTileWidth,
+                                h: displayTileHeight,
+                                onTap: null,
+                              ),
+                            ),
+                          SizedBox(
+                            width:
+                                2 +
+                                min(max(0, (deckCount - 1) ~/ 12), 3) *
+                                    displayTileWidth *
+                                    0.046,
+                          ),
+                          SizedBox(
+                            key: const ValueKey('grid-deck-slot'),
+                            width: itemWidth,
+                            height: displayTileHeight,
+                            child: _DeckStack(
+                              count: deckCount,
+                              tileWidth: displayTileWidth,
+                              tileHeight: displayTileHeight,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -5201,8 +6074,13 @@ class _PairMeldGrid extends StatelessWidget {
 
 class _RunMeldGrid extends StatelessWidget {
   static final Map<int, List<({int row, int column})>> _layoutCache = {};
+  static final Map<int, Map<int, int>> _stableRunRows = {};
 
-  static void clearLayoutCache() => _layoutCache.clear();
+  static void clearLayoutCache() {
+    _layoutCache.clear();
+    _stableRunRows.clear();
+  }
+
   final int columns;
   final int rows;
   final double cellWidth;
@@ -5272,21 +6150,16 @@ class _RunMeldGrid extends StatelessWidget {
 
     if (entries.isNotEmpty && entries.first.value.type == 'grup') {
       final result = <({MapEntry<int, Meld> entry, int row, int column})>[];
-      var row = 0;
-      var column = 0;
-      for (final entry in entries) {
-        final length = min(columns, entry.value.tiles.length);
-        if (column > 0 && column + length > columns) {
-          row++;
-          column = 0;
-        }
+      // Gruplara sabit yuvalar ayırmak, önceki gruba bir taş işlendiğinde
+      // sonraki bütün perlerin sağa/alta sıçramasını engeller.
+      final groupsPerRow = max(1, columns ~/ 5);
+      final slotWidth = columns ~/ groupsPerRow;
+      for (var index = 0; index < entries.length; index++) {
+        final entry = entries[index];
+        final row = index ~/ groupsPerRow;
         if (row >= rows) break;
+        final column = (index % groupsPerRow) * slotWidth;
         result.add((entry: entry, row: row, column: column));
-        column += length + meldGapColumns;
-        if (column >= columns) {
-          row++;
-          column = 0;
-        }
       }
       return remember(result);
     }
@@ -5300,6 +6173,11 @@ class _RunMeldGrid extends StatelessWidget {
         if (color.index < rows) color.index: color,
     };
     final result = <({MapEntry<int, Meld> entry, int row, int column})>[];
+    final stableKey = Object.hash(columns, rows, meldGapColumns, 'runs');
+    final stableRows = _stableRunRows.putIfAbsent(
+      stableKey,
+      () => <int, int>{},
+    );
 
     for (final entry in entries) {
       final meld = entry.value;
@@ -5324,7 +6202,24 @@ class _RunMeldGrid extends StatelessWidget {
       };
       final colorRows = rowsByColor[color]!;
       int? targetRow;
+      final previousRow = stableRows[entry.key];
+      if (previousRow != null && previousRow >= 0 && previousRow < rows) {
+        final previousColumns = occupied[previousRow] ?? const <int>{};
+        final owner = rowOwners[previousRow];
+        final colorBaseRow = min(color.index, rows - 1);
+        final acceptsColor =
+            previousRow == colorBaseRow ||
+            (previousRow >= TileColor.values.length &&
+                (owner == null || owner == color));
+        if (acceptsColor &&
+            previousColumns.intersection(reservedColumns).isEmpty) {
+          targetRow = previousRow;
+          rowOwners[previousRow] = color;
+          if (!colorRows.contains(previousRow)) colorRows.add(previousRow);
+        }
+      }
       for (final row in colorRows) {
+        if (targetRow != null) break;
         final rowColumns = occupied[row] ?? const <int>{};
         if (rowColumns.intersection(reservedColumns).isEmpty) {
           targetRow = row;
@@ -5342,6 +6237,7 @@ class _RunMeldGrid extends StatelessWidget {
         }
       }
       targetRow ??= colorRows.last;
+      stableRows[entry.key] = targetRow;
       occupied.putIfAbsent(targetRow, () => <int>{}).addAll(reservedColumns);
       result.add((entry: entry, row: targetRow, column: column));
     }
@@ -5573,10 +6469,12 @@ class _MeldRow extends StatelessWidget {
               height: cellHeight,
               child: Center(
                 child: _TileWidget(
+                  key: ValueKey('table-visible-tile-${tile.id}'),
                   tile: tile,
                   w: tileWidth,
                   h: tileHeight,
                   onTap: null,
+                  borderRadius: 2,
                   hideOkey: true,
                   allowOkeyFaceToggle: false,
                   emphasized: true,
@@ -5650,6 +6548,8 @@ class _CachedMeldRowState extends State<_CachedMeldRow> {
 }
 
 class _RackArea extends StatefulWidget {
+  final int shiftSerial;
+  final Map<int, int> shiftOrigins;
   final List<Tile> rack;
   final List<int?> slots;
   final int? dealAnimationSerial;
@@ -5661,6 +6561,9 @@ class _RackArea extends StatefulWidget {
   final ValueNotifier<_RackDragVisualState> dragVisual;
   final ValueNotifier<_RackPushPreview?> pushPreview;
   final Set<int> processableTileIds;
+  final Color processableColor;
+  final int? minimumStandardOpeningScore;
+  final int? minimumPairOpeningCount;
   final int? drawAttentionTileId;
   final int drawAttentionSerial;
   final bool canAcceptDeckDrop;
@@ -5669,6 +6572,8 @@ class _RackArea extends StatefulWidget {
   final ValueChanged<int> onDiscardDropAt;
 
   const _RackArea({
+    required this.shiftSerial,
+    required this.shiftOrigins,
     required this.rack,
     required this.slots,
     required this.dealAnimationSerial,
@@ -5680,6 +6585,9 @@ class _RackArea extends StatefulWidget {
     required this.dragVisual,
     required this.pushPreview,
     required this.processableTileIds,
+    required this.processableColor,
+    this.minimumStandardOpeningScore,
+    this.minimumPairOpeningCount,
     required this.drawAttentionTileId,
     required this.drawAttentionSerial,
     required this.canAcceptDeckDrop,
@@ -5764,6 +6672,44 @@ class _RackAreaState extends State<_RackArea>
               ),
             ),
           ),
+          if (widget.minimumStandardOpeningScore != null &&
+              widget.minimumPairOpeningCount != null)
+            LayoutBuilder(
+              builder: (context, box) => Stack(
+                children: [
+                  Positioned(
+                    left: 2,
+                    top: 2,
+                    bottom: 2,
+                    width: max(
+                      1,
+                      box.maxWidth * storeCosmetics.rackHorizontalInset - 4,
+                    ),
+                    child: IgnorePointer(
+                      child: _ProgressiveOpeningBadge(
+                        standardScore: widget.minimumStandardOpeningScore!,
+                        pairCount: widget.minimumPairOpeningCount!,
+                        rowHeight: max(1.0, (box.maxHeight - 6) / 2),
+                        tileHeight: min(
+                          max(
+                                1.0,
+                                (box.maxWidth *
+                                            (1 -
+                                                2 *
+                                                    storeCosmetics
+                                                        .rackHorizontalInset)) /
+                                        _GameScreenState._rackRowLength -
+                                    1.6,
+                              ) *
+                              1.58,
+                          max(1.0, (box.maxHeight - 6) / 2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           LayoutBuilder(
             builder: (context, rackBox) => Padding(
               padding: EdgeInsets.symmetric(
@@ -5801,11 +6747,14 @@ class _RackAreaState extends State<_RackArea>
                             borderRadius: BorderRadius.circular(7),
                           ),
                           child: _RackRows(
+                            shiftSerial: widget.shiftSerial,
+                            shiftOrigins: widget.shiftOrigins,
                             rack: widget.rack,
                             slots: widget.slots,
                             dealAnimationSerial: widget.dealAnimationSerial,
                             dealProgress: _dealProgress,
                             processableTileIds: widget.processableTileIds,
+                            processableColor: widget.processableColor,
                             drawAttentionTileId: widget.drawAttentionTileId,
                             drawAttentionSerial: widget.drawAttentionSerial,
                             onTileTap: widget.onTileTap,
@@ -5880,24 +6829,38 @@ class _RackSlotDropTarget extends StatelessWidget {
       }
       final center = feedbackOffset + Offset(tileWidth / 2, tileHeight / 2);
       final local = renderObject.globalToLocal(center);
-      final edgeWidth = renderObject.size.width * 0.22;
-      // İttirme yalnız iki taşın gerçek birleşim çizgisinde başlar. Taşın geniş
-      // orta bölgesi ise ayrı bir zincir ittirme hedefidir.
-      if (local.dx <= edgeWidth) {
+      final overlap =
+          min(local.dx + tileWidth / 2, renderObject.size.width) -
+          max(local.dx - tileWidth / 2, 0.0);
+      if (overlap < tileWidth * 0.05) return null;
+      final seamWidth = renderObject.size.width * 0.08;
+      final pushEdgeWidth = renderObject.size.width * 0.30;
+      // The narrow seam inserts between tiles; the adjacent side bands push.
+      // The centre is deliberately neutral to avoid accidental chain moves.
+      if (local.dx <= seamWidth) {
         return slotIndex == data.sourceSlot
             ? null
             : (target: slotIndex, kind: _RackMoveKind.insert);
       }
-      if (local.dx >= renderObject.size.width - edgeWidth &&
+      if (local.dx >= renderObject.size.width - seamWidth &&
           slotIndex + 1 < rowEnd) {
         final afterSlot = slotIndex + 1;
         return afterSlot == data.sourceSlot
             ? null
             : (target: afterSlot, kind: _RackMoveKind.insert);
       }
+      if (local.dx > pushEdgeWidth &&
+          local.dx < renderObject.size.width - pushEdgeWidth) {
+        return null;
+      }
       return slotIndex == data.sourceSlot
           ? null
-          : (target: slotIndex, kind: _RackMoveKind.push);
+          : (
+              target: slotIndex,
+              kind: local.dx <= renderObject.size.width / 2
+                  ? _RackMoveKind.pushRight
+                  : _RackMoveKind.pushLeft,
+            );
     }
 
     return DragTarget<Object>(
@@ -5937,6 +6900,7 @@ class _RackSlotDropTarget extends StatelessWidget {
             previewSlots,
             data.sourceSlot,
             move.target,
+            towardRight: move.kind == _RackMoveKind.pushRight,
           );
           valid = sameRow && vacancy >= 0;
         }
@@ -6032,28 +6996,40 @@ class _RackTileDraggable extends StatelessWidget {
     onDragStarted: () => onDragStart(data),
     onDragUpdate: (details) => onDragUpdate(data, details),
     onDragEnd: (_) => onDragEnd(),
-    feedback: ValueListenableBuilder<_RackDragVisualState>(
-      valueListenable: dragVisual,
-      child: Material(
-        color: Colors.transparent,
-        child: _TileWidget(
-          tile: tile,
-          w: width,
-          h: height,
-          onTap: null,
-          hideOkey: true,
-          emphasized: true,
-          showShadow: false,
+    feedback: TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: max(0.0, height * 0.35 - 3 - width * 0.105)),
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutCubic,
+      builder: (context, lift, feedback) =>
+          Transform.translate(offset: Offset(0, -lift), child: feedback),
+      // Only the visual lifts to the recessed grip; keep the finger's rack
+      // drop position unchanged so insertion/pushing does not jump rows.
+      child: ValueListenableBuilder<_RackDragVisualState>(
+        valueListenable: dragVisual,
+        child: Material(
+          key: const ValueKey('rack-drag-feedback-tile'),
+          color: Colors.transparent,
+          child: _TileWidget(
+            tile: tile,
+            w: width,
+            h: height,
+            onTap: null,
+            hideOkey: true,
+            emphasized: true,
+            showShadow: false,
+          ),
         ),
-      ),
-      builder: (context, visual, feedbackChild) => Transform.rotate(
-        angle: visual.tilt,
-        alignment: Alignment.bottomCenter,
-        child: AnimatedScale(
-          scale: visual.gridPosition == null ? 1 : 1.16,
-          duration: const Duration(milliseconds: 130),
-          curve: Curves.easeOutCubic,
-          child: feedbackChild,
+        builder: (context, visual, feedbackChild) => AnimatedRotation(
+          turns: visual.tilt / (2 * pi),
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutQuad,
+          alignment: Alignment.bottomCenter,
+          child: AnimatedScale(
+            scale: visual.gridPosition == null ? 1 : 1.08,
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutQuad,
+            child: feedbackChild,
+          ),
         ),
       ),
     ),
@@ -6065,11 +7041,14 @@ class _RackTileDraggable extends StatelessWidget {
 }
 
 class _RackRows extends StatelessWidget {
+  final int shiftSerial;
+  final Map<int, int> shiftOrigins;
   final List<Tile> rack;
   final List<int?> slots;
   final int? dealAnimationSerial;
   final ValueListenable<double> dealProgress;
   final Set<int> processableTileIds;
+  final Color processableColor;
   final int? drawAttentionTileId;
   final int drawAttentionSerial;
   final Function(int) onTileTap;
@@ -6084,11 +7063,14 @@ class _RackRows extends StatelessWidget {
   final ValueChanged<int> onDeckDropAt;
   final ValueChanged<int> onDiscardDropAt;
   const _RackRows({
+    required this.shiftSerial,
+    required this.shiftOrigins,
     required this.rack,
     required this.slots,
     required this.dealAnimationSerial,
     required this.dealProgress,
     required this.processableTileIds,
+    required this.processableColor,
     required this.drawAttentionTileId,
     required this.drawAttentionSerial,
     required this.onTileTap,
@@ -6205,6 +7187,7 @@ class _RackRows extends StatelessWidget {
             hideOkey: true,
             emphasized: true,
             processable: processableTileIds.contains(tile.id),
+            processableColor: processableColor,
           );
           final dealIndex =
               slots.take(slotIndex + 1).whereType<int>().length - 1;
@@ -6224,7 +7207,6 @@ class _RackRows extends StatelessWidget {
                   child: baseTileWidget,
                 )
               : baseTileWidget;
-
           return _RackSlotDropTarget(
             slotIndex: slotIndex,
             rowEnd: offset + _GameScreenState._rackRowLength,
@@ -6251,7 +7233,22 @@ class _RackRows extends StatelessWidget {
                 onDragEnd: onTileDragEnd,
                 dragVisual: dragVisual,
                 liftForMeld: processableTileIds.contains(tile.id),
-                child: tileWidget,
+                child: shiftOrigins.containsKey(tile.id)
+                    ? TweenAnimationBuilder<double>(
+                        key: ValueKey('rack-shift-$shiftSerial-${tile.id}'),
+                        tween: Tween(
+                          begin: shiftOrigins[tile.id]! * (tw + 1.2),
+                          end: 0,
+                        ),
+                        duration: const Duration(milliseconds: 110),
+                        curve: Curves.easeOutQuad,
+                        child: tileWidget,
+                        builder: (context, dx, child) => Transform.translate(
+                          offset: Offset(dx, 0),
+                          child: child,
+                        ),
+                      )
+                    : tileWidget,
               ),
             ),
           );
@@ -6262,6 +7259,7 @@ class _RackRows extends StatelessWidget {
 }
 
 class _RackAction {
+  final Key? buttonKey;
   final String label;
   final bool active;
   final Color color;
@@ -6273,6 +7271,7 @@ class _RackAction {
   final VoidCallback? secondaryOnTap;
 
   const _RackAction({
+    this.buttonKey,
     required this.label,
     required this.active,
     required this.color,
@@ -6316,45 +7315,49 @@ class _RackActionPanel extends StatelessWidget {
 class _ProgressiveOpeningBadge extends StatelessWidget {
   final int standardScore;
   final int pairCount;
+  final double rowHeight;
+  final double tileHeight;
 
   const _ProgressiveOpeningBadge({
     required this.standardScore,
     required this.pairCount,
+    required this.rowHeight,
+    required this.tileHeight,
   });
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => Stack(
     key: const ValueKey('progressive-opening-target'),
-    padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-    decoration: BoxDecoration(
-      color: const Color(0xEE251B0D),
-      borderRadius: BorderRadius.circular(7),
-      border: Border.all(color: OC.okeyGold, width: 1.2),
-    ),
+    children: [
+      _number('$standardScore', 0, const Color(0xFFB3F1BE)),
+      _number('$pairCount', rowHeight + 2, const Color(0xFFFFE6A1)),
+    ],
+  );
+
+  Widget _number(String value, double rowTop, Color color) => Positioned(
+    left: 4,
+    right: 4,
+    top: rowTop + rowHeight - tileHeight * 0.65 - tileHeight * 0.275,
+    height: tileHeight * 0.55,
     child: FittedBox(
       fit: BoxFit.scaleDown,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            'PER: $standardScore',
-            textScaler: TextScaler.noScaling,
-            style: const TextStyle(
-              color: OC.numGreen,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
+      child: Text(
+        value,
+        style: TextStyle(
+          color: color,
+          fontSize: tileHeight * 0.47 * 1.13 * (value.length > 1 ? 0.85 : 1),
+          fontWeight: FontWeight.w900,
+          letterSpacing: -0.6,
+          height: 1,
+          shadows: [
+            const Shadow(
+              color: Color(0xE6000000),
+              offset: Offset(0, 2),
+              blurRadius: 3,
             ),
-          ),
-          Text(
-            'ÇİFT: $pairCount',
-            textScaler: TextScaler.noScaling,
-            style: const TextStyle(
-              color: Color(0xFFFFD66B),
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
+            Shadow(color: color.withValues(alpha: 0.3), blurRadius: 4),
+          ],
+        ),
       ),
     ),
   );
@@ -6373,7 +7376,9 @@ class _RackPerSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = showRemaining ? 'KALAN' : 'TOPLAM';
+    final label = showRemaining
+        ? appText('KALAN', 'REMAINING', german: 'REST')
+        : appText('TOPLAM', 'TOTAL', german: 'SUMME');
     final value = pairCount ?? points;
     final highlighted =
         (pairCount != null && pairCount! >= 5) ||
@@ -6400,7 +7405,7 @@ class _RackPerSummary extends StatelessWidget {
                 label,
                 maxLines: 1,
                 textAlign: TextAlign.center,
-                textScaler: TextScaler.noScaling,
+
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 15,
@@ -6415,7 +7420,7 @@ class _RackPerSummary extends StatelessWidget {
               fit: BoxFit.scaleDown,
               child: Text(
                 '$value',
-                textScaler: TextScaler.noScaling,
+
                 style: TextStyle(
                   color: highlighted ? OC.numGreen : Colors.white,
                   fontSize: 36,
@@ -6488,6 +7493,7 @@ class _SceneActionButtonFace extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          key: action.buttonKey,
           onTap: action.active ? action.onTap : null,
           borderRadius: BorderRadius.circular(8),
           child: Ink(
@@ -6542,6 +7548,7 @@ class _SceneActionButtonFace extends StatelessWidget {
 // TAŞ WİDGET
 // ═══════════════════════════════════════════════════════════════════════════
 class _TileWidget extends StatelessWidget {
+  final bool motionCopy;
   final Tile tile;
   final double w, h;
   final VoidCallback? onTap;
@@ -6549,9 +7556,12 @@ class _TileWidget extends StatelessWidget {
   final bool allowOkeyFaceToggle;
   final bool emphasized;
   final bool processable;
+  final Color processableColor;
   final double numberScale;
   final bool showShadow;
+  final double borderRadius;
   const _TileWidget({
+    this.motionCopy = false,
     super.key,
     required this.tile,
     required this.w,
@@ -6561,8 +7571,10 @@ class _TileWidget extends StatelessWidget {
     this.allowOkeyFaceToggle = true,
     this.emphasized = false,
     this.processable = false,
+    this.processableColor = OC.numGreen,
     this.numberScale = 1,
     this.showShadow = true,
+    this.borderRadius = 5,
   });
 
   String get _label {
@@ -6601,7 +7613,7 @@ class _TileWidget extends StatelessWidget {
                               _label,
                               maxLines: 1,
                               softWrap: false,
-                              textScaler: TextScaler.noScaling,
+
                               style: TextStyle(
                                 color: tile.displayColor,
                                 fontSize:
@@ -6642,7 +7654,7 @@ class _TileWidget extends StatelessWidget {
         fit: BoxFit.fill,
         filterQuality: FilterQuality.low,
       ),
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: BorderRadius.circular(borderRadius),
     );
     final tileFace = Stack(
       fit: StackFit.expand,
@@ -6651,9 +7663,10 @@ class _TileWidget extends StatelessWidget {
         if (processable)
           IgnorePointer(
             child: DecoratedBox(
+              key: ValueKey('processable-highlight-${tile.id}'),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(5),
-                border: Border.all(color: OC.numGreen, width: 3),
+                borderRadius: BorderRadius.circular(borderRadius),
+                border: Border.all(color: processableColor, width: 3),
               ),
             ),
           ),
@@ -6701,16 +7714,37 @@ class _TileWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!hideOkey || !allowOkeyFaceToggle || !tile.isOkey) {
-      return _buildTile(null);
+      return _withMotionVisibility(context, _buildTile(null));
     }
-    return StatefulBuilder(
-      builder: (context, setOkeyState) {
-        final tileWidget = _buildTile(
-          () => setOkeyState(() {
-            tile.okeyFaceRevealed = !tile.okeyFaceRevealed;
-          }),
+    return _withMotionVisibility(
+      context,
+      StatefulBuilder(
+        builder: (context, setOkeyState) {
+          final tileWidget = _buildTile(
+            () => setOkeyState(() {
+              tile.okeyFaceRevealed = !tile.okeyFaceRevealed;
+            }),
+          );
+          return _buildOkeyAnimation(tileWidget);
+        },
+      ),
+    );
+  }
+
+  Widget _withMotionVisibility(BuildContext context, Widget child) {
+    final scope = context.getInheritedWidgetOfExactType<_TileMotionScope>();
+    if (motionCopy || scope == null) return child;
+    return ValueListenableBuilder<_TableTileMotion?>(
+      valueListenable: scope.motion,
+      child: child,
+      builder: (context, motion, child) {
+        final hidden =
+            motion?.playerIndex == 0 &&
+            motion!.sourceRects.containsKey(tile.id);
+        return IgnorePointer(
+          ignoring: hidden,
+          child: Opacity(opacity: hidden ? 0 : 1, child: child),
         );
-        return _buildOkeyAnimation(tileWidget);
       },
     );
   }
@@ -7098,7 +8132,6 @@ class GameEndDialog extends StatelessWidget {
                               elPen: row.roundScore,
                               total: row.total,
                               hi: row.highlighted,
-                              isLeader: rank == 1,
                               isPlayer: row.isPlayer,
                             );
                           }),
@@ -7269,7 +8302,6 @@ class _ScoreRow extends StatelessWidget {
   final int total;
   final bool hi;
   final bool isPlayer;
-  final bool isLeader;
 
   const _ScoreRow({
     super.key,
@@ -7280,7 +8312,6 @@ class _ScoreRow extends StatelessWidget {
     required this.total,
     this.hi = false,
     this.isPlayer = false,
-    this.isLeader = false,
   });
 
   @override
@@ -7306,6 +8337,8 @@ class _ScoreRow extends StatelessWidget {
                 ? const Color(0xFFB9CAE0)
                 : rank == 3
                 ? const Color(0xFFC8794E)
+                : rank == 1
+                ? OC.goldLight
                 : Colors.transparent,
             shape: BoxShape.circle,
             border: Border.all(
@@ -7315,9 +8348,7 @@ class _ScoreRow extends StatelessWidget {
           child: Text(
             '$rank',
             style: TextStyle(
-              color: rank == 2 || rank == 3
-                  ? const Color(0xFF33200A)
-                  : Colors.white70,
+              color: rank <= 3 ? const Color(0xFF33200A) : Colors.white70,
               fontSize: 14,
               fontWeight: FontWeight.w900,
             ),
@@ -7346,8 +8377,12 @@ class _ScoreRow extends StatelessWidget {
         Expanded(
           child: Row(
             children: [
-              if (isLeader) ...[
-                const Icon(Icons.push_pin_rounded, color: OC.gold, size: 16),
+              if (isPlayer) ...[
+                const Icon(
+                  Icons.push_pin_rounded,
+                  color: OC.goldLight,
+                  size: 17,
+                ),
                 const SizedBox(width: 4),
               ],
               Flexible(
@@ -7365,15 +8400,6 @@ class _ScoreRow extends StatelessWidget {
                   ),
                 ),
               ),
-              if (isPlayer) ...[
-                const SizedBox(width: 4),
-                const Icon(
-                  Icons.arrow_forward_rounded,
-                  color: OC.goldLight,
-                  size: 22,
-                  weight: 900,
-                ),
-              ],
             ],
           ),
         ),

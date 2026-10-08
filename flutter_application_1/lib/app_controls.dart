@@ -1,4 +1,23 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+
+const double appPopupWidth = 620;
+const double appPopupHeight = 540;
+
+/// Uygulamadaki ana pop-up'ların profil penceresiyle aynı ölçüde kalmasını
+/// sağlar; dar ekranlarda güvenli boşlukları koruyarak küçülür.
+Size appPopupSize(
+  BuildContext context, {
+  double horizontalInset = 24,
+  double verticalInset = 24,
+}) {
+  final screen = MediaQuery.sizeOf(context);
+  return Size(
+    min(appPopupWidth, max(0, screen.width - horizontalInset)),
+    min(appPopupHeight, max(0, screen.height - verticalInset)),
+  );
+}
 
 /// Sayfa başlıklarında kullanılan ortak geri düğmesi.
 class AppBackButton extends StatelessWidget {

@@ -39,6 +39,14 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Compress native libraries in locally shared APKs to stay under 25 MB.
+    // Android extracts them on installation; game assets stay unchanged.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {

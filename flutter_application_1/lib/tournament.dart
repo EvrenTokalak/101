@@ -413,13 +413,15 @@ class _StageTrack extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      appLanguage.isEnglish
-                          ? const [
-                              'QUARTER FINAL',
-                              'SEMI FINAL',
-                              'FINAL',
-                            ][index]
-                          : _TournamentScreenState._roundNames[index],
+                      appText(
+                        _TournamentScreenState._roundNames[index],
+                        const ['QUARTER FINAL', 'SEMI FINAL', 'FINAL'][index],
+                        german: const [
+                          'VIERTELFINALE',
+                          'HALBFINALE',
+                          'FINALE',
+                        ][index],
+                      ),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: reached

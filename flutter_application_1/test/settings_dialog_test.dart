@@ -27,14 +27,45 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pump(const Duration(milliseconds: 300));
 
+    await tester.tap(find.byKey(const ValueKey('settings-language-dropdown')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.byKey(const ValueKey('language-EN')));
     await tester.pump();
     expect(find.text('SETTINGS'), findsOneWidget);
+    await tester.ensureVisible(find.text('SAVE'));
     await tester.tap(find.text('SAVE'));
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('PLAY NOW'), findsOneWidget);
-    expect(find.text('GAME MODES'), findsOneWidget);
+    expect(find.text('GAME\nMODES'), findsOneWidget);
+  });
+
+  testWidgets('Almanca dil seçimi ana menü ve ayarlarda uygulanır', (
+    tester,
+  ) async {
+    appLanguage.value = AppLanguage.turkish;
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    addTearDown(() => appLanguage.value = AppLanguage.turkish);
+
+    await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.tap(find.byKey(const ValueKey('settings-language-dropdown')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const ValueKey('language-DE')));
+    await tester.pump();
+    expect(find.text('EINSTELLUNGEN'), findsOneWidget);
+    await tester.ensureVisible(find.text('SPEICHERN'));
+    await tester.tap(find.text('SPEICHERN'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('JETZT SPIELEN'), findsOneWidget);
+    expect(find.text('SPIEL\nMODI'), findsOneWidget);
   });
 
   testWidgets('settings icon opens the animated settings dialog', (
@@ -60,29 +91,31 @@ void main() {
     expect(find.text('Ses Efektleri'), findsOneWidget);
     expect(find.text('Yazı Boyutu'), findsOneWidget);
     expect(find.text('Oyun Davetleri'), findsNothing);
-    expect(find.text('Bildirimler'), findsNothing);
+    expect(find.text('Bildirimler'), findsOneWidget);
+    expect(find.text('Rakip Resimleri'), findsOneWidget);
+    expect(find.text('Otomatik Istaka Dizimi'), findsOneWidget);
+    expect(find.text('Hamle İpuçları'), findsOneWidget);
+    expect(find.text('MÜZİK'), findsNothing);
+    expect(find.text('KENAR TAŞLARI'), findsNothing);
+    expect(find.text('PERFORMANS'), findsNothing);
     expect(find.text('Akıcı Animasyonlar'), findsNothing);
     final settingsDialogSize = tester.getSize(
       find.byKey(const ValueKey('settings-dialog')),
     );
-    expect(find.text('PERFORMANS'), findsOneWidget);
     expect(find.byKey(const ValueKey('performance-readout')), findsNothing);
 
     final slider = tester.widget<Slider>(find.byType(Slider));
     slider.onChanged!(1.2);
     await tester.pump();
-    await tester.tap(find.text('PERFORMANS'));
-    await tester.pump();
+    await tester.ensureVisible(find.text('KAYDET'));
     await tester.tap(find.text('KAYDET'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('performance-readout')), findsOneWidget);
-    performanceOverlayEnabled.value = false;
-    await tester.pump();
+    expect(find.byKey(const ValueKey('performance-readout')), findsNothing);
 
     final menuTextContext = tester.element(find.text('HEMEN OYNA'));
     expect(
       MediaQuery.textScalerOf(menuTextContext).scale(10),
-      closeTo(12, 0.01),
+      closeTo(12.6, 0.01),
     );
 
     await tester.tap(find.byIcon(Icons.mail_outlined));
@@ -100,8 +133,8 @@ void main() {
     final inboxDialogSize = tester.getSize(
       find.byKey(const ValueKey('feature-dialog-GELEN KUTUSU')),
     );
-    expect(inboxDialogSize.width, lessThan(settingsDialogSize.width));
-    expect(inboxDialogSize.height, closeTo(settingsDialogSize.height, 12));
+    expect(inboxDialogSize.width, greaterThan(settingsDialogSize.width));
+    expect(inboxDialogSize.height, closeTo(540.0, 0.1));
 
     await tester.tap(find.text('Günlük ödülün hazır'));
     await tester.pump(const Duration(milliseconds: 300));
@@ -120,21 +153,34 @@ void main() {
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('PROFİLİM'), findsOneWidget);
     expect(find.byKey(const ValueKey('profile-name-field')), findsOneWidget);
-    expect(find.textContaining('Seviye 0'), findsWidgets);
+    expect(find.textContaining('Seviye 0'), findsNothing);
     expect(find.text('Kazanma Oranı'), findsOneWidget);
     final profileDialog = find.byKey(const ValueKey('feature-dialog-PROFİLİM'));
     final profileDialogSize = tester.getSize(profileDialog);
-    expect(profileDialogSize.width, closeTo(settingsDialogSize.width, 0.1));
-    expect(profileDialogSize.height, lessThan(settingsDialogSize.height));
-    expect(profileDialogSize.height, greaterThanOrEqualTo(500));
+    expect(profileDialogSize, settingsDialogSize);
     expect(
       find.descendant(
         of: profileDialog,
         matching: find.byType(SingleChildScrollView),
       ),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.byKey(const ValueKey('profile-career-panel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('profile-avatar-1')), findsNothing);
+    expect(find.byKey(const ValueKey('profile-avatar-edit')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('profile-avatar-edit')));
+    await tester.pump(const Duration(milliseconds: 260));
+    expect(find.byKey(const ValueKey('profile-avatar-picker')), findsOneWidget);
     expect(find.byKey(const ValueKey('profile-avatar-1')), findsOneWidget);
+    final avatarPickerSize = tester.getSize(
+      find.byKey(const ValueKey('profile-avatar-picker')),
+    );
+    expect(avatarPickerSize.width, lessThan(profileDialogSize.width));
+    expect(avatarPickerSize.height, lessThan(profileDialogSize.height));
+    await tester.tap(find.byKey(const ValueKey('profile-avatar-1')));
+    await tester.pump(const Duration(milliseconds: 260));
+    expect(find.byKey(const ValueKey('profile-avatar-picker')), findsNothing);
 
     await tester.enterText(
       find.byKey(const ValueKey('profile-name-field')),
@@ -143,10 +189,18 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-name-save')));
     await tester.pump();
     expect(playerProgress.playerName, 'Gökde');
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('profile-name-field')),
+      '123456789012345678',
+    );
+    await tester.pump();
+    expect(find.text('18 karakter sınırına ulaştın.'), findsOneWidget);
 
     await tester.tap(find.text('TAMAM').last);
     await tester.pump(const Duration(milliseconds: 260));
-    expect(find.text('Gökde'), findsOneWidget);
+    expect(find.text('Gökde'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 
@@ -174,6 +228,8 @@ void main() {
       const ValueKey('feature-dialog-GÜNLÜK GİRİŞ ÖDÜLÜ'),
     );
     expect(dialog, findsOneWidget);
+    // Eski günlük giriş ölçüsü: 640 px panel + iki yanda 8 px dış boşluk.
+    expect(tester.getSize(dialog), const Size(656, 360));
     expect(
       find.descendant(of: dialog, matching: find.byType(SingleChildScrollView)),
       findsNothing,

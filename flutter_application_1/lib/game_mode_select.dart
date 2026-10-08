@@ -1,5 +1,3 @@
-import 'dart:math' show min;
-
 import 'package:flutter/material.dart';
 
 import 'app_language.dart';
@@ -532,7 +530,8 @@ class _ModeInfoDialog extends StatelessWidget {
       color: Colors.transparent,
       child: Container(
         key: ValueKey('game-mode-info-dialog-${mode.id}'),
-        width: min(470, MediaQuery.sizeOf(context).width - 30),
+        width: appPopupSize(context).width,
+        height: appPopupSize(context).height,
         padding: const EdgeInsets.fromLTRB(22, 18, 22, 20),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
@@ -551,7 +550,7 @@ class _ModeInfoDialog extends StatelessWidget {
           ],
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Row(
               children: [
@@ -588,10 +587,7 @@ class _ModeInfoDialog extends StatelessWidget {
                     ],
                   ),
                 ),
-                AppCloseButton(
-                  onTap: () => Navigator.of(context).pop(),
-                  size: 40,
-                ),
+                AppCloseButton(onTap: () => Navigator.of(context).pop()),
               ],
             ),
             const SizedBox(height: 12),

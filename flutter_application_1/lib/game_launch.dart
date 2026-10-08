@@ -1,4 +1,4 @@
-enum GameEntryPoint { quickPlay, gameMode, room, tournament }
+enum GameEntryPoint { quickPlay, gameMode, room, tournament, tutorial }
 
 enum OkeyGameMode { standard, classic101, timed101, colorBonus101, progressive }
 
@@ -29,6 +29,14 @@ class GameLaunchConfig {
         mode: OkeyGameMode.standard,
         selectionId: 'quick-play',
         selectionLabel: 'Hemen Oyna',
+      );
+
+  const GameLaunchConfig.tutorial()
+    : this._(
+        entryPoint: GameEntryPoint.tutorial,
+        mode: OkeyGameMode.standard,
+        selectionId: 'tutorial',
+        selectionLabel: 'Öğretici',
       );
 
   const GameLaunchConfig.gameMode({
@@ -82,5 +90,6 @@ class GameLaunchConfig {
     GameEntryPoint.gameMode => 'Oyun Modları',
     GameEntryPoint.room => 'Oda',
     GameEntryPoint.tournament => 'Turnuva',
+    GameEntryPoint.tutorial => 'Öğretici',
   };
 }

@@ -44,6 +44,7 @@ class _DiscardDrawHandle extends StatelessWidget {
 }
 
 class _DeckDrawHandle extends StatelessWidget {
+  final Widget? child;
   final bool enabled;
   final int count;
   final VoidCallback onDraw;
@@ -53,6 +54,7 @@ class _DeckDrawHandle extends StatelessWidget {
   final double displayHeight;
 
   const _DeckDrawHandle({
+    this.child,
     required this.enabled,
     required this.count,
     required this.onDraw,
@@ -64,37 +66,42 @@ class _DeckDrawHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stack = _DeckStack(
-      count: count,
-      tileWidth: displayWidth,
-      tileHeight: displayHeight,
-    );
+    final stack =
+        child ??
+        _DeckStack(
+          count: count,
+          tileWidth: displayWidth,
+          tileHeight: displayHeight,
+        );
     if (!enabled) return Opacity(opacity: 0.72, child: stack);
-    return Tooltip(
-      message: 'Dokun veya ıstakaya sürükleyerek taş çek',
-      child: Draggable<_DeckDragData>(
-        data: const _DeckDragData(),
-        dragAnchorStrategy: (_, _, _) =>
-            Offset(feedbackWidth / 2, feedbackHeight + 16),
-        feedbackOffset: const Offset(0, -12),
-        feedback: Material(
-          color: Colors.transparent,
-          child: _TileBack(
-            width: feedbackWidth,
-            height: feedbackHeight,
-            showBorder: false,
-          ),
+    return Draggable<_DeckDragData>(
+      data: const _DeckDragData(),
+      dragAnchorStrategy: (_, _, _) =>
+          Offset(feedbackWidth / 2, feedbackHeight + 16),
+      feedbackOffset: const Offset(0, -12),
+      feedback: Material(
+        color: Colors.transparent,
+        child: _TileBack(
+          width: feedbackWidth,
+          height: feedbackHeight,
+          showBorder: false,
         ),
-        childWhenDragging: Opacity(
-          opacity: 0.78,
-          child: _DeckStack(
-            count: max(0, count - 1),
-            tileWidth: displayWidth,
-            tileHeight: displayHeight,
-          ),
-        ),
-        child: _PressScale(
-          child: GestureDetector(onTap: onDraw, child: stack),
+      ),
+      childWhenDragging: Opacity(
+        opacity: 0.78,
+        child:
+            child ??
+            _DeckStack(
+              count: max(0, count - 1),
+              tileWidth: displayWidth,
+              tileHeight: displayHeight,
+            ),
+      ),
+      child: _PressScale(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onDraw,
+          child: stack,
         ),
       ),
     );

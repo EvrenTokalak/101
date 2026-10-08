@@ -88,7 +88,9 @@ flutter:
     - images/ui/icons/katlamali.png
     - images/ui/icons/klasik.png
     - images/ui/icons/masa_sec.png
-    - images/ui/icons/oyun_modlari_yeni_opt.png
+    - görseller/icon/oyun_modlari_kompakt.png
+    - görseller/icon/hand.png
+    - görseller/icon/Ornate AYARLAR Game Settings Panel.png
     - images/ui/icons/renk_bonusu.png
     - images/ui/icons/turnuva.png
     - images/ui/icons/zamanli.png

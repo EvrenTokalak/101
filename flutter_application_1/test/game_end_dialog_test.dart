@@ -67,6 +67,15 @@ void main() {
     expect(playerNameText.style?.color, OC.gold);
     expect(playerNameText.style?.fontWeight, FontWeight.w900);
     expect(playerNameText.style?.fontSize, 18);
+    expect(find.byIcon(Icons.push_pin_rounded), findsOneWidget);
+    final rankOne = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const ValueKey('score-row-Gökde')),
+        matching: find.text('1'),
+      ),
+    );
+    expect(rankOne.style?.color, const Color(0xFF33200A));
+    expect(find.byIcon(Icons.arrow_forward_rounded), findsNothing);
     expect(find.text('Oyuncu 2'), findsNothing);
     final playerRowTop = tester
         .getTopLeft(find.byKey(ValueKey('score-row-${playerNameText.data}')))

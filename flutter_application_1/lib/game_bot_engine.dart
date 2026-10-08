@@ -240,12 +240,16 @@ Future<_BotComputation> _computeBotTurnInBackground(
   BotPlayer cloneBot() => BotPlayer(
     name: sourceBot.name,
     displayName: sourceBot.displayName,
+    difficulty: sourceBot.difficulty,
+    personality: sourceBot.personality,
     tileCount: sourceBot.tileCount,
     penalty: sourceBot.penalty,
     hasOpened: sourceBot.hasOpened,
     openType: sourceBot.openType,
     turnsPlayed: sourceBot.turnsPlayed,
     hand: sourceBot.hand.map(_cloneBotTile).toList(),
+    seenDiscards: sourceBot.seenDiscards.map(_cloneBotTile).toList(),
+    opponentTakes: sourceBot.opponentTakes.map(_cloneBotTile).toList(),
   );
   List<Meld> cloneMelds() => [
     for (final meld in sourceMelds)
@@ -323,9 +327,21 @@ class BotEngine {
   }) {
     if (bot.hasOpened) {
       if (_canProcess(discarded, tableMelds)) return true;
-      final before = _futureValue(bot.hand, tableMelds);
-      final after = _futureValue([...bot.hand, discarded], tableMelds);
-      return after >= before + 18;
+      final hand = [...bot.hand, discarded];
+      final groups = bot.openType == 'cift'
+          ? _pairsKeepingDiscard(hand)
+          : _standardMeldsKeepingDiscard(hand);
+      final canUseInGroup = groups
+          .expand((group) => group)
+          .any((tile) => tile.id == discarded.id);
+      if (canUseInGroup) return true;
+      if (bot.openType == 'seri' &&
+          Rules.canLayPairsAfterStandard(tableMelds)) {
+        return _pairsKeepingDiscard(hand)
+            .expand((pair) => pair)
+            .any((tile) => tile.id == discarded.id);
+      }
+      return false;
     }
 
     if (!allowOpening) return false;
@@ -368,11 +384,14 @@ class BotEngine {
       final canOpenPairs = allowOpening && pairs.length >= minimumPairCount;
 
       if (canOpenStandard || canOpenPairs) {
+        final pairTileCount = pairs.expand((pair) => pair).length;
+        final standardTileCount = standard.expand((meld) => meld).length;
+        final prefersPairs = bot.personality == BotPersonality.pairFocused;
         final choosePairs =
             canOpenPairs &&
             (!canOpenStandard ||
-                pairs.expand((pair) => pair).length >
-                    standard.expand((meld) => meld).length);
+                pairTileCount > standardTileCount ||
+                (prefersPairs && pairTileCount >= standardTileCount - 2));
         final openingGroups = choosePairs ? pairs : standard;
         openedType = choosePairs ? 'cift' : 'seri';
         openingValue = choosePairs ? pairs.length : standardScore;
@@ -405,7 +424,7 @@ class BotEngine {
       processedTileCount = _processEligibleTiles(bot, tableMelds);
     }
 
-    final discarded = _chooseDiscard(bot.hand, tableMelds);
+    final discarded = _chooseDiscard(bot, tableMelds);
     if (discarded != null) {
       bot.hand.removeWhere((tile) => tile.id == discarded.id);
     }
@@ -453,6 +472,18 @@ class BotEngine {
       for (final tile in List<Tile>.from(bot.hand)) {
         if (bot.hand.length <= 1) break;
         for (final meld in tableMelds) {
+          final replacementIndex = Rules.okeyReplacementIndex(meld, tile);
+          if (replacementIndex != null) {
+            final returnedOkey = meld.tiles[replacementIndex];
+            final changedTiles = List<Tile>.from(meld.tiles)
+              ..[replacementIndex] = tile;
+            meld.tiles = changedTiles;
+            bot.hand.removeWhere((item) => item.id == tile.id);
+            bot.hand.add(returnedOkey);
+            processed++;
+            changed = true;
+            break;
+          }
           if (!Rules.canAddToMeld(meld, [tile])) continue;
           meld.tiles = Rules.extendMeldKeepingPositions(meld.tiles, [
             tile,
@@ -469,7 +500,8 @@ class BotEngine {
     return processed;
   }
 
-  static Tile? _chooseDiscard(List<Tile> hand, List<Meld> tableMelds) {
+  static Tile? _chooseDiscard(BotPlayer bot, List<Meld> tableMelds) {
+    final hand = bot.hand;
     if (hand.isEmpty) return null;
     final plannedIds = _standardMelds(hand)
         .expand((meld) => meld)
@@ -480,11 +512,38 @@ class BotEngine {
         .map((tile) => tile.id)
         .toSet();
 
+    int visibleCount(Tile tile) => bot.seenDiscards
+        .where(
+          (seen) =>
+              !seen.isOkey &&
+              seen.number == tile.number &&
+              seen.color == tile.color,
+        )
+        .length;
+
+    int opponentInterest(Tile tile) {
+      var danger = 0;
+      for (final taken in bot.opponentTakes.reversed.take(8)) {
+        if (taken.isOkey || tile.isOkey) continue;
+        if (taken.number == tile.number && taken.color != tile.color) {
+          danger += 3;
+        }
+        if (taken.color == tile.color) {
+          final distance = (taken.number - tile.number).abs();
+          if (distance == 1) danger += 5;
+          if (distance == 2) danger += 2;
+        }
+      }
+      return danger;
+    }
+
     int calculateUtility(Tile tile) {
       if (tile.isOkey) return 10000;
       var value = 0;
       if (plannedIds.contains(tile.id)) value += 160;
-      if (pairedIds.contains(tile.id)) value += 90;
+      if (pairedIds.contains(tile.id)) {
+        value += bot.personality == BotPersonality.pairFocused ? 155 : 90;
+      }
       if (_canProcess(tile, tableMelds)) value += 130;
       for (final other in hand) {
         if (other.id == tile.id || other.isOkey) continue;
@@ -496,6 +555,15 @@ class BotEngine {
           if (distance == 1) value += 28;
           if (distance == 2) value += 12;
         }
+      }
+      if (bot.difficulty != BotDifficulty.easy) {
+        final exposedCopies = visibleCount(tile);
+        value -= exposedCopies * 12;
+        final danger = opponentInterest(tile);
+        final dangerWeight = bot.personality == BotPersonality.cautious
+            ? 13
+            : 8;
+        value += danger * dangerWeight;
       }
       return value - tile.number;
     }
@@ -513,27 +581,31 @@ class BotEngine {
         return byUtility != 0 ? byUtility : b.number.compareTo(a.number);
       });
     final weakestScore = utilities[sorted.first.id]!;
+    final candidateCount = switch (bot.difficulty) {
+      BotDifficulty.easy => min(5, sorted.length),
+      BotDifficulty.medium => min(3, sorted.length),
+      BotDifficulty.hard => min(2, sorted.length),
+    };
+    final tolerance = switch (bot.difficulty) {
+      BotDifficulty.easy => 38,
+      BotDifficulty.medium => 12,
+      BotDifficulty.hard => 4,
+    };
     final plausible = sorted
-        .take(3)
-        .where((tile) => utilities[tile.id]! <= weakestScore + 12)
+        .take(candidateCount)
+        .where((tile) => utilities[tile.id]! <= weakestScore + tolerance)
         .toList();
     return plausible[_random.nextInt(plausible.length)];
   }
 
   static bool _canProcess(Tile tile, List<Meld> tableMelds) {
     for (final meld in tableMelds) {
-      if (Rules.canAddToMeld(meld, [tile])) {
+      if (Rules.okeyReplacementIndex(meld, tile) != null ||
+          Rules.canAddToMeld(meld, [tile])) {
         return true;
       }
     }
     return false;
-  }
-
-  static int _futureValue(List<Tile> hand, List<Meld> tableMelds) {
-    final melds = _standardMelds(hand);
-    var value = _meldScore(melds) + melds.expand((meld) => meld).length * 8;
-    value += hand.where((tile) => _canProcess(tile, tableMelds)).length * 20;
-    return value;
   }
 
   static int _meldScore(List<List<Tile>> melds, {TileColor? bonusColor}) =>

@@ -57,3 +57,8 @@ flutter_application_1/.last_chrome_run_dir
 
 /.versions/
 /.last_version_snapshot
+
+# Local build and session artifacts
+/.codex-build/
+/.last_*
+/görseller/*.zip

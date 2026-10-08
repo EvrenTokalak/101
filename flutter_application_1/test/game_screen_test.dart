@@ -1,10 +1,192 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
 
 void main() {
+  setUp(() {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('xyz.luan/audioplayers.global'),
+      (call) async => null,
+    );
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('xyz.luan/audioplayers'),
+      (call) async {
+        if (call.method == 'create') {
+          final playerId = (call.arguments as Map)['playerId'];
+          messenger.setMockMethodCallHandler(
+            MethodChannel('xyz.luan/audioplayers/events/$playerId'),
+            (call) async => null,
+          );
+        }
+        return null;
+      },
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('xyz.luan/audioplayers.global/events'),
+          (call) async => null,
+        );
+  });
+  testWidgets(
+    'button draw pulses until next touch and discard visibly travels',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump(const Duration(milliseconds: 2700));
+      await tester.tap(find.byKey(const ValueKey('rack-visible-tile-0')));
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.tap(find.text('TAŞ AT'));
+      await tester.pump();
+      await tester.pump();
+      final flights = find.byWidgetPredicate(
+        (widget) => widget.key.toString().contains('player-tile-flight-'),
+      );
+      expect(flights, findsWidgets);
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(flights, findsWidgets);
+      for (var frame = 0; frame < 180; frame++) {
+        final dynamic table = tester.widget(
+          find.byWidgetPredicate(
+            (widget) => widget.runtimeType.toString() == '_TableArea',
+          ),
+        );
+        if (table.canDraw == true) break;
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+      }
+      expect(find.text('TAŞ ÇEK'), findsOneWidget);
+      await tester.tap(find.text('TAŞ ÇEK'));
+      await tester.pump();
+      await tester.pump();
+      expect(flights, findsWidgets);
+      final frame = find.byKey(const ValueKey('drawn-tile-pulse-frame'));
+      expect(frame, findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+      expect(frame, findsOneWidget);
+      final before = tester.widget<DecoratedBox>(frame).decoration;
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(tester.widget<DecoratedBox>(frame).decoration, isNot(before));
+      await tester.tap(find.byKey(const ValueKey('grid-per-summary')));
+      await tester.pump();
+      expect(frame, findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'six percent leading-edge overlap pushes before the finger reaches the tile',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1024, 500));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump(const Duration(milliseconds: 2700));
+      final source = find.byKey(const ValueKey('rack-slot-0'));
+      final target = find.byKey(const ValueKey('rack-slot-8'));
+      final sourceKey = tester
+          .widget<Draggable>(
+            find.descendant(
+              of: source,
+              matching: find.byWidgetPredicate((widget) => widget is Draggable),
+            ),
+          )
+          .key!;
+      final rect = tester.getRect(target);
+      final tileWidth = rect.width - 1.2;
+      final drop = Offset(
+        rect.left - tileWidth / 2 + tileWidth * 0.06,
+        rect.center.dy,
+      );
+      expect(drop.dx, lessThan(rect.left));
+      await tester.dragFrom(
+        tester.getCenter(source),
+        drop - tester.getCenter(source),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(
+        find.descendant(of: target, matching: find.byKey(sourceKey)),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('botlar yalnizca actiktan sonra kalan puani gosterir', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump();
+    expect(find.text('Açmadı'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('bot-status-badge-Oyuncu 2')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('bot-remaining-points-Oyuncu 2')),
+      findsNothing,
+    );
+    final seat = find.byKey(const ValueKey('seat-Oyuncu 2'));
+    final info = find.ancestor(
+      of: seat,
+      matching: find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_PlayerInfo',
+      ),
+    );
+    final dynamic widget = tester.widget(info);
+    final BotPlayer bot = widget.bot as BotPlayer;
+    final int fakeOkeyValue = widget.fakeOkeyValue as int;
+    final expected = Rules.penaltyFor(bot.hand, fakeOkeyValue: fakeOkeyValue);
+    bot.hasOpened = true;
+    tester.element(info).markNeedsBuild();
+    await tester.pump();
+    expect(find.text('Açtı'), findsNothing);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('bot-remaining-points-Oyuncu 2')),
+          )
+          .data,
+      '$expected',
+    );
+    expect(find.text('Açmadı'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('bot-remaining-points-Oyuncu 3')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('bot-remaining-points-Oyuncu 4')),
+      findsNothing,
+    );
+    bot.hand.clear();
+    tester.element(info).markNeedsBuild();
+    await tester.pump();
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('bot-remaining-points-Oyuncu 2')),
+          )
+          .data,
+      '0',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   testWidgets('game screen renders at desktop and short web sizes', (
     tester,
   ) async {
@@ -307,11 +489,12 @@ void main() {
     final sourceKey = tester.widget<Draggable>(sourceTile).key!;
     final shiftedKey = tester.widget<Draggable>(shiftedTile).key!;
     final targetRect = tester.getRect(targetSlot);
+    final neighbourBefore = tester.getCenter(shiftedSlot);
 
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
       Offset(
-            targetRect.center.dx + targetRect.width * 0.40,
+            targetRect.center.dx + targetRect.width * 0.46,
             targetRect.center.dy,
           ) -
           tester.getCenter(sourceSlot),
@@ -332,7 +515,25 @@ void main() {
       ),
       findsOneWidget,
     );
+    final neighbour = find.byKey(const ValueKey('rack-visible-tile-9'));
+    final settledPosition = tester.getCenter(
+      find.byKey(const ValueKey('rack-slot-9')),
+    );
+    expect(tester.getCenter(neighbour).dx, closeTo(neighbourBefore.dx, 1));
     await tester.pump(const Duration(milliseconds: 50));
+    final halfway = tester.getCenter(neighbour);
+    expect(halfway.dx, greaterThan(neighbourBefore.dx));
+    expect(halfway.dx, lessThan(settledPosition.dx));
+    expect(halfway.dy, closeTo(neighbourBefore.dy, 1));
+    await tester.pump(const Duration(milliseconds: 70));
+    expect(tester.getCenter(neighbour).dx, closeTo(settledPosition.dx, 1));
+    expect(
+      find.descendant(
+        of: find.byKey(sourceKey),
+        matching: find.byType(TweenAnimationBuilder<double>),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('github rack drag uses an empty source placeholder', (
@@ -355,9 +556,24 @@ void main() {
     expect(placeholder.width, greaterThan(0));
     expect(placeholder.height, greaterThan(0));
 
+    final pointer = tester.getCenter(sourceSlot) + const Offset(0, -40);
     final gesture = await tester.startGesture(tester.getCenter(sourceSlot));
-    await gesture.moveBy(const Offset(40, -40));
+    await gesture.moveBy(const Offset(0, -40));
     await tester.pump();
+    final feedback = find.byKey(const ValueKey('rack-drag-feedback-tile'));
+    final initialFeedback = tester.getRect(feedback);
+    await tester.pump(const Duration(milliseconds: 70));
+    final midwayFeedback = tester.getRect(feedback);
+    await tester.pump(const Duration(milliseconds: 80));
+    final liftedFeedback = tester.getRect(feedback);
+    expect(midwayFeedback.top, lessThan(initialFeedback.top));
+    expect(midwayFeedback.top, greaterThan(liftedFeedback.top));
+    final gripCenterY =
+        liftedFeedback.top +
+        liftedFeedback.height * .85 -
+        3 -
+        liftedFeedback.width * .105;
+    expect(gripCenterY, closeTo(pointer.dy, .1));
     final sourceTileWhileDragging = find.descendant(
       of: sourceSlot,
       matching: find.byKey(const ValueKey('rack-visible-tile-0')),
@@ -406,7 +622,7 @@ void main() {
 
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
-      Offset(targetRect.left + targetRect.width * 0.10, targetRect.center.dy) -
+      Offset(targetRect.left + targetRect.width * 0.04, targetRect.center.dy) -
           tester.getCenter(sourceSlot),
     );
     await tester.pump();
@@ -427,7 +643,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
   });
 
-  testWidgets('dropping on a tile body pushes only that tile chain', (
+  testWidgets('dropping near the left tile edge pushes only that tile chain', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
@@ -450,9 +666,11 @@ void main() {
     final sourceKey = tester.widget<Draggable>(sourceTile).key!;
     final targetKey = tester.widget<Draggable>(targetTile).key!;
 
+    final pushRect = tester.getRect(targetSlot);
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
-      tester.getCenter(targetSlot) - tester.getCenter(sourceSlot),
+      Offset(pushRect.left + pushRect.width * 0.15, pushRect.center.dy) -
+          tester.getCenter(sourceSlot),
     );
     await tester.pump();
 
@@ -473,7 +691,41 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
   });
 
-  testWidgets('rack body drop can push a six tile chain', (tester) async {
+  testWidgets('tile centre does not trigger pushing or insertion', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+    final source = find.byKey(const ValueKey('rack-slot-0'));
+    final target = find.byKey(const ValueKey('rack-slot-8'));
+    final tiles = find.byWidgetPredicate((widget) => widget is Draggable);
+    final sourceKey = tester
+        .widget<Draggable>(find.descendant(of: source, matching: tiles))
+        .key!;
+    final targetKey = tester
+        .widget<Draggable>(find.descendant(of: target, matching: tiles))
+        .key!;
+    await tester.dragFrom(
+      tester.getCenter(source),
+      tester.getCenter(target) - tester.getCenter(source),
+    );
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      find.descendant(of: source, matching: find.byKey(sourceKey)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: target, matching: find.byKey(targetKey)),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('right edge pushes the chain left', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -481,7 +733,14 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 2700));
 
-    final sourceSlot = find.byKey(const ValueKey('rack-slot-0'));
+    final vacancySource = find.byKey(const ValueKey('rack-slot-0'));
+    final vacancyTarget = find.byKey(const ValueKey('rack-slot-14'));
+    await tester.dragFrom(
+      tester.getCenter(vacancySource),
+      tester.getCenter(vacancyTarget) - tester.getCenter(vacancySource),
+    );
+    await tester.pump(const Duration(milliseconds: 150));
+    final sourceSlot = find.byKey(const ValueKey('rack-slot-8'));
     final targetSlot = find.byKey(const ValueKey('rack-slot-5'));
     final sourceTile = find.descendant(
       of: sourceSlot,
@@ -494,9 +753,11 @@ void main() {
     final sourceKey = tester.widget<Draggable>(sourceTile).key!;
     final targetKey = tester.widget<Draggable>(targetTile).key!;
 
+    final pushRect = tester.getRect(targetSlot);
     await tester.dragFrom(
       tester.getCenter(sourceSlot),
-      tester.getCenter(targetSlot) - tester.getCenter(sourceSlot),
+      Offset(pushRect.right - pushRect.width * 0.15, pushRect.center.dy) -
+          tester.getCenter(sourceSlot),
     );
     await tester.pump();
 
@@ -506,7 +767,7 @@ void main() {
     );
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('rack-slot-6')),
+        of: find.byKey(const ValueKey('rack-slot-4')),
         matching: find.byKey(targetKey),
       ),
       findsOneWidget,
@@ -537,6 +798,12 @@ void main() {
     final perSummary = find.byKey(const ValueKey('grid-per-summary'));
     final indicator = find.byKey(const ValueKey('grid-indicator'));
     final deckSlot = find.byKey(const ValueKey('grid-deck-slot'));
+    final indicatorDeckHitArea = find.byKey(
+      const ValueKey('indicator-deck-draw-hit-area'),
+    );
+    final expandedDrawHitArea = find.byKey(
+      const ValueKey('expanded-deck-draw-hit-area'),
+    );
     expect(find.descendant(of: drawArea, matching: perSummary), findsOneWidget);
     expect(find.descendant(of: drawArea, matching: indicator), findsOneWidget);
     expect(find.descendant(of: drawArea, matching: deckSlot), findsOneWidget);
@@ -545,6 +812,26 @@ void main() {
       greaterThan(tester.getSize(indicator).width),
     );
     expect(tester.getSize(indicator).width, tester.getSize(deckSlot).width);
+    final drawnTileRect = tester.getRect(
+      find.byKey(const ValueKey('draw-deck-tile')),
+    );
+    final indicatorRect = tester.getRect(indicator);
+    expect(drawnTileRect.width, closeTo(indicatorRect.width, 0.01));
+    expect(drawnTileRect.height, closeTo(indicatorRect.height, 0.01));
+    expect(drawnTileRect.bottom, closeTo(indicatorRect.bottom, 0.01));
+    final deckRect = tester.getRect(deckSlot);
+    expect(deckRect.inflate(0.01).contains(drawnTileRect.topLeft), isTrue);
+    expect(deckRect.inflate(0.01).contains(drawnTileRect.bottomRight), isTrue);
+    final hitAreaRect = tester.getRect(indicatorDeckHitArea);
+    expect(hitAreaRect.left, lessThanOrEqualTo(tester.getRect(indicator).left));
+    expect(
+      hitAreaRect.right,
+      greaterThanOrEqualTo(tester.getRect(deckSlot).right),
+    );
+    final expandedHitAreaRect = tester.getRect(expandedDrawHitArea);
+    expect(expandedHitAreaRect.left, lessThanOrEqualTo(hitAreaRect.left));
+    expect(expandedHitAreaRect.left, lessThan(tester.getRect(indicator).left));
+    expect(expandedHitAreaRect.right, greaterThanOrEqualTo(hitAreaRect.right));
     expect(
       tester.getSize(perSummary).height,
       greaterThan(tester.getSize(indicator).height),
@@ -626,12 +913,61 @@ void main() {
     final target = find.byKey(const ValueKey('progressive-opening-target'));
     expect(target, findsOneWidget);
     expect(
-      find.descendant(of: target, matching: find.text('PER: 101')),
+      find.descendant(
+        of: find.byKey(const ValueKey('rack-area-surface')),
+        matching: target,
+      ),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: target, matching: find.text('ÇİFT: 5')),
+      tester.getRect(target).right,
+      lessThanOrEqualTo(
+        tester.getRect(find.byKey(const ValueKey('rack-slot-0'))).left,
+      ),
+    );
+    expect(
+      find.descendant(of: target, matching: find.text('101')),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(of: target, matching: find.text('5')),
+      findsOneWidget,
+    );
+    for (final entry in {'101': 0, '5': 23}.entries) {
+      final slot = tester.getRect(
+        find.byKey(ValueKey('rack-slot-${entry.value}')),
+      );
+      final number = find.descendant(
+        of: target,
+        matching: find.text(entry.key),
+      );
+      expect(
+        tester.getCenter(number).dy,
+        closeTo(slot.center.dy - slot.height * 0.15, 1),
+      );
+      expect(tester.widget<Text>(number).style!.fontWeight, FontWeight.w900);
+    }
+    expect(
+      find.descendant(of: target, matching: find.byType(DecoratedBox)),
+      findsNothing,
+    );
+    expect(
+      tester
+          .getCenter(find.descendant(of: target, matching: find.text('101')))
+          .dy,
+      lessThan(
+        tester
+            .getCenter(find.descendant(of: target, matching: find.text('5')))
+            .dy,
+      ),
+    );
+    expect(
+      find.descendant(of: target, matching: find.text('PER: 101')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: target, matching: find.text('ÇİFT: 5')),
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());

@@ -54,7 +54,7 @@ void main() {
     await tester.pumpWidget(const app.OkeyApp(home: app.MainMenuScreen()));
     await tester.pump(const Duration(milliseconds: 750));
 
-    await tester.tap(find.text('OYUN MODLARI'));
+    await tester.tap(find.text('OYUN\nMODLARI'));
     await pumpRouteTransition(tester);
     expect(find.byType(GameModeSelectScreen), findsOneWidget);
     expect(

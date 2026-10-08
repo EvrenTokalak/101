@@ -168,7 +168,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                                   context,
                                   rootNavigator: true,
                                 ).pop(),
-                                size: 38,
                               ),
                             ],
                           ),
@@ -197,14 +196,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                                   settings.vibration,
                                   (value) => settings = settings.copyWith(
                                     vibration: value,
-                                  ),
-                                ),
-                                _switch(
-                                  Icons.lightbulb_rounded,
-                                  'Hamle İpuçları',
-                                  settings.moveHints,
-                                  (value) => settings = settings.copyWith(
-                                    moveHints: value,
                                   ),
                                 ),
                                 _switch(
@@ -431,12 +422,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                   (v) => settings = settings.copyWith(gridMagnifier: v),
                 ),
                 _diagnosticSwitch(
-                  Icons.lightbulb_rounded,
-                  'Hamle ipuçları',
-                  settings.moveHints,
-                  (v) => settings = settings.copyWith(moveHints: v),
-                ),
-                _diagnosticSwitch(
                   Icons.volume_up_rounded,
                   'Ses efektleri',
                   settings.sound,
@@ -593,7 +578,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                 children: [
                   Text(
                     'Yazı Boyutu',
-                    textScaler: TextScaler.noScaling,
                     style: TextStyle(
                       color: OC.cream,
                       fontWeight: FontWeight.w800,
@@ -601,7 +585,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                   ),
                   Text(
                     'Taş sayıları sabit kalır',
-                    textScaler: TextScaler.noScaling,
                     style: TextStyle(fontSize: 9, color: Colors.white54),
                   ),
                 ],
@@ -609,7 +592,6 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
             ),
             Text(
               '${(settings.fontScale * 100).round()}%',
-              textScaler: TextScaler.noScaling,
               style: const TextStyle(
                 color: OC.goldLight,
                 fontWeight: FontWeight.w900,
@@ -631,7 +613,7 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
         ),
         Text(
           'Önizleme: 101 Okey',
-          textScaler: TextScaler.linear(settings.fontScale),
+          textScaler: appTextScaler(settings.fontScale),
           style: const TextStyle(
             color: Colors.white70,
             fontSize: 11,

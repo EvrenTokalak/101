@@ -62,7 +62,7 @@ void main() {
     await tester.pumpWidget(const app.OkeyApp(home: app.MainMenuScreen()));
     await tester.pump(const Duration(milliseconds: 750));
 
-    await tester.tap(find.text('TURNUVALAR'));
+    await tester.tap(find.text('TURNUVA'));
     await tester.pumpAndSettle();
 
     expect(find.byType(TournamentScreen), findsOneWidget);
