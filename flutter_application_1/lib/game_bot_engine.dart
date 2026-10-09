@@ -90,6 +90,7 @@ class _BotWorker {
     int minimumStandardScore,
     int minimumPairCount,
     TileColor? bonusColor,
+    int pairAreaLimit,
   ) async {
     await _ensureStarted();
     final id = ++_serial;
@@ -104,6 +105,7 @@ class _BotWorker {
       minimumStandardScore,
       minimumPairCount,
       bonusColor,
+      pairAreaLimit,
     ]);
     return await completer.future as _BotComputation;
   }
@@ -116,6 +118,7 @@ class _BotWorker {
     int minimumStandardScore,
     int minimumPairCount,
     TileColor? bonusColor,
+    int pairAreaLimit,
   ) async {
     await _ensureStarted();
     final id = ++_serial;
@@ -131,6 +134,7 @@ class _BotWorker {
       minimumStandardScore,
       minimumPairCount,
       bonusColor,
+      pairAreaLimit,
     ]);
     return await completer.future as bool;
   }
@@ -169,6 +173,7 @@ void _botWorkerMain(SendPort output) {
           minimumStandardScore: request[6]! as int,
           minimumPairCount: request[7]! as int,
           bonusColor: request[8] as TileColor?,
+          pairAreaLimit: request[9]! as int,
         ),
       ]);
       return;
@@ -181,6 +186,7 @@ void _botWorkerMain(SendPort output) {
       minimumStandardScore: request[5]! as int,
       minimumPairCount: request[6]! as int,
       bonusColor: request[7] as TileColor?,
+      pairAreaLimit: request[8]! as int,
     );
     output.send(<Object?>[id, _BotComputation(result, bot, melds)]);
   });
@@ -194,6 +200,7 @@ Future<bool> _computeBotWantsDiscard(
   required int minimumStandardScore,
   required int minimumPairCount,
   TileColor? bonusColor,
+  int pairAreaLimit = 24,
 }) {
   if (kIsWeb) {
     return Future(
@@ -205,6 +212,7 @@ Future<bool> _computeBotWantsDiscard(
         minimumStandardScore: minimumStandardScore,
         minimumPairCount: minimumPairCount,
         bonusColor: bonusColor,
+        pairAreaLimit: pairAreaLimit,
       ),
     );
   }
@@ -216,6 +224,7 @@ Future<bool> _computeBotWantsDiscard(
     minimumStandardScore,
     minimumPairCount,
     bonusColor,
+    pairAreaLimit,
   );
 }
 
@@ -225,6 +234,7 @@ Tile _cloneBotTile(Tile tile) => Tile(
   id: tile.id,
   isFakeOkey: tile.isFakeOkey,
   isOkey: tile.isOkey,
+  isIndicator: tile.isIndicator,
   selected: tile.selected,
   okeyFaceRevealed: tile.okeyFaceRevealed,
 );
@@ -236,6 +246,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
   required int minimumStandardScore,
   required int minimumPairCount,
   TileColor? bonusColor,
+  int pairAreaLimit = 24,
 }) {
   BotPlayer cloneBot() => BotPlayer(
     name: sourceBot.name,
@@ -263,6 +274,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
       minimumStandardScore: minimumStandardScore,
       minimumPairCount: minimumPairCount,
       bonusColor: bonusColor,
+      pairAreaLimit: pairAreaLimit,
     );
     return _BotComputation(result, bot, melds);
   }
@@ -279,6 +291,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
     minimumStandardScore,
     minimumPairCount,
     bonusColor,
+    pairAreaLimit,
   );
 }
 
@@ -296,8 +309,19 @@ class BotEngine {
   }
 
   static int _handSignature(List<Tile> hand) {
-    final ids = hand.map((tile) => tile.id).toList()..sort();
-    return Object.hashAll(ids);
+    final tiles = List<Tile>.from(hand)..sort((a, b) => a.id.compareTo(b.id));
+    return Object.hashAll(
+      tiles.map(
+        (tile) => Object.hash(
+          tile.id,
+          tile.number,
+          tile.color,
+          tile.isOkey,
+          tile.isFakeOkey,
+          tile.isIndicator,
+        ),
+      ),
+    );
   }
 
   static List<List<Tile>> _standardMelds(List<Tile> hand) {
@@ -308,12 +332,18 @@ class BotEngine {
     return _standardPlanCache[signature] = RackSolver.standardMelds(hand);
   }
 
-  static List<List<Tile>> _pairs(List<Tile> hand) {
-    final signature = _handSignature(hand);
+  static List<List<Tile>> _pairs(
+    List<Tile> hand, {
+    bool allowIndicator = true,
+  }) {
+    final signature = Object.hash(_handSignature(hand), allowIndicator);
     final cached = _pairPlanCache[signature];
     if (cached != null) return cached;
     if (_pairPlanCache.length >= 6) _pairPlanCache.clear();
-    return _pairPlanCache[signature] = RackSolver.pairs(hand);
+    return _pairPlanCache[signature] = RackSolver.pairs(
+      hand,
+      allowIndicator: allowIndicator,
+    );
   }
 
   static bool wantsDiscard(
@@ -324,12 +354,23 @@ class BotEngine {
     int minimumStandardScore = 101,
     int minimumPairCount = 5,
     TileColor? bonusColor,
+    int pairAreaLimit = 24,
   }) {
+    final pairSlots = max(
+      0,
+      pairAreaLimit - tableMelds.where((m) => m.type == 'cift').length,
+    );
+    final processableMelds = tableMelds
+        .where((m) => m.type != 'cift' || pairSlots > 0)
+        .toList();
     if (bot.hasOpened) {
-      if (_canProcess(discarded, tableMelds)) return true;
+      if (_canProcess(discarded, processableMelds)) return true;
       final hand = [...bot.hand, discarded];
       final groups = bot.openType == 'cift'
-          ? _pairsKeepingDiscard(hand)
+          ? _pairsKeepingDiscard(
+              hand,
+              allowIndicator: !bot.hasOpened,
+            ).take(pairSlots).toList()
           : _standardMeldsKeepingDiscard(hand);
       final canUseInGroup = groups
           .expand((group) => group)
@@ -337,7 +378,8 @@ class BotEngine {
       if (canUseInGroup) return true;
       if (bot.openType == 'seri' &&
           Rules.canLayPairsAfterStandard(tableMelds)) {
-        return _pairsKeepingDiscard(hand)
+        return _pairsKeepingDiscard(hand, allowIndicator: !bot.hasOpened)
+            .take(pairSlots)
             .expand((pair) => pair)
             .any((tile) => tile.id == discarded.id);
       }
@@ -352,7 +394,10 @@ class BotEngine {
     final standardUsesDiscard = standard
         .expand((meld) => meld)
         .any((tile) => tile.id == discarded.id);
-    final pairs = _pairsKeepingDiscard(hand);
+    final pairs = _pairsKeepingDiscard(
+      hand,
+      allowIndicator: !bot.hasOpened,
+    ).take(pairSlots).toList();
     final pairsUseDiscard = pairs
         .expand((pair) => pair)
         .any((tile) => tile.id == discarded.id);
@@ -367,6 +412,7 @@ class BotEngine {
     int minimumStandardScore = 101,
     int minimumPairCount = 5,
     TileColor? bonusColor,
+    int pairAreaLimit = 24,
   }) {
     var openedMeldCount = 0;
     var processedTileCount = 0;
@@ -374,10 +420,17 @@ class BotEngine {
     int? openingValue;
 
     final pairAreaIsOpen = Rules.canLayPairsAfterStandard(tableMelds);
+    int remainingPairSlots() => max(
+      0,
+      pairAreaLimit - tableMelds.where((m) => m.type == 'cift').length,
+    );
 
     if (!bot.hasOpened) {
       final standard = _standardMeldsKeepingDiscard(bot.hand);
-      final pairs = _pairsKeepingDiscard(bot.hand);
+      final pairs = _pairsKeepingDiscard(
+        bot.hand,
+        allowIndicator: !bot.hasOpened,
+      ).take(remainingPairSlots()).toList();
       final standardScore = _meldScore(standard, bonusColor: bonusColor);
       final canOpenStandard =
           allowOpening && standardScore >= minimumStandardScore;
@@ -402,7 +455,10 @@ class BotEngine {
       }
     } else {
       final extraGroups = bot.openType == 'cift'
-          ? _pairsKeepingDiscard(bot.hand)
+          ? _pairsKeepingDiscard(
+              bot.hand,
+              allowIndicator: !bot.hasOpened,
+            ).take(remainingPairSlots()).toList()
           : _standardMeldsKeepingDiscard(bot.hand);
       if (extraGroups.isNotEmpty) {
         _moveGroupsToTable(bot, extraGroups, tableMelds, bot.openType);
@@ -413,7 +469,10 @@ class BotEngine {
     // Seriyle açmış bir oyuncu ancak masada başka bir çift açılımı varsa
     // elindeki gerçek çiftleri ortak çift alanına indirebilir.
     if (bot.hasOpened && bot.openType == 'seri' && pairAreaIsOpen) {
-      final extraPairs = _pairsKeepingDiscard(bot.hand);
+      final extraPairs = _pairsKeepingDiscard(
+        bot.hand,
+        allowIndicator: !bot.hasOpened,
+      ).take(remainingPairSlots()).toList();
       if (extraPairs.isNotEmpty) {
         _moveGroupsToTable(bot, extraPairs, tableMelds, 'cift');
         openedMeldCount += extraPairs.length;
@@ -421,10 +480,20 @@ class BotEngine {
     }
 
     if (bot.hasOpened) {
-      processedTileCount = _processEligibleTiles(bot, tableMelds);
+      processedTileCount = _processEligibleTiles(
+        bot,
+        tableMelds
+            .where((m) => m.type != 'cift' || remainingPairSlots() > 0)
+            .toList(),
+      );
     }
 
-    final discarded = _chooseDiscard(bot, tableMelds);
+    final discarded = _chooseDiscard(
+      bot,
+      tableMelds
+          .where((m) => m.type != 'cift' || remainingPairSlots() > 0)
+          .toList(),
+    );
     if (discarded != null) {
       bot.hand.removeWhere((tile) => tile.id == discarded.id);
     }
@@ -507,10 +576,10 @@ class BotEngine {
         .expand((meld) => meld)
         .map((tile) => tile.id)
         .toSet();
-    final pairedIds = _pairs(hand)
-        .expand((pair) => pair)
-        .map((tile) => tile.id)
-        .toSet();
+    final pairedIds = _pairs(
+      hand,
+      allowIndicator: !bot.hasOpened,
+    ).expand((pair) => pair).map((tile) => tile.id).toSet();
 
     int visibleCount(Tile tile) => bot.seenDiscards
         .where(
@@ -633,14 +702,18 @@ class BotEngine {
     return best;
   }
 
-  static List<List<Tile>> _pairsKeepingDiscard(List<Tile> hand) {
-    final direct = _pairs(hand);
+  static List<List<Tile>> _pairsKeepingDiscard(
+    List<Tile> hand, {
+    bool allowIndicator = true,
+  }) {
+    final direct = _pairs(hand, allowIndicator: allowIndicator);
     if (direct.expand((pair) => pair).length < hand.length) return direct;
 
     var best = <List<Tile>>[];
     for (final reserved in hand) {
       final candidate = _pairs(
         hand.where((tile) => tile.id != reserved.id).toList(),
+        allowIndicator: allowIndicator,
       );
       if (candidate.length > best.length) best = candidate;
     }

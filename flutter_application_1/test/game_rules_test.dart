@@ -9,16 +9,89 @@ void main() {
     int number,
     TileColor color, {
     bool isOkey = false,
+    bool isIndicator = false,
     bool isFakeOkey = false,
   }) => Tile(
     number: number,
     color: color,
     id: nextId++,
     isOkey: isOkey,
+    isIndicator: isIndicator,
     isFakeOkey: isFakeOkey,
   );
 
   group('101 per kuralları', () {
+    test('gösterge kırmızı 6, sarı 13 ile yalnız çift oluşturur', () {
+      final indicator = tile(6, TileColor.red);
+      final redSix = tile(6, TileColor.red);
+      final yellowThirteen = tile(13, TileColor.yellow);
+      final redSeven = tile(7, TileColor.red);
+      final blueSix = tile(6, TileColor.blue);
+      Rules.applyIndicator([
+        redSix,
+        yellowThirteen,
+        redSeven,
+        blueSix,
+      ], indicator);
+      expect(redSix.isIndicator, isTrue);
+      expect(redSix.isOkey, isFalse);
+      expect(redSeven.isOkey, isTrue);
+      expect(blueSix.isIndicator, isFalse);
+      expect(Rules.isValidPair([redSix, yellowThirteen]), isTrue);
+      expect(Rules.isValidPair([yellowThirteen, redSix]), isTrue);
+      expect(Rules.isValidPair([blueSix, yellowThirteen]), isFalse);
+      expect(Rules.isValidPair([redSix, redSix]), isFalse);
+      expect(
+        Rules.isValidRun([tile(12, TileColor.yellow), redSix, yellowThirteen]),
+        isFalse,
+      );
+      expect(
+        Rules.isValidGroup([redSix, yellowThirteen, tile(13, TileColor.black)]),
+        isFalse,
+      );
+      final naturalRun = [
+        tile(4, TileColor.red),
+        tile(5, TileColor.red),
+        redSix,
+      ];
+      expect(Rules.isValidRun(naturalRun), isTrue);
+      expect(Rules.meldValue(naturalRun), 15);
+      expect(Rules.penaltyFor([redSix], fakeOkeyValue: 7), 6);
+    });
+
+    test('gösterge desteği masadaki gerçek okeyi geri almaya izin vermez', () {
+      final indicator = tile(6, TileColor.red, isIndicator: true);
+      final pair = Meld(
+        type: 'cift',
+        tiles: [
+          tile(13, TileColor.yellow),
+          tile(7, TileColor.red, isOkey: true),
+        ],
+      );
+      expect(Rules.okeyReplacementIndex(pair, indicator), isNull);
+      expect(Rules.okeyReplacementIndex(pair, tile(13, TileColor.yellow)), 1);
+    });
+
+    test('gösterge 13 olduğunda okey 1 olur ve eski gösterge sıfırlanır', () {
+      final oldIndicator = tile(6, TileColor.red, isIndicator: true);
+      final blackThirteen = tile(13, TileColor.black);
+      final blackOne = tile(1, TileColor.black);
+      final fake = tile(0, TileColor.red, isFakeOkey: true);
+      Rules.applyIndicator([
+        oldIndicator,
+        blackThirteen,
+        blackOne,
+        fake,
+      ], tile(13, TileColor.black));
+      expect(oldIndicator.isIndicator, isFalse);
+      expect(blackThirteen.isIndicator, isTrue);
+      expect(blackOne.isOkey, isTrue);
+      expect(fake.isIndicator, isFalse);
+      expect(fake.isOkey, isFalse);
+      expect(fake.number, 1);
+      expect(fake.color, TileColor.black);
+      expect(Rules.isValidPair([fake, tile(9, TileColor.yellow)]), isFalse);
+    });
     test('aynı renk ardışık en az üç taş seri olur', () {
       final run = [
         tile(4, TileColor.red),

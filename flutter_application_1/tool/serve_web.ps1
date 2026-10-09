@@ -23,12 +23,19 @@ $mimeTypes = @{
 try {
     while ($listener.IsListening) {
         $context = $listener.GetContext()
-        $relativePath = [Uri]::UnescapeDataString($context.Request.Url.AbsolutePath.TrimStart('/'))
+        $relativePath = $context.Request.Url.AbsolutePath.TrimStart('/')
         if ([string]::IsNullOrWhiteSpace($relativePath)) {
             $relativePath = 'index.html'
         }
 
         $candidate = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $relativePath))
+        # Flutter web asset filenames retain URL escapes for spaces and Unicode.
+        # Try that path first, then support ordinary decoded filenames as well.
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            $decodedPath = [Uri]::UnescapeDataString($relativePath)
+            $candidate = [System.IO.Path]::GetFullPath((Join-Path $resolvedRoot $decodedPath))
+        }
+
         if (-not $candidate.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
             $candidate = Join-Path $resolvedRoot 'index.html'
         }

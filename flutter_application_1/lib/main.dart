@@ -34,7 +34,8 @@ import 'progress_notifications.dart';
 import 'route_activity.dart';
 import 'store_cosmetics.dart';
 import 'startup_tutorial.dart';
-import 'tournament.dart';
+import 'daily_league.dart';
+import 'league_screen.dart';
 
 final _dailyTaskClock = _DailyTaskClock();
 final _inboxNotifications = _InboxNotifications();
@@ -183,9 +184,10 @@ Future<void> main() async {
     appLanguage.load(),
     dailyLogin.load(),
     _inboxNotifications.load(),
-    initializeTournamentCycle(),
   ]);
   await progressNotifications.load();
+  await dailyLeague.load();
+  await dailyLeague.setNotificationsEnabled(appSettings.value.notifications);
   appSettings.value = appSettings.value.copyWith(language: appLanguage.value);
   await SystemChrome.setPreferredOrientations(const [
     DeviceOrientation.landscapeLeft,
@@ -981,7 +983,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       () => Navigator.of(context).push(
         PageRouteBuilder<void>(
           pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: TournamentScreen()),
+              const ActiveRouteScene(child: LeagueScreen()),
           transitionDuration: const Duration(milliseconds: 120),
           transitionsBuilder: (_, animation, _, child) {
             final curved = CurvedAnimation(
@@ -1153,7 +1155,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       onEntryTap: (entry) {
         selectedEntry = entry;
         progressNotifications.markRead(entry);
-        if (entry.startsWith('Turnuva')) {
+        if (entry.startsWith('Lig')) {
           unawaited(_inboxNotifications.markTournamentRead());
         } else if (entry.startsWith('Hoş geldin')) {
           unawaited(_inboxNotifications.markWelcomeRead());
@@ -1164,7 +1166,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     if (!mounted || selectedEntry == null) return;
     if (selectedEntry!.startsWith('Günlük')) {
       await _openDailyReward();
-    } else if (selectedEntry!.startsWith('Turnuva')) {
+    } else if (selectedEntry!.startsWith('Lig')) {
       await _navigateToTournament();
     } else if (selectedEntry!.startsWith('Hoş geldin')) {
       await _openProfile();
@@ -1243,6 +1245,9 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     if (updatedSettings != null && mounted) {
       setState(() => _settings = updatedSettings);
       appSettings.value = updatedSettings;
+      unawaited(
+        dailyLeague.setNotificationsEnabled(updatedSettings.notifications),
+      );
       setGameVibrationEnabled(updatedSettings.vibration);
       setGameSoundEffectsEnabled(updatedSettings.soundEffects);
       setGameOpponentPicturesEnabled(updatedSettings.showOpponentPictures);
@@ -1334,6 +1339,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         ),
         const SizedBox(height: 18),
         _HemenOynaButton(onTap: () => _navigateToGame()),
+        HomeLeagueSummary(onTap: _navigateToTournament),
         const SizedBox(height: 16),
         _DailyRewardButton(
           onTap: _openDailyReward,
@@ -1400,158 +1406,189 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                 SafeArea(
                   child: FadeTransition(
                     opacity: _fadeIn,
-                    child: MediaQuery.sizeOf(context).aspectRatio < 1.2
-                        ? _portraitHome()
-                        : Center(
-                            child: FittedBox(
-                              fit: BoxFit.contain,
-                              child: SizedBox(
-                                width: 1100,
-                                height: 500,
-                                child: Stack(
-                                  children: [
-                                    Positioned.fill(
-                                      child: _HomeTileDecorations(
-                                        enabled: true,
-                                      ),
+                    child: LayoutBuilder(
+                      builder: (context, viewport) {
+                        final aspectRatio =
+                            viewport.maxWidth / viewport.maxHeight;
+                        final designHeight = (1100 / aspectRatio).clamp(
+                          500.0,
+                          900.0,
+                        );
+                        return aspectRatio < 1.2
+                            ? _portraitHome()
+                            : SizedBox.expand(
+                                child: FittedBox(
+                                  fit: BoxFit.contain,
+                                  child: SizedBox(
+                                    key: const ValueKey(
+                                      'landscape-home-layout',
                                     ),
-                                    Positioned(
-                                      top: 16,
-                                      left: 20,
-                                      child: _ProfileChip(onTap: _openProfile),
-                                    ),
-                                    Positioned(
-                                      top: 18,
-                                      right: 20,
-                                      child: AnimatedBuilder(
-                                        animation: _walletRewardCtrl,
-                                        builder: (context, _) {
-                                          final progress = Curves.easeOutCubic
-                                              .transform(
-                                                _walletRewardCtrl.value,
+                                    width: 1100,
+                                    height: designHeight,
+                                    child: Stack(
+                                      children: [
+                                        Positioned.fill(
+                                          child: _HomeTileDecorations(
+                                            enabled: true,
+                                          ),
+                                        ),
+                                        Positioned(
+                                          top: 16,
+                                          left: 20,
+                                          child: _ProfileChip(
+                                            onTap: _openProfile,
+                                          ),
+                                        ),
+                                        Positioned(
+                                          top: 18,
+                                          right: 20,
+                                          child: AnimatedBuilder(
+                                            animation: _walletRewardCtrl,
+                                            builder: (context, _) {
+                                              final progress = Curves
+                                                  .easeOutCubic
+                                                  .transform(
+                                                    _walletRewardCtrl.value,
+                                                  );
+                                              final animatedBalance =
+                                                  _walletAnimationFrom +
+                                                  ((_walletAnimationTo -
+                                                              _walletAnimationFrom) *
+                                                          progress)
+                                                      .round();
+                                              return _TopRightBar(
+                                                coinBalance: animatedBalance,
+                                                notificationsEnabled:
+                                                    _settings.notifications,
+                                                onSettings: _openSettings,
+                                                onHelp: _openHelp,
+                                                onStore: _navigateToStore,
+                                                onWallet: _showWalletComingSoon,
+                                                onMessages: _openInbox,
                                               );
-                                          final animatedBalance =
-                                              _walletAnimationFrom +
-                                              ((_walletAnimationTo -
-                                                          _walletAnimationFrom) *
-                                                      progress)
-                                                  .round();
-                                          return _TopRightBar(
-                                            coinBalance: animatedBalance,
-                                            notificationsEnabled:
-                                                _settings.notifications,
-                                            onSettings: _openSettings,
-                                            onHelp: _openHelp,
-                                            onStore: _navigateToStore,
-                                            onWallet: _showWalletComingSoon,
-                                            onMessages: _openInbox,
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                    if (_walletRewardGain > 0)
-                                      Positioned(
-                                        top: 69,
-                                        right: 304,
-                                        child: AnimatedBuilder(
-                                          animation: _walletRewardCtrl,
-                                          builder: (context, child) {
-                                            final value =
-                                                _walletRewardCtrl.value;
-                                            return Transform.translate(
-                                              offset: Offset(0, -18 * value),
-                                              child: Opacity(
-                                                opacity: sin(pi * value)
-                                                    .clamp(0.0, 1.0),
-                                                child: Transform.scale(
-                                                  scale:
-                                                      0.88 +
-                                                      0.22 * sin(pi * value),
-                                                  child: child,
+                                            },
+                                          ),
+                                        ),
+                                        if (_walletRewardGain > 0)
+                                          Positioned(
+                                            top: 69,
+                                            right: 304,
+                                            child: AnimatedBuilder(
+                                              animation: _walletRewardCtrl,
+                                              builder: (context, child) {
+                                                final value =
+                                                    _walletRewardCtrl.value;
+                                                return Transform.translate(
+                                                  offset: Offset(
+                                                    0,
+                                                    -18 * value,
+                                                  ),
+                                                  child: Opacity(
+                                                    opacity: sin(pi * value)
+                                                        .clamp(0.0, 1.0),
+                                                    child: Transform.scale(
+                                                      scale:
+                                                          0.88 +
+                                                          0.22 *
+                                                              sin(pi * value),
+                                                      child: child,
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                              child: Container(
+                                                key: const ValueKey(
+                                                  'main-wallet-reward-animation',
                                                 ),
-                                              ),
-                                            );
-                                          },
-                                          child: Container(
-                                            key: const ValueKey(
-                                              'main-wallet-reward-animation',
-                                            ),
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 11,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF0A3A24),
-                                              borderRadius:
-                                                  BorderRadius.circular(14),
-                                              border: Border.all(
-                                                color: OkeyColors.goldLight,
-                                              ),
-                                              boxShadow: const [
-                                                BoxShadow(
-                                                  color: Colors.black54,
-                                                  blurRadius: 7,
-                                                  offset: Offset(0, 3),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 11,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(
+                                                    0xFF0A3A24,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                  border: Border.all(
+                                                    color: OkeyColors.goldLight,
+                                                  ),
+                                                  boxShadow: const [
+                                                    BoxShadow(
+                                                      color: Colors.black54,
+                                                      blurRadius: 7,
+                                                      offset: Offset(0, 3),
+                                                    ),
+                                                  ],
                                                 ),
-                                              ],
-                                            ),
-                                            child: Text(
-                                              '+${formatGameNumber(_walletRewardGain)}',
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontFamily: 'Baloo 2',
-                                                fontSize: 17,
-                                                fontWeight: FontWeight.w800,
+                                                child: Text(
+                                                  '+${formatGameNumber(_walletRewardGain)}',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontFamily: 'Baloo 2',
+                                                    fontSize: 17,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
                                               ),
                                             ),
                                           ),
+                                        Positioned(
+                                          left: 20,
+                                          top: 116,
+                                          child: _DailyRewardButton(
+                                            onTap: _openDailyReward,
+                                            showNotifications:
+                                                _settings.notifications,
+                                          ),
                                         ),
-                                      ),
-                                    Positioned(
-                                      left: 20,
-                                      top: 116,
-                                      child: _DailyRewardButton(
-                                        onTap: _openDailyReward,
-                                        showNotifications:
-                                            _settings.notifications,
-                                      ),
-                                    ),
-                                    const Positioned(
-                                      left: 145,
-                                      top: 118,
-                                      child: _HomeLogoArtwork(),
-                                    ),
-                                    Positioned(
-                                      right: 20,
-                                      top: 170,
-                                      width: 444,
-                                      child: Column(
-                                        children: [
-                                          _RightButtonColumn(
-                                            onSelectRoom: _navigateToRoomSelect,
-                                            onSelectMode:
-                                                _navigateToGameModeSelect,
-                                            onTournament: _navigateToTournament,
-                                            onOpen:
-                                                (icon, title, description) =>
-                                                    _openFeaturePopup(
+                                        Positioned(
+                                          left: 145,
+                                          top: designHeight / 2 - 132,
+                                          child: const _HomeLogoArtwork(),
+                                        ),
+                                        Positioned(
+                                          right: 20,
+                                          top: designHeight / 2 - 80,
+                                          width: 444,
+                                          child: Column(
+                                            children: [
+                                              _RightButtonColumn(
+                                                onSelectRoom:
+                                                    _navigateToRoomSelect,
+                                                onSelectMode:
+                                                    _navigateToGameModeSelect,
+                                                onTournament:
+                                                    _navigateToTournament,
+                                                onOpen:
+                                                    (
+                                                      icon,
+                                                      title,
+                                                      description,
+                                                    ) => _openFeaturePopup(
                                                       icon: icon,
                                                       title: title,
                                                       description: description,
                                                     ),
+                                              ),
+                                              const SizedBox(height: 22),
+                                              _HemenOynaButton(
+                                                onTap: () => _navigateToGame(),
+                                              ),
+                                              HomeLeagueSummary(
+                                                onTap: _navigateToTournament,
+                                              ),
+                                            ],
                                           ),
-                                          const SizedBox(height: 22),
-                                          _HemenOynaButton(
-                                            onTap: () => _navigateToGame(),
-                                          ),
-                                        ],
-                                      ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                          ),
+                              );
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -3563,7 +3600,7 @@ class _FeatureDialog extends StatelessWidget {
       if (_inboxNotifications.tournamentUnread)
         const _FeatureEntry(
           Icons.emoji_events_rounded,
-          'Turnuva ilerlemeni kontrol et',
+          'Lig sıralamanı kontrol et',
           '',
           'YENİ',
         ),
@@ -4329,14 +4366,11 @@ class _MissionPanel extends StatefulWidget {
 }
 
 class _MissionPanelState extends State<_MissionPanel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _flight = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 620),
-  );
+    with TickerProviderStateMixin {
+  final Map<String, AnimationController> _flights = {};
   final List<GlobalKey> _claimKeys = List.generate(3, (_) => GlobalKey());
-  String? _claiming;
-  String? _removing;
+  final Set<String> _claiming = {};
+  final Set<String> _removing = {};
 
   @override
   void initState() {
@@ -4353,16 +4387,21 @@ class _MissionPanelState extends State<_MissionPanel>
   }
 
   Future<void> _claim(DailyMission mission) async {
-    if (_claiming != null) return;
+    if (_claiming.contains(mission.id)) return;
     final box = _claimKeys[mission.slot].currentContext?.findRenderObject();
     final start = box is RenderBox
         ? box.localToGlobal(box.size.center(Offset.zero))
         : null;
     final reward = progressNotifications.claimMission(mission.id);
     if (reward == null) return;
-    setState(() => _claiming = mission.id);
+    final flight = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 620),
+    );
+    _flights[mission.id] = flight;
+    setState(() => _claiming.add(mission.id));
     try {
-      if (start != null) await _playRewardCoinFlight(context, _flight, start);
+      if (start != null) await _playRewardCoinFlight(context, flight, start);
       if (!mounted) return;
       if (widget.onReward != null) {
         await widget.onReward!(reward.reward);
@@ -4375,16 +4414,17 @@ class _MissionPanelState extends State<_MissionPanel>
           behavior: SnackBarBehavior.floating,
         ),
       );
-      setState(() => _removing = mission.id);
+      setState(() => _removing.add(mission.id));
       await Future<void>.delayed(const Duration(milliseconds: 280));
     } on TickerCanceled {
       // Coins were credited once; finalize the replacement on dismissal.
     } finally {
+      _flights.remove(mission.id)?.dispose();
       progressNotifications.replaceClaimedMission(mission.id);
       if (mounted) {
         setState(() {
-          _claiming = null;
-          _removing = null;
+          _claiming.remove(mission.id);
+          _removing.remove(mission.id);
         });
       }
     }
@@ -4392,7 +4432,10 @@ class _MissionPanelState extends State<_MissionPanel>
 
   @override
   void dispose() {
-    _flight.dispose();
+    for (final flight in _flights.values) {
+      flight.dispose();
+    }
+    _flights.clear();
     super.dispose();
   }
 
@@ -4417,10 +4460,10 @@ class _MissionPanelState extends State<_MissionPanel>
             ),
             child: AnimatedOpacity(
               key: ValueKey('mission-generation-${mission.id}'),
-              opacity: _removing == mission.id ? 0 : 1,
+              opacity: _removing.contains(mission.id) ? 0 : 1,
               duration: const Duration(milliseconds: 280),
               child: AnimatedSlide(
-                offset: _removing == mission.id
+                offset: _removing.contains(mission.id)
                     ? const Offset(-0.12, 0)
                     : Offset.zero,
                 duration: const Duration(milliseconds: 280),
@@ -4436,7 +4479,9 @@ class _MissionPanelState extends State<_MissionPanel>
                   claimKey: _claimKeys[mission.slot],
                   claimed: mission.claimed,
                   onClaim:
-                      mission.complete && !mission.claimed && _claiming == null
+                      mission.complete &&
+                          !mission.claimed &&
+                          !_claiming.contains(mission.id)
                       ? () => _claim(mission)
                       : null,
                 ),
@@ -4547,8 +4592,16 @@ class _MissionEntryCard extends StatelessWidget {
                 key: ValueKey('mission-claim-${entry.title}'),
                 onPressed: onClaim,
                 style: FilledButton.styleFrom(
-                  backgroundColor: OkeyColors.goldLight,
-                  foregroundColor: OkeyColors.buttonBrown,
+                  backgroundColor: claimed
+                      ? const Color(0xFF2E7D32)
+                      : OkeyColors.goldLight,
+                  foregroundColor: claimed
+                      ? Colors.white
+                      : OkeyColors.buttonBrown,
+                  disabledBackgroundColor: claimed
+                      ? const Color(0xFF2E7D32)
+                      : null,
+                  disabledForegroundColor: claimed ? Colors.white : null,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
                     vertical: 10,
@@ -5461,17 +5514,17 @@ class _RightButtonColumn extends StatelessWidget {
         'görseller/icon/oyun_modlari_kompakt.png',
         appText('OYUN\nMODLARI', 'GAME\nMODES', german: 'SPIEL\nMODI'),
         appText(
-          'Klasik 101, zamanlı, renkli ve katlamalı oyun seçeneklerini buradan seçebilirsin.',
-          'Choose Classic, Timed, Color Bonus or Progressive mode.',
+          'Kuralı Sen Belirle, zamanlı, renkli ve katlamalı oyun seçeneklerini buradan seçebilirsin.',
+          'Choose Set Your Rules, Timed, Color Bonus or Progressive mode.',
         ),
       ),
       (
         Icons.emoji_events_rounded,
         'images/ui/icons/turnuva.png',
-        appText('TURNUVA', 'TOURNAMENT'),
+        appText('LİG', 'LEAGUE'),
         appText(
-          'Turnuva aşamalarını, ödülleri ve sıralamayı burada takip edebilirsin.',
-          'Follow tournament stages, rewards and standings.',
+          'Hemen Oyna ile günlük 20 el yarışmasına katıl, sıralamanı ve ödüllerini takip et.',
+          'Play 20 daily rounds with Play Now and follow standings and rewards.',
         ),
       ),
       (

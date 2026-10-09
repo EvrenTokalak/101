@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_1/main.dart';
@@ -23,18 +24,15 @@ void main() {
       await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
       await tester.pump(const Duration(milliseconds: 750));
       expect(tester.takeException(), isNull);
-      final artworkKey = await tester.runAsync(
-        () => const AssetImage(appSettingsPanelAsset).obtainKey(
-          createLocalImageConfiguration(
-            tester.element(find.byType(MainMenuScreen)),
-          ),
-        ),
-      );
-      // The frame has already entered the image cache before settings opens.
-      expect(
-        PaintingBinding.instance.imageCache.containsKey(artworkKey!),
-        isTrue,
-      );
+      if (size.width / size.height >= 1.2 && size.height >= 600) {
+        final layout = tester.getRect(
+          find.byKey(const ValueKey('landscape-home-layout')),
+        );
+        expect(layout.top, closeTo(0, 1));
+        expect(layout.height, closeTo(size.height, 1));
+      }
+      // Evicted artwork must never delay the interactive settings panel.
+      PaintingBinding.instance.imageCache.clear();
       await tester.tap(find.byIcon(Icons.settings_outlined));
       await tester.pump(const Duration(milliseconds: 350));
       expect(tester.takeException(), isNull);
@@ -44,23 +42,14 @@ void main() {
       final artwork = find.byKey(const ValueKey('settings-panel-artwork'));
       expect(artwork, findsOneWidget);
       final image = tester.widget<Image>(artwork);
-      final loadingPanel = image.frameBuilder!(
-        tester.element(artwork),
-        const SizedBox.shrink(),
-        null,
-        false,
-      ) as Opacity;
-      final readyPanel = image.frameBuilder!(
-        tester.element(artwork),
-        const SizedBox.shrink(),
-        0,
-        false,
-      ) as Opacity;
-      expect(loadingPanel.opacity, 0);
-      expect(readyPanel.opacity, 1);
+      expect(image.image, appSettingsArtwork);
       expect(
-        (tester.widget<Image>(artwork).image as AssetImage).assetName,
-        'görseller/icon/Ornate AYARLAR Game Settings Panel.png',
+        find.byKey(const ValueKey('settings-panel-ready')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-close-button')).hitTestable(),
+        findsOneWidget,
       );
       expect(panel.width / panel.height, closeTo(1671 / 941, 0.001));
       final cards = find.byKey(const ValueKey('settings-option-card'));
@@ -136,5 +125,57 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       expect(tester.takeException(), isNull);
     });
+  }
+  testWidgets('settings remain usable when panel artwork fails to load', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1024, 768));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DefaultAssetBundle(
+          bundle: _MissingSettingsArtwork(),
+          child: const AppSettingsDialog(initial: AppSettings()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('AYARLAR'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('settings-panel-fallback')),
+      findsOneWidget,
+    );
+    expect(find.text('KAYDET').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('Ses Efektleri'));
+    await tester.pump();
+    final indicator = find
+        .byKey(const ValueKey('settings-switch-indicator'))
+        .first;
+    expect(
+      tester
+          .widget<AnimatedAlign>(
+            find.descendant(
+              of: indicator,
+              matching: find.byType(AnimatedAlign),
+            ),
+          )
+          .alignment,
+      Alignment.centerLeft,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-close-button')).hitTestable(),
+      findsOneWidget,
+    );
+  });
+}
+
+class _MissingSettingsArtwork extends CachingAssetBundle {
+  @override
+  Future<ByteData> load(String key) {
+    if (key == appSettingsPanelAsset) {
+      return Future<ByteData>.error(StateError('Missing settings artwork'));
+    }
+    return rootBundle.load(key);
   }
 }

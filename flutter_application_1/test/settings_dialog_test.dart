@@ -133,7 +133,7 @@ void main() {
     final inboxDialogSize = tester.getSize(
       find.byKey(const ValueKey('feature-dialog-GELEN KUTUSU')),
     );
-    expect(inboxDialogSize.width, greaterThan(settingsDialogSize.width));
+    expect(inboxDialogSize.width, closeTo(settingsDialogSize.width, 0.1));
     expect(inboxDialogSize.height, closeTo(540.0, 0.1));
 
     await tester.tap(find.text('Günlük ödülün hazır'));

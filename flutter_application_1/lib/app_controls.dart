@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 
 const double appPopupWidth = 620;
 const double appPopupHeight = 540;
+const double appPopupBodyFontSize = 15;
+const double appPopupButtonHeight = 48;
+const double appPopupContentInset = 18;
+const double appPopupGap = 8;
 
 /// Uygulamadaki ana pop-up'ların profil penceresiyle aynı ölçüde kalmasını
 /// sağlar; dar ekranlarda güvenli boşlukları koruyarak küçülür.

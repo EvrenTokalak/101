@@ -110,4 +110,54 @@ void main() {
     expect(resetPressed, isTrue);
     expect(homePressed, isTrue);
   });
+  for (final size in const [Size(568, 320), Size(1024, 768)]) {
+    testWidgets(
+      'restored result stays on screen without another animation at $size',
+      (tester) async {
+        await tester.binding.setSurfaceSize(size);
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        var continued = false;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GameEndDialog(
+                winner: 'Sen',
+                playerPen: -101,
+                bots: [
+                  BotPlayer(name: 'B'),
+                  BotPlayer(name: 'C'),
+                  BotPlayer(name: 'D'),
+                ],
+                botPens: const [202, 40, 20],
+                elCount: 1,
+                totalPenalty: -101,
+                onNewRound: () => continued = true,
+                onResetMatch: () {},
+                onHome: () {},
+              ),
+            ),
+          ),
+        );
+        final panel = tester.getRect(
+          find.byKey(const ValueKey('game-end-panel')),
+        );
+        expect(panel.width, lessThanOrEqualTo(size.width - 24));
+        expect(panel.height, lessThanOrEqualTo(size.height - 20));
+        expect(
+          find.byKey(const ValueKey('round-end-tile-accent')),
+          findsNothing,
+        );
+        await tester.pump(const Duration(milliseconds: 180));
+        await tester.tap(find.text('DEVAM ET'));
+        expect(continued, isTrue);
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(
+          find.byKey(const ValueKey('round-end-tile-accent')),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
 }

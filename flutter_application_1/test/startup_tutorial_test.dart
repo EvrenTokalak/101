@@ -134,6 +134,8 @@ void main() {
     await tester.tap(find.text('SERİ AÇ'));
     await tester.pump(const Duration(milliseconds: 900));
     expect(find.text('4. İŞLEK TAŞI İŞLE'), findsOneWidget);
+    expect(find.byKey(const ValueKey('game-opening-popup')), findsOneWidget);
+    expect(find.textContaining('elini açtı'), findsOneWidget);
     final processableHighlights = find.descendant(
       of: rack,
       matching: find.byWidgetPredicate(
@@ -156,8 +158,8 @@ void main() {
     );
     final redSevenCenter = tester.getCenter(redSeven);
     final processTarget =
-        tester.getCenter(find.byKey(const ValueKey('run-meld-0'))) +
-        const Offset(0, 44);
+        tester.getCenter(find.byKey(const ValueKey('run-meld-0'))) -
+        tester.widget<Draggable>(redSeven).feedbackOffset;
     await expectFingerVisits(
       tester,
       find.byKey(const ValueKey('rack-slot-22')),
@@ -277,7 +279,17 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.byKey(const ValueKey('settings-tutorial-button')));
+    final tutorialButton = find.byKey(
+      const ValueKey('settings-tutorial-button'),
+    );
+    final knob = find.descendant(
+      of: tutorialButton,
+      matching: find.byType(AnimatedAlign),
+    );
+    expect(tester.widget<AnimatedAlign>(knob).alignment, Alignment.centerLeft);
+    await tester.tap(tutorialButton);
+    await tester.pump();
+    expect(tester.widget<AnimatedAlign>(knob).alignment, Alignment.centerRight);
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 200));

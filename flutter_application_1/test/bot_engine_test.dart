@@ -7,9 +7,197 @@ import 'package:flutter_application_1/game.dart';
 void main() {
   var nextId = 2000;
 
-  Tile tile(int number, TileColor color, {bool isOkey = false}) =>
-      Tile(number: number, color: color, id: nextId++, isOkey: isOkey);
+  Tile tile(
+    int number,
+    TileColor color, {
+    bool isOkey = false,
+    bool isIndicator = false,
+  }) => Tile(
+    number: number,
+    color: color,
+    id: nextId++,
+    isOkey: isOkey,
+    isIndicator: isIndicator,
+  );
 
+  List<Meld> pairTable(int count) => List.generate(
+    count,
+    (i) => Meld(
+      tiles: [
+        tile(i % 13 + 1, TileColor.blue),
+        tile(i % 13 + 1, TileColor.blue),
+      ],
+      type: 'cift',
+    ),
+  );
+
+  for (final scenario in [
+    (15, 20, true),
+    (16, 20, false),
+    (19, 24, true),
+    (20, 24, false),
+  ]) {
+    test('initial pair opening respects remaining slots: $scenario', () {
+      final hand = <Tile>[];
+      for (final n in [1, 3, 5, 7, 9]) {
+        hand.addAll([tile(n, TileColor.black), tile(n, TileColor.black)]);
+      }
+      hand.add(tile(13, TileColor.yellow));
+      final bot = BotPlayer(name: 'Bot', hand: hand);
+      final table = pairTable(scenario.$1);
+      BotEngine.play(bot, table, pairAreaLimit: scenario.$2);
+      expect(bot.hasOpened, scenario.$3);
+      expect(table.length, scenario.$1 + (scenario.$3 ? 5 : 0));
+    });
+  }
+
+  for (final type in ['cift', 'seri']) {
+    for (final scenario in [
+      (19, 20, 1),
+      (20, 20, 0),
+      (21, 20, 0),
+      (23, 24, 1),
+      (24, 24, 0),
+    ]) {
+      test('extra pairs respect capacity: $type $scenario', () {
+        final bot = BotPlayer(
+          name: 'Bot',
+          hasOpened: true,
+          openType: type,
+          hand: [
+            tile(7, TileColor.red),
+            tile(7, TileColor.red),
+            tile(9, TileColor.black),
+            tile(9, TileColor.black),
+            tile(13, TileColor.yellow),
+          ],
+        );
+        final table = pairTable(scenario.$1);
+        final result = BotEngine.play(bot, table, pairAreaLimit: scenario.$2);
+        expect(result.openedMeldCount, scenario.$3);
+        expect(table.length, scenario.$1 + scenario.$3);
+      });
+    }
+  }
+
+  for (final count in [19, 20]) {
+    test('pair replacement and discard pickup respect limit: $count', () {
+      final replacement = tile(7, TileColor.red);
+      final joker = tile(8, TileColor.yellow, isOkey: true);
+      final table = pairTable(count);
+      table[0] = Meld(tiles: [tile(7, TileColor.red), joker], type: 'cift');
+      final bot = BotPlayer(
+        name: 'Bot',
+        hasOpened: true,
+        openType: 'cift',
+        hand: [tile(13, TileColor.yellow)],
+      );
+      expect(
+        BotEngine.wantsDiscard(bot, replacement, table, pairAreaLimit: 20),
+        count < 20,
+      );
+      bot.hand.add(replacement);
+      final result = BotEngine.play(bot, table, pairAreaLimit: 20);
+      expect(result.processedTileCount, count < 20 ? 1 : 0);
+      expect(table[0].tiles.any((t) => t.isOkey), count == 20);
+    });
+  }
+
+  test('full pair area still allows processing runs', () {
+    final seven = tile(7, TileColor.red);
+    final table = pairTable(20)
+      ..add(
+        Meld(
+          tiles: [
+            tile(4, TileColor.red),
+            tile(5, TileColor.red),
+            tile(6, TileColor.red),
+          ],
+          type: 'seri',
+        ),
+      );
+    final bot = BotPlayer(
+      name: 'Bot',
+      hasOpened: true,
+      openType: 'seri',
+      hand: [tile(13, TileColor.yellow)],
+    );
+    expect(
+      BotEngine.wantsDiscard(bot, seven, table, pairAreaLimit: 20),
+      isTrue,
+    );
+    bot.hand.add(seven);
+    final result = BotEngine.play(bot, table, pairAreaLimit: 20);
+    expect(result.processedTileCount, 1);
+    expect(table.last.tiles, contains(seven));
+  });
+  test('bot göstergeyi alıp kırmızı 6 ve sarı 13 ile beş çift açar', () {
+    final indicator = tile(6, TileColor.red, isIndicator: true);
+    final yellowThirteen = tile(13, TileColor.yellow);
+    final bot = BotPlayer(
+      name: 'Bot',
+      personality: BotPersonality.pairFocused,
+      hand: [
+        for (final value in [
+          (2, TileColor.red),
+          (4, TileColor.blue),
+          (8, TileColor.black),
+          (10, TileColor.yellow),
+        ])
+          for (var copy = 0; copy < 2; copy++) tile(value.$1, value.$2),
+        yellowThirteen,
+        tile(1, TileColor.blue),
+      ],
+    );
+    final table = <Meld>[];
+    expect(BotEngine.wantsDiscard(bot, indicator, table), isTrue);
+    bot.hand.add(indicator);
+    final result = BotEngine.play(bot, table);
+    expect(bot.hasOpened, isTrue);
+    expect(bot.openType, 'cift');
+    expect(result.openedMeldCount, 5);
+    expect(
+      table.every(
+        (meld) => meld.type == 'cift' && Rules.isValidPair(meld.tiles),
+      ),
+      isTrue,
+    );
+    expect(
+      table.any(
+        (meld) =>
+            meld.tiles.contains(indicator) &&
+            meld.tiles.contains(yellowThirteen),
+      ),
+      isTrue,
+    );
+    expect(bot.hand.any((tile) => tile.id == indicator.id), isFalse);
+  });
+  test('elini açmış bot göstergeyle farklı taşı ek çift olarak kullanmaz', () {
+    for (final type in ['cift', 'seri']) {
+      final indicator = tile(6, TileColor.red, isIndicator: true);
+      final other = tile(13, TileColor.yellow);
+      final bot = BotPlayer(name: 'Bot', hand: [other, tile(1, TileColor.blue)])
+        ..hasOpened = true
+        ..openType = type;
+      final table = [
+        Meld(
+          type: 'cift',
+          tiles: [tile(2, TileColor.black), tile(2, TileColor.black)],
+        ),
+      ];
+      // Warm the opening cache with the same hand, then check the opened context.
+      final unopened = BotPlayer(name: 'Unopened', hand: List.from(bot.hand));
+      expect(
+        BotEngine.wantsDiscard(unopened, indicator, table, minimumPairCount: 1),
+        isTrue,
+      );
+      expect(BotEngine.wantsDiscard(bot, indicator, table), isFalse);
+      bot.hand.add(indicator);
+      final result = BotEngine.play(bot, table);
+      expect(result.openedMeldCount, 0);
+      expect(table, hasLength(1));
+    }
+  });
   test('bot 101 puana ulaşmadan per açmaz', () {
     final bot = BotPlayer(
       name: 'Bot',

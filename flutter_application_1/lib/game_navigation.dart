@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import 'game.dart';
 import 'game_launch.dart';
+import 'daily_league.dart';
+import 'league_reminder.dart';
+import 'app_settings_dialog.dart';
 import 'performance_overlay.dart';
 import 'route_activity.dart';
 
@@ -10,6 +13,14 @@ Future<T?> openGameScreen<T>(
   required GameLaunchConfig config,
 }) async {
   if (!context.mounted) return null;
+  if (config.entryPoint == GameEntryPoint.quickPlay) {
+    await dailyLeague.load();
+    dailyLeague.refresh();
+    if (appSettings.value.notifications) {
+      await leagueReminder.requestPermission();
+    }
+    if (!context.mounted) return null;
+  }
 
   final result = await Navigator.of(context).push<T>(
     PageRouteBuilder<T>(

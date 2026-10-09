@@ -538,6 +538,11 @@ class _GeneralRules extends StatelessWidget {
         de: 'Das Ablegen eines anlegbaren Steins oder Okeys kostet 101 Strafpunkte.',
       ),
       _helpText(
+        'Gösterge taşı yalnız ilk çift açılışında herhangi bir taşla çift oluşturabilir. El açıldıktan sonra ek çift indirirken gösterge kendi sayı ve renginde normal taş sayılır. Örneğin kırmızı 6 göstergeyse kırmızı 6 + sarı 13 geçerli çifttir; seride ve sayı grubunda gösterge normal taştır.',
+        'The indicator tile may pair with any tile only in the initial pair opening. After opening, it keeps its own number and color when laying additional pairs. If red 6 is the indicator, red 6 + yellow 13 is a valid pair. It remains a normal tile in runs and number groups.',
+        de: 'Der Anzeigestein kann nur beim ersten Eröffnen mit Paaren jeden Stein ergänzen. Nach der Eröffnung gelten bei zusätzlichen Paaren seine eigene Zahl und Farbe. Ist die rote 6 die Anzeige, bilden rote 6 und gelbe 13 ein gültiges Paar. In Reihen und Zahlengruppen bleibt er ein normaler Stein.',
+      ),
+      _helpText(
         'Çift açılış yapan oyuncu daha sonra seri açamaz.',
         'A player who opens pairs cannot open melds later.',
         de: 'Wer mit Paaren eröffnet, kann später keine Sätze eröffnen.',

@@ -18,14 +18,14 @@ class _GameModeSelectScreenState extends State<GameModeSelectScreen> {
   static const _modes = [
     _GameModeData(
       id: 'classic-101',
-      badge: 'KLASİK',
+      badge: 'SENİN KURALLARIN',
       artworkAsset: 'images/ui/icons/klasik.png',
       accent: Color(0xFF4CAF50),
       accentDark: Color(0xFF174F25),
       config: GameLaunchConfig.gameMode(
         mode: OkeyGameMode.classic101,
         id: 'classic-101',
-        label: 'Klasik 101',
+        label: 'Kuralı Sen Belirle',
       ),
     ),
     _GameModeData(
@@ -198,7 +198,7 @@ class _GameModeData {
 }
 
 String _localizedModeLabel(String id) => switch (id) {
-  'classic-101' => appText('KLASİK 101', 'CLASSIC 101'),
+  'classic-101' => appText('KURALI SEN BELİRLE', 'SET YOUR RULES'),
   'timed-101' => appText('ZAMANLI 101', 'TIMED 101'),
   'color-bonus-101' => appText('RENKLİ 101', 'COLOR BONUS 101'),
   'progressive' => appText('KATLAMALI', 'PROGRESSIVE'),
@@ -206,7 +206,10 @@ String _localizedModeLabel(String id) => switch (id) {
 };
 
 String _localizedModeSubtitle(String id) => switch (id) {
-  'classic-101' => appText('Standart 101 kuralları', 'Standard 101 rules'),
+  'classic-101' => appText(
+    'Kendi masan, kendi kuralların',
+    'Your table, your rules',
+  ),
   'timed-101' => appText('Her hamle için 7 saniye', '7 seconds per move'),
   'color-bonus-101' => appText('Bonus perler 2 kat', 'Bonus melds score 2x'),
   'progressive' => appText(
@@ -218,8 +221,8 @@ String _localizedModeSubtitle(String id) => switch (id) {
 
 String _localizedModeDescription(String id) => switch (id) {
   'classic-101' => appText(
-    'Standart 101 kurallarıyla üç tur oynanır. En düşük toplam puan avantaj sağlar.',
-    'Play three rounds with standard 101 rules. The lowest total score has the advantage.',
+    'Bu alanı ileride kendi kurallarını belirleyebileceğin şekilde geliştireceğiz. Şimdilik mevcut 101 kurallarıyla üç tur oynanır. Günlük lige sayılmaz.',
+    'Custom rules will be added here later. For now, play three rounds with the existing 101 rules. These rounds do not count toward the daily league.',
   ),
   'timed-101' => appText(
     'Her hamle için 7 saniyen vardır. Süre biterse oyun uygun bir taşı otomatik çeker ve atar.',

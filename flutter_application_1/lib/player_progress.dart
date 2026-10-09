@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -74,10 +75,14 @@ class PlayerProgressController extends ChangeNotifier {
   static const _handsFinishedKey = 'progress.hands_finished';
   static const _totalXpKey = 'progress.total_xp';
   static const _economyV2MigrationKey = 'progress.economy_v2';
+  static const _walletKey = 'progress.wallet_v1';
 
   SharedPreferencesAsync? _preferences;
 
   int _coins = initialPlayerCoins;
+  int _leagueStars = 0;
+  final List<String> _leagueAwards = [];
+  Future<void> _walletWrites = Future.value();
   int _level = 0;
   int _levelXp = 0;
   int _gamesPlayed = 0;
@@ -89,6 +94,7 @@ class PlayerProgressController extends ChangeNotifier {
   int _playerAvatarIndex = 0;
 
   int get coins => _coins;
+  int get leagueStars => _leagueStars;
   int get level => _level;
   int get levelXp => _levelXp;
   int get gamesPlayed => _gamesPlayed;
@@ -121,6 +127,17 @@ class PlayerProgressController extends ChangeNotifier {
       0,
       1 << 31,
     );
+    final wallet = await preferences.getString(_walletKey);
+    if (wallet != null) {
+      try {
+        final data = jsonDecode(wallet) as Map<String, dynamic>;
+        _coins = (data['coins'] as int).clamp(0, 1 << 31);
+        _leagueStars = (data['leagueStars'] as int).clamp(0, 1 << 31);
+        _leagueAwards
+          ..clear()
+          ..addAll((data['leagueAwards'] as List).cast<String>());
+      } catch (_) {}
+    }
     _level = (await preferences.getInt(_levelKey) ?? _level).clamp(0, 99);
     _levelXp = (await preferences.getInt(_levelXpKey) ?? _levelXp).clamp(
       0,
@@ -182,6 +199,7 @@ class PlayerProgressController extends ChangeNotifier {
   Future<void> _persist() async {
     final preferences = _preferences;
     if (preferences == null) return;
+    await _persistWallet();
     await preferences.setInt(_coinsKey, _coins);
     await preferences.setInt(_levelKey, _level);
     await preferences.setInt(_levelXpKey, _levelXp);
@@ -195,6 +213,39 @@ class PlayerProgressController extends ChangeNotifier {
   }
 
   void _schedulePersist() => unawaited(_persist());
+
+  Future<void> _persistWallet() {
+    final preferences = _preferences;
+    if (preferences == null) return Future.value();
+    final snapshot = jsonEncode({
+      'coins': _coins,
+      'leagueStars': _leagueStars,
+      'leagueAwards': _leagueAwards,
+    });
+    final write = _walletWrites.then(
+      (_) => preferences.setString(_walletKey, snapshot),
+    );
+    _walletWrites = write.then<void>(
+      (_) {},
+      onError: (Object e, StackTrace s) {},
+    );
+    return write;
+  }
+
+  Future<void> grantLeagueReward({
+    required String id,
+    required int coins,
+    required int stars,
+  }) async {
+    if (_leagueAwards.contains(id)) return;
+    _leagueAwards.add(id);
+    _coins += coins.clamp(0, 1 << 30);
+    _leagueStars += stars.clamp(0, 1 << 30);
+    notifyListeners();
+    // Award token, currency and stars are saved together in one wallet record.
+    await _persistWallet();
+    _schedulePersist();
+  }
 
   bool updatePlayerName(String value) {
     final normalized = value.trim();
@@ -329,6 +380,8 @@ class PlayerProgressController extends ChangeNotifier {
   @visibleForTesting
   void reset({int coins = initialPlayerCoins, int level = 0, int levelXp = 0}) {
     _coins = coins;
+    _leagueStars = 0;
+    _leagueAwards.clear();
     _level = level.clamp(0, 99);
     _levelXp = levelXp;
     _gamesPlayed = 0;

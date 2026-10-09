@@ -36,7 +36,14 @@ void main() {
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    for (final size in const [Size(1180, 700), Size(390, 844)]) {
+    for (final size in const [
+      Size(1180, 700),
+      Size(1024, 768),
+      Size(768, 1024),
+      Size(568, 320),
+      Size(320, 568),
+      Size(390, 844),
+    ]) {
       await tester.binding.setSurfaceSize(size);
       await tester.pumpWidget(const MaterialApp(home: TournamentScreen()));
       await tester.pumpAndSettle();
@@ -50,7 +57,26 @@ void main() {
       expect(find.text('3 TUR'), findsWidgets);
       expect(find.text('EN DÜŞÜK PUAN'), findsOneWidget);
       expect(find.textContaining('Rakip'), findsNothing);
-      expect(find.byKey(const ValueKey('tournament-action')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tournament-action')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_StageTrack',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('1. AŞAMA'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w is Image &&
+              w.image is AssetImage &&
+              (w.image as AssetImage).assetName == 'images/anamenu/menubg.png',
+        ),
+        findsNothing,
+      );
     }
   });
 

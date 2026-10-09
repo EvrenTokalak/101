@@ -107,4 +107,59 @@ void main() {
     expect(find.text('AÇILIŞ değerine ulaşın.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'hiding opponent photos preserves centered names and table piles',
+    (tester) async {
+      setGameOpponentPicturesEnabled(true);
+      addTearDown(() => setGameOpponentPicturesEnabled(true));
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump(const Duration(milliseconds: 2700));
+      for (final name in ['Oyuncu 2', 'Oyuncu 3', 'Oyuncu 4']) {
+        expect(find.byKey(ValueKey('bot-avatar-$name')), findsOneWidget);
+      }
+      await tester.tap(find.byKey(const ValueKey('game-settings-button')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Rakip Resimleri'));
+      await tester.tap(find.text('KAYDET'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      for (final name in ['Oyuncu 2', 'Oyuncu 3', 'Oyuncu 4']) {
+        expect(find.byKey(ValueKey('bot-avatar-$name')), findsNothing);
+        expect(find.byKey(ValueKey('bot-name-$name')), findsOneWidget);
+        expect(find.byKey(ValueKey('seat-$name')), findsOneWidget);
+      }
+      final table = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_TableArea',
+      );
+      expect(
+        tester
+            .widgetList(
+              find.descendant(
+                of: table,
+                matching: find.byWidgetPredicate(
+                  (w) => w.runtimeType.toString() == '_TableDiscardPile',
+                ),
+              ),
+            )
+            .length,
+        4,
+      );
+      for (final name in ['Oyuncu 2', 'Oyuncu 4']) {
+        final seat = find.byKey(ValueKey('seat-$name'));
+        final fitted = find
+            .ancestor(of: seat, matching: find.byType(FittedBox))
+            .first;
+        expect(
+          tester.getCenter(seat).dy,
+          closeTo(tester.getCenter(fitted).dy, 0.1),
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }

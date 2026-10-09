@@ -13,9 +13,17 @@ TextScaler appTextScaler(double relativeScale) =>
 const appSettingsPanelAsset =
     'görseller/icon/Ornate AYARLAR Game Settings Panel.png';
 
+const appSettingsArtwork = ResizeImage(
+  AssetImage(appSettingsPanelAsset),
+  width: 1000,
+);
+
 Size appSettingsPanelSize(BoxConstraints bounds) {
-  final width = bounds.maxWidth.clamp(0.0, 600.0);
-  final height = bounds.maxHeight.clamp(0.0, width * 941 / 1671);
+  final width = bounds.maxWidth.clamp(0.0, appPopupWidth);
+  final height = bounds.maxHeight.clamp(
+    0.0,
+    (width * 941 / 1671).clamp(0.0, appPopupHeight),
+  );
   return Size(height * 1671 / 941, height);
 }
 
@@ -37,7 +45,7 @@ class _SettingsArtworkWarmupState extends State<SettingsArtworkWarmup> {
     super.didChangeDependencies();
     if (!_started) {
       _started = true;
-      precacheImage(const AssetImage(appSettingsPanelAsset), context);
+      precacheImage(appSettingsArtwork, context, onError: (_, _) {});
     }
   }
 
@@ -116,6 +124,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   static const _goldLight = Color(0xFFF0CC5A);
   static const _cream = Color(0xFFF5EDD6);
   late AppSettings settings;
+  bool _tutorialLaunching = false;
 
   @override
   void initState() {
@@ -129,6 +138,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   // Keep the artwork and controls on the same canvas so the gold frame
   // never covers a button, even on small screens or at maximum text size.
   static const _canvasWidth = 900.0;
+  static const _metricScale = _canvasWidth / appPopupWidth;
   static const _canvasHeight = _canvasWidth * 941 / 1671;
 
   @override
@@ -158,192 +168,184 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                     ).copyWith(textScaler: appTextScaler(settings.fontScale)),
                     child: Material(
                       color: Colors.transparent,
-                      child: Image.asset(
-                        appSettingsPanelAsset,
-                        key: const ValueKey('settings-panel-artwork'),
-                        fit: BoxFit.fill,
-                        excludeFromSemantics: true,
-                        frameBuilder: (context, artwork, frame, synchronous) =>
-                            Opacity(
-                              key: const ValueKey('settings-panel-ready'),
-                              opacity: synchronous || frame != null ? 1 : 0,
-                              // The artwork and controls are painted together only
-                              // after decoding. A cold/evicted image can no longer
-                              // appear after the switches and labels.
-                              child: Stack(
-                                children: [
-                                  Positioned.fill(
-                                    child: ClipPath(
-                                      clipper: const _SettingsArtworkClipper(),
-                                      child: artwork,
-                                    ),
-                                  ),
-                                  // The Turkish heading is already painted in the asset.
-                                  // Retain a Text/semantics node without painting it twice.
-                                  Positioned(
-                                    left: 310,
-                                    right: 310,
-                                    top: 24,
-                                    height: 40,
-                                    child: Center(
-                                      child: Text(
-                                        _text(
-                                          'AYARLAR',
-                                          'SETTINGS',
-                                          de: 'EINSTELLUNGEN',
-                                        ),
-                                        style: TextStyle(
-                                          color:
-                                              settings.language ==
-                                                  AppLanguage.turkish
-                                              ? Colors.transparent
-                                              : _cream,
-                                          backgroundColor:
-                                              settings.language ==
-                                                  AppLanguage.turkish
-                                              ? Colors.transparent
-                                              : const Color(0xFF63300D),
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.w900,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: 42,
-                                    top: 52,
-                                    child: AppCloseButton(
-                                      buttonKey: const ValueKey(
-                                        'settings-close-button',
-                                      ),
-                                      size: 48,
-                                      onTap: () => Navigator.of(context).pop(),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    left: 88,
-                                    right: 88,
-                                    top: 100,
-                                    bottom: 48,
-                                    child: LayoutBuilder(
-                                      builder: (context, inner) {
-                                        const columns = 2;
-                                        final itemWidth =
-                                            (inner.maxWidth - 16) / columns;
-                                        final options = <Widget>[
-                                          _toggle(
-                                            'Ses Efektleri',
-                                            'Sound Effects',
-                                            Icons.volume_up_rounded,
-                                            settings.soundEffects,
-                                            (v) => settings = settings.copyWith(
-                                              soundEffects: v,
-                                            ),
-                                          ),
-                                          if (widget.onTutorial != null)
-                                            _option(
-                                              key: const ValueKey(
-                                                'settings-tutorial-button',
-                                              ),
-                                              label: _text(
-                                                'Öğretici',
-                                                'TUTORIAL',
-                                                de: 'ANLEITUNG',
-                                              ),
-                                              icon: Icons.menu_book_rounded,
-                                              onTap: () => _closeThen(
-                                                widget.onTutorial!,
-                                              ),
-                                            )
-                                          else
-                                            const SizedBox.shrink(),
-                                          _toggle(
-                                            'Bildirimler',
-                                            'NOTIFICATIONS',
-                                            Icons.notifications_active_rounded,
-                                            settings.notifications,
-                                            (v) => settings = settings.copyWith(
-                                              notifications: v,
-                                            ),
-                                          ),
-                                          _toggle(
-                                            'Hamle İpuçları',
-                                            'MOVE HINTS',
-                                            Icons.lightbulb_rounded,
-                                            settings.moveHints,
-                                            (v) => settings = settings.copyWith(
-                                              moveHints: v,
-                                            ),
-                                          ),
-                                          _toggle(
-                                            'Titreşim',
-                                            'VIBRATION',
-                                            Icons.vibration_rounded,
-                                            settings.vibration,
-                                            (v) => settings = settings.copyWith(
-                                              vibration: v,
-                                            ),
-                                          ),
-                                          _toggle(
-                                            'Otomatik Istaka Dizimi',
-                                            'AUTO ARRANGE RACK',
-                                            Icons.view_week_rounded,
-                                            settings.autoArrangeRack,
-                                            (v) => settings = settings.copyWith(
-                                              autoArrangeRack: v,
-                                            ),
-                                          ),
-                                          _toggle(
-                                            'Rakip Resimleri',
-                                            'OPPONENT PICTURES',
-                                            Icons.person_rounded,
-                                            settings.showOpponentPictures,
-                                            (v) => settings = settings.copyWith(
-                                              showOpponentPictures: v,
-                                            ),
-                                          ),
-                                          _languageCard(),
-                                        ];
-                                        return Column(
-                                          children: [
-                                            Expanded(
-                                              child: LayoutBuilder(
-                                                builder: (_, gridBounds) {
-                                                  final rows =
-                                                      (options.length / columns)
-                                                          .ceil();
-                                                  final cellHeight =
-                                                      (gridBounds.maxHeight -
-                                                          (rows - 1) * 8) /
-                                                      rows;
-                                                  return Wrap(
-                                                    spacing: 16,
-                                                    runSpacing: 8,
-                                                    children: [
-                                                      for (final option
-                                                          in options)
-                                                        SizedBox(
-                                                          width: itemWidth,
-                                                          height: cellHeight,
-                                                          child: option,
-                                                        ),
-                                                    ],
-                                                  );
-                                                },
-                                              ),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            _fontScaleCard(),
-                                            const SizedBox(height: 4),
-                                            _footer(),
-                                          ],
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ],
+                      child: Stack(
+                        key: const ValueKey('settings-panel-ready'),
+                        children: [
+                          Positioned.fill(
+                            child: ClipPath(
+                              clipper: const _SettingsArtworkClipper(),
+                              child: Image(
+                                image: appSettingsArtwork,
+                                key: const ValueKey('settings-panel-artwork'),
+                                fit: BoxFit.fill,
+                                excludeFromSemantics: true,
+                                frameBuilder:
+                                    (_, artwork, frame, synchronous) =>
+                                        synchronous || frame != null
+                                        ? artwork
+                                        : _artworkFallback(),
+                                errorBuilder: (_, _, _) => _artworkFallback(),
                               ),
                             ),
+                          ),
+                          Positioned(
+                            left: 310,
+                            right: 310,
+                            top: 24,
+                            height: 40,
+                            child: Center(
+                              child: Text(
+                                _text(
+                                  'AYARLAR',
+                                  'SETTINGS',
+                                  de: 'EINSTELLUNGEN',
+                                ),
+                                style: TextStyle(
+                                  color:
+                                      settings.language == AppLanguage.turkish
+                                      ? Colors.transparent
+                                      : _cream,
+                                  backgroundColor:
+                                      settings.language == AppLanguage.turkish
+                                      ? Colors.transparent
+                                      : const Color(0xFF63300D),
+                                  fontSize: 19 * _metricScale,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 42,
+                            top: 52,
+                            child: AppCloseButton(
+                              buttonKey: const ValueKey(
+                                'settings-close-button',
+                              ),
+                              size: 40 * _metricScale,
+                              onTap: () => Navigator.of(context).pop(),
+                            ),
+                          ),
+                          Positioned(
+                            left: 88,
+                            right: 88,
+                            top: 100,
+                            bottom: 48,
+                            child: LayoutBuilder(
+                              builder: (context, inner) {
+                                const columns = 2;
+                                final itemWidth =
+                                    (inner.maxWidth - 16) / columns;
+                                final options = <Widget>[
+                                  _toggle(
+                                    'Ses Efektleri',
+                                    'Sound Effects',
+                                    Icons.volume_up_rounded,
+                                    settings.soundEffects,
+                                    (v) => settings = settings.copyWith(
+                                      soundEffects: v,
+                                    ),
+                                  ),
+                                  if (widget.onTutorial != null)
+                                    _option(
+                                      key: const ValueKey(
+                                        'settings-tutorial-button',
+                                      ),
+                                      label: _text(
+                                        'Öğretici',
+                                        'TUTORIAL',
+                                        de: 'ANLEITUNG',
+                                      ),
+                                      icon: Icons.menu_book_rounded,
+                                      enabled: _tutorialLaunching,
+                                      toggle: true,
+                                      onTap: _launchTutorial,
+                                    )
+                                  else
+                                    const SizedBox.shrink(),
+                                  _toggle(
+                                    'Bildirimler',
+                                    'NOTIFICATIONS',
+                                    Icons.notifications_active_rounded,
+                                    settings.notifications,
+                                    (v) => settings = settings.copyWith(
+                                      notifications: v,
+                                    ),
+                                  ),
+                                  _toggle(
+                                    'Hamle İpuçları',
+                                    'MOVE HINTS',
+                                    Icons.lightbulb_rounded,
+                                    settings.moveHints,
+                                    (v) => settings = settings.copyWith(
+                                      moveHints: v,
+                                    ),
+                                  ),
+                                  _toggle(
+                                    'Titreşim',
+                                    'VIBRATION',
+                                    Icons.vibration_rounded,
+                                    settings.vibration,
+                                    (v) => settings = settings.copyWith(
+                                      vibration: v,
+                                    ),
+                                  ),
+                                  _toggle(
+                                    'Otomatik Istaka Dizimi',
+                                    'AUTO ARRANGE RACK',
+                                    Icons.view_week_rounded,
+                                    settings.autoArrangeRack,
+                                    (v) => settings = settings.copyWith(
+                                      autoArrangeRack: v,
+                                    ),
+                                  ),
+                                  _toggle(
+                                    'Rakip Resimleri',
+                                    'OPPONENT PICTURES',
+                                    Icons.person_rounded,
+                                    settings.showOpponentPictures,
+                                    (v) => settings = settings.copyWith(
+                                      showOpponentPictures: v,
+                                    ),
+                                  ),
+                                  _languageCard(),
+                                ];
+                                return Column(
+                                  children: [
+                                    Expanded(
+                                      child: LayoutBuilder(
+                                        builder: (_, gridBounds) {
+                                          final rows =
+                                              (options.length / columns).ceil();
+                                          final cellHeight =
+                                              (gridBounds.maxHeight -
+                                                  (rows - 1) * 8) /
+                                              rows;
+                                          return Wrap(
+                                            spacing: 16,
+                                            runSpacing: 8,
+                                            children: [
+                                              for (final option in options)
+                                                SizedBox(
+                                                  width: itemWidth,
+                                                  height: cellHeight,
+                                                  child: option,
+                                                ),
+                                            ],
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    _fontScaleCard(),
+                                    const SizedBox(height: 4),
+                                    _footer(),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -356,6 +358,49 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
     ),
   );
 
+  Future<void> _launchTutorial() async {
+    if (_tutorialLaunching || widget.onTutorial == null) return;
+    setState(() => _tutorialLaunching = true);
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (mounted) _closeThen(widget.onTutorial!);
+  }
+
+  Widget _artworkFallback() => Stack(
+    key: const ValueKey('settings-panel-fallback'),
+    children: [
+      Positioned.fill(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(42, 18, 42, 30),
+          decoration: BoxDecoration(
+            color: const Color(0xFF241609),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: _goldLight, width: 3),
+          ),
+        ),
+      ),
+      if (settings.language == AppLanguage.turkish)
+        Positioned(
+          left: 310,
+          right: 310,
+          top: 24,
+          height: 40,
+          child: Center(
+            child: ExcludeSemantics(
+              child: RichText(
+                text: const TextSpan(
+                  text: 'AYARLAR',
+                  style: TextStyle(
+                    color: _cream,
+                    fontSize: 19 * _metricScale,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+    ],
+  );
   Widget _toggle(
     String tr,
     String en,
@@ -415,7 +460,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
       label,
       style: const TextStyle(
         color: _cream,
-        fontSize: 19,
+        fontSize: appPopupBodyFontSize * _metricScale,
         fontWeight: FontWeight.w800,
       ),
     ),
@@ -630,6 +675,16 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
             FilledButton.icon(
               key: const ValueKey('settings-home-button'),
               onPressed: () => _closeThen(widget.onHome!),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(
+                  160,
+                  appPopupButtonHeight * _metricScale,
+                ),
+                textStyle: const TextStyle(
+                  fontSize: appPopupBodyFontSize * _metricScale,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
               icon: const Icon(Icons.home_rounded),
               label: Text(_text('ANA SAYFA', 'HOME', de: 'STARTSEITE')),
             ),
@@ -638,6 +693,16 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
             FilledButton.icon(
               key: const ValueKey('settings-restart-button'),
               onPressed: () => _closeThen(widget.onRestart!),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(
+                  160,
+                  appPopupButtonHeight * _metricScale,
+                ),
+                textStyle: const TextStyle(
+                  fontSize: appPopupBodyFontSize * _metricScale,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
               icon: const Icon(Icons.restart_alt_rounded),
               label: Text(
                 _text('YENİDEN BAŞLAT', 'RESTART', de: 'NEU STARTEN'),
@@ -653,9 +718,12 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
               shape: const StadiumBorder(),
               elevation: 5,
               shadowColor: Colors.black87,
-              minimumSize: Size(widget.onHome == null ? 340 : 180, 48),
+              minimumSize: Size(
+                widget.onHome == null ? 340 : 160,
+                appPopupButtonHeight * _metricScale,
+              ),
               textStyle: const TextStyle(
-                fontSize: 20,
+                fontSize: appPopupBodyFontSize * _metricScale,
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -671,12 +739,18 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
               foregroundColor: const Color(0xFF5C3A1E),
               shape: const StadiumBorder(),
               side: const BorderSide(color: Color(0xFFFFEDAD), width: 2),
-              minimumSize: Size(widget.onHome == null ? 340 : 180, 48),
+              minimumSize: Size(
+                widget.onHome == null ? 340 : 160,
+                appPopupButtonHeight * _metricScale,
+              ),
             ),
             icon: const Icon(Icons.check_rounded),
             label: Text(
               _text('KAYDET', 'SAVE', de: 'SPEICHERN'),
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              style: const TextStyle(
+                fontSize: appPopupBodyFontSize * _metricScale,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
         ],

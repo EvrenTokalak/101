@@ -9,15 +9,95 @@ void main() {
     int number,
     TileColor color, {
     bool isOkey = false,
+    bool isIndicator = false,
     bool isFakeOkey = false,
   }) => Tile(
     number: number,
     color: color,
     id: nextId++,
     isOkey: isOkey,
+    isIndicator: isIndicator,
     isFakeOkey: isFakeOkey,
   );
 
+  test('gösterge beşinci çifti tamamlar ve seri çözücüsünde joker olmaz', () {
+    final indicator = tile(6, TileColor.red, isIndicator: true);
+    final yellowThirteen = tile(13, TileColor.yellow);
+    final rack = [
+      for (final value in [
+        (2, TileColor.red),
+        (4, TileColor.blue),
+        (8, TileColor.black),
+        (10, TileColor.yellow),
+      ])
+        for (var copy = 0; copy < 2; copy++) tile(value.$1, value.$2),
+      indicator,
+      yellowThirteen,
+    ];
+    final pairs = RackSolver.pairs(rack);
+    expect(pairs, hasLength(5));
+    expect(pairs.every(Rules.isValidPair), isTrue);
+    expect(
+      pairs.expand((pair) => pair).map((tile) => tile.id).toSet(),
+      hasLength(10),
+    );
+    expect(
+      pairs.any(
+        (pair) => pair.contains(indicator) && pair.contains(yellowThirteen),
+      ),
+      isTrue,
+    );
+    expect(
+      RackSolver.pairsFromLayout([
+        [indicator, yellowThirteen],
+      ]),
+      hasLength(1),
+    );
+    expect(
+      RackSolver.standardMelds([
+        tile(12, TileColor.yellow),
+        indicator,
+        yellowThirteen,
+      ]),
+      isEmpty,
+    );
+  });
+  test(
+    'gösterge desteği kapalıyken yalnız doğal çift veya gerçek okey eşleşir',
+    () {
+      final indicator = tile(6, TileColor.red, isIndicator: true);
+      final other = tile(13, TileColor.yellow);
+      expect(RackSolver.pairs([indicator, other]), hasLength(1));
+      expect(
+        RackSolver.pairs([indicator, other], allowIndicator: false),
+        isEmpty,
+      );
+      expect(
+        RackSolver.pairsFromLayout([
+          [indicator, other],
+        ], allowIndicator: false),
+        isEmpty,
+      );
+      expect(
+        Rules.isValidPair([indicator, other], allowIndicator: false),
+        isFalse,
+      );
+      final matching = tile(6, TileColor.red, isIndicator: true);
+      expect(
+        RackSolver.pairs([indicator, matching], allowIndicator: false),
+        hasLength(1),
+      );
+      expect(
+        Rules.isValidPair([indicator, matching], allowIndicator: false),
+        isTrue,
+      );
+      final okey = tile(7, TileColor.red, isOkey: true);
+      expect(
+        RackSolver.pairs([indicator, okey], allowIndicator: false),
+        hasLength(1),
+      );
+    },
+  );
   test('per diz geçerli seri ve sayı grubunu bulur', () {
     final rack = [
       tile(4, TileColor.red),

@@ -10,6 +10,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var notificationPermissionResult: MethodChannel.Result? = null
     private var lastWallNanos = System.nanoTime()
     private var lastCpuMillis = Process.getElapsedCpuTime()
 
@@ -43,6 +44,35 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "okey/league_reminder")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "schedule" -> {
+                        LeagueReminder.update(this,
+                            call.argument<Number>("deadline")?.toLong() ?: 0L,
+                            call.argument<Boolean>("enabled") ?: false)
+                        result.success(null)
+                    }
+                    "requestPermission" -> {
+                        val prefs = getSharedPreferences("league_reminder", MODE_PRIVATE)
+                        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                                android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                            !prefs.getBoolean("permissionAsked", false)) {
+                            if (notificationPermissionResult != null) {
+                                result.success(false)
+                            } else {
+                                prefs.edit().putBoolean("permissionAsked", true).apply()
+                                notificationPermissionResult = result
+                                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 3101)
+                            }
+                        } else {
+                            result.success(LeagueReminder.permitted(this))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "okey/performance"
@@ -87,6 +117,17 @@ class MainActivity : FlutterActivity() {
                 "refreshRate" to refreshRate.toDouble(),
                 "memoryMb" to Debug.getPss().toDouble() / 1024.0
             ))
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 3101) {
+            notificationPermissionResult?.success(LeagueReminder.permitted(this))
+            notificationPermissionResult = null
+            LeagueReminder.restore(this)
         }
     }
 }

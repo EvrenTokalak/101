@@ -17,17 +17,22 @@ class RackSolver {
 
   /// Istakadaki yan yana çiftleri, aynı kesintisiz sırada birden fazla çift
   /// bulunsa bile ikişer taşlık gruplar halinde algılar.
-  static List<List<Tile>> pairsFromLayout(Iterable<List<Tile>> rows) => [
+  static List<List<Tile>> pairsFromLayout(
+    Iterable<List<Tile>> rows, {
+    bool allowIndicator = true,
+  }) => [
     for (final row in rows)
       ..._bestLayoutPlan(
         row,
         pairsOnly: true,
+        allowIndicator: allowIndicator,
       ).melds.map((candidate) => candidate.tiles),
   ];
 
   static _RackPlan _bestLayoutPlan(
     List<Tile> tiles, {
     required bool pairsOnly,
+    bool allowIndicator = true,
   }) {
     final memo = <int, _RackPlan>{};
 
@@ -47,7 +52,9 @@ class RackSolver {
         if (end > tiles.length) break;
         final group = tiles.sublist(index, end);
         final type = pairsOnly
-            ? (Rules.isValidPair(group) ? 'cift' : null)
+            ? (Rules.isValidPair(group, allowIndicator: allowIndicator)
+                  ? 'cift'
+                  : null)
             : Rules.meldType(group);
         if (type == null || (!pairsOnly && type == 'cift')) continue;
 
@@ -139,13 +146,15 @@ class RackSolver {
     return result;
   }
 
-  static List<List<Tile>> pairs(List<Tile> rack) {
+  static List<List<Tile>> pairs(List<Tile> rack, {bool allowIndicator = true}) {
+    bool isWildcard(Tile tile) =>
+        Rules.isPairWildcard(tile, allowIndicator: allowIndicator);
     final groups = <List<Tile>>[];
     final used = <int>{};
-    final jokers = rack.where((tile) => tile.isOkey).toList();
+    final jokers = rack.where(isWildcard).toList();
     final byValue = <String, List<Tile>>{};
 
-    for (final tile in rack.where((tile) => !tile.isOkey)) {
+    for (final tile in rack.where((tile) => !isWildcard(tile))) {
       byValue
           .putIfAbsent('${tile.color.index}:${tile.number}', () => [])
           .add(tile);
@@ -160,7 +169,7 @@ class RackSolver {
     }
 
     final singletons = rack.where(
-      (tile) => !tile.isOkey && !used.contains(tile.id),
+      (tile) => !isWildcard(tile) && !used.contains(tile.id),
     );
     final freeJokers = jokers.where((tile) => !used.contains(tile.id)).toList();
     var jokerIndex = 0;

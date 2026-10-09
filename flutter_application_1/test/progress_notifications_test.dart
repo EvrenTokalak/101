@@ -7,6 +7,7 @@ import 'package:flutter_application_1/progress_notifications.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() => progressNotifications.load());
 
   void completeGame(PlayerProgressController player, {bool won = false}) {
     player.recordCompletedGame(
@@ -107,7 +108,6 @@ void main() {
     tester,
   ) async {
     playerProgress.reset();
-    await progressNotifications.load();
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
@@ -155,6 +155,16 @@ void main() {
     await tester.tap(claim);
     await tester.pump(const Duration(milliseconds: 300));
     expect(playerProgress.coins, balance + 750);
+    final claimedButton = tester.widget<FilledButton>(claim);
+    const disabled = {WidgetState.disabled};
+    expect(
+      claimedButton.style!.backgroundColor!.resolve(disabled),
+      const Color(0xFF2E7D32),
+    );
+    expect(
+      claimedButton.style!.foregroundColor!.resolve(disabled),
+      Colors.white,
+    );
     expect(find.byKey(const ValueKey('reward-coin-flight')), findsOneWidget);
     expect(find.text('Bir oyun kazan'), findsOneWidget);
     expect(find.text('2 oyun kazan'), findsNothing);
@@ -170,4 +180,48 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     playerProgress.reset();
   });
+  testWidgets(
+    'different completed rewards can be claimed during coin flights',
+    (tester) async {
+      playerProgress.reset();
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
+      await tester.pump(const Duration(milliseconds: 750));
+      for (var i = 0; i < 5; i++) {
+        completeGame(playerProgress, won: true);
+      }
+      await tester.pump();
+      await tester.tap(find.text('GÖREVLER').first);
+      await tester.pump(const Duration(milliseconds: 350));
+      final missions = progressNotifications.missions.toList();
+      final before = playerProgress.coins;
+      for (final mission in missions) {
+        final button = find.byKey(ValueKey('mission-claim-${mission.title}'));
+        await tester.ensureVisible(button);
+        await tester.tap(button);
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(
+          progressNotifications.missions
+              .singleWhere((m) => m.id == mission.id)
+              .claimed,
+          isTrue,
+        );
+      }
+      expect(
+        playerProgress.coins,
+        before + missions.fold<int>(0, (sum, mission) => sum + mission.reward),
+      );
+      expect(
+        find.byKey(const ValueKey('reward-coin-flight')),
+        findsNWidgets(3),
+      );
+      // Closing mid-animation must preserve the credited rewards and clear each claim.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(progressNotifications.missions.every((m) => !m.claimed), isTrue);
+      expect(tester.takeException(), isNull);
+      playerProgress.reset();
+    },
+  );
 }
