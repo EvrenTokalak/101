@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
@@ -35,6 +36,166 @@ void main() {
           (call) async => null,
         );
   });
+  testWidgets('game buttons shrink on quick press and reset on cancellation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameScreen(
+          startingPlayer: 0,
+          launchConfig: GameLaunchConfig.gameMode(
+            mode: OkeyGameMode.classic101,
+            id: 'press-test',
+            label: 'Classic',
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+    final arrange = find.text('SERİ DİZ');
+    final scale = find.ancestor(
+      of: arrange,
+      matching: find.byType(AnimatedScale),
+    );
+    expect(tester.widget<AnimatedScale>(scale).scale, 1);
+    final press = await tester.startGesture(tester.getCenter(arrange));
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(tester.widget<AnimatedScale>(scale).scale, .96);
+    await press.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(tester.widget<AnimatedScale>(scale).scale, 1);
+    final cancelled = await tester.startGesture(tester.getCenter(arrange));
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(tester.widget<AnimatedScale>(scale).scale, .96);
+    await cancelled.cancel();
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(tester.widget<AnimatedScale>(scale).scale, 1);
+    final inactive = find.text('TAŞ AT');
+    final inactiveScale = find.ancestor(
+      of: inactive,
+      matching: find.byType(AnimatedScale),
+    );
+    final inactivePress = await tester.startGesture(tester.getCenter(inactive));
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(tester.widget<AnimatedScale>(inactiveScale).scale, 1);
+    await inactivePress.up();
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(tester.takeException(), isNull);
+    final removedPress = await tester.startGesture(tester.getCenter(arrange));
+    await tester.pump(const Duration(milliseconds: 20));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 80)),
+    );
+    await removedPress.up();
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets(
+    'result totals track this session while league keeps its daily scores',
+    (tester) async {
+      await tester.runAsync(() async {
+        SharedPreferences.setMockInitialValues({});
+        await dailyLeague.resetForTesting();
+        await SharedPreferencesAsync().clear();
+        await dailyLeague.load();
+        await dailyLeague.recordRound(
+          config: const GameLaunchConfig.quickPlay(),
+          roundId: 'earlier-session',
+          tablePenalties: [700, 800, 900, 1000],
+          simulatedPenalties: List.filled(16, 1000),
+        );
+      });
+      addTearDown(() => dailyLeague.resetForTesting(waitForWrites: false));
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump(const Duration(milliseconds: 2700));
+      var id = 85000;
+      Future<GameEndDialog> finishHand() async {
+        final dynamic area = tester.widget(
+          find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_RackArea',
+          ),
+        );
+        final rack = area.rack as List<Tile>;
+        final slots = area.slots as List<int?>;
+        rack.clear();
+        rack.addAll([
+          for (final number in [2, 4, 8, 10, 12])
+            for (var copy = 0; copy < 2; copy++)
+              Tile(id: id++, number: number, color: TileColor.blue),
+          Tile(id: id++, number: 13, color: TileColor.red),
+        ]);
+        slots.fillRange(0, slots.length, null);
+        for (var i = 0; i < rack.length; i++) {
+          slots[i] = rack[i].id;
+        }
+        final dynamic state = tester.state(find.byType(GameScreen));
+        state.setState(() {});
+        await tester.pump();
+        await tester.tap(find.text('ÇİFT AÇ'));
+        await tester.pump(const Duration(milliseconds: 650));
+        expect(rack, hasLength(1));
+        await tester.tap(find.byKey(ValueKey('rack-tile-${rack.single.id}')));
+        await tester.pump();
+        await tester.tap(find.text('TAŞ AT'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 3500));
+        await tester.pump(const Duration(milliseconds: 500));
+        final result = tester.widget<GameEndDialog>(find.byType(GameEndDialog));
+        var leagueRecorded = false;
+        result.leagueUpdate!.then((_) => leagueRecorded = true);
+        for (var attempt = 0; attempt < 500 && !leagueRecorded; attempt++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+        expect(leagueRecorded, isTrue);
+        return result;
+      }
+
+      final first = await finishHand();
+      expect(first.totalPenalty, -101);
+      for (var i = 0; i < first.bots.length; i++) {
+        expect(first.bots[i].penalty + first.botPens[i], first.botPens[i]);
+      }
+      expect(
+        dailyLeague.standings.firstWhere((entry) => entry.isPlayer).penalty,
+        599,
+      );
+      first.onNewRound();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 3000));
+      final second = await finishHand();
+      expect(second.totalPenalty, -202);
+      for (var i = 0; i < second.bots.length; i++) {
+        expect(second.bots[i].penalty, first.botPens[i]);
+      }
+      expect(
+        dailyLeague.standings.firstWhere((entry) => entry.isPlayer).penalty,
+        498,
+      );
+      second.onResetMatch();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 3000));
+      final reset = await finishHand();
+      expect(reset.totalPenalty, -101);
+      expect(reset.bots.every((bot) => bot.penalty == 0), isTrue);
+      expect(
+        dailyLeague.standings.firstWhere((entry) => entry.isPlayer).penalty,
+        397,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
   testWidgets(
     'button draw pulses until next touch and discard visibly travels',
     (tester) async {
@@ -139,7 +300,7 @@ void main() {
     expect(find.text('Açmadı'), findsNothing);
     expect(find.text('Açtı'), findsNothing);
     expect(find.textContaining('Kalan:'), findsNothing);
-    expect(tester.widget<Text>(label).style!.color, OC.numRed);
+    expect(tester.widget<Text>(label).style!.color, OC.cream);
     final seat = find.byKey(const ValueKey('seat-Oyuncu 2'));
     final info = find.ancestor(
       of: seat,
@@ -159,7 +320,7 @@ void main() {
     expect(tester.widget<Text>(label).data, '$name/$expected');
     expect(tester.widget<Text>(label).maxLines, 1);
     expect(tester.widget<Text>(label).softWrap, isFalse);
-    expect(tester.widget<Text>(label).style!.color, const Color(0xFF83E5A0));
+    expect(tester.widget<Text>(label).style!.color, OC.cream);
     expect(
       find.descendant(of: seat, matching: find.byType(Text)),
       findsOneWidget,
@@ -470,7 +631,7 @@ void main() {
     }
   });
 
-  testWidgets('cift diz sonrasi ozet kutusu toplam etiketini gosterir', (
+  testWidgets('cift diz sonrasi ozet kutusu cift etiketini gosterir', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1024, 500));
@@ -485,7 +646,7 @@ void main() {
     await tester.tap(find.text('ÇİFT DİZ'));
     await tester.pump();
 
-    expect(find.text('TOPLAM'), findsOneWidget);
+    expect(find.text('ÇİFT'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(seconds: 3));
   });

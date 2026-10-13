@@ -195,21 +195,71 @@ class _PressScale extends StatefulWidget {
 
 class _PressScaleState extends State<_PressScale> {
   bool _pressed = false;
+  int? _activePointer;
+  Stopwatch? _pressClock;
+  Timer? _releaseTimer;
 
   void _setPressed(bool value) {
-    if (!widget.enabled || _pressed == value) return;
+    if (!mounted || !widget.enabled || _pressed == value) return;
     setState(() => _pressed = value);
   }
 
+  void _press(PointerDownEvent event) {
+    if (!mounted || !widget.enabled || _activePointer != null) return;
+    _releaseTimer?.cancel();
+    _activePointer = event.pointer;
+    (_pressClock ??= Stopwatch())
+      ..reset()
+      ..start();
+    _setPressed(true);
+  }
+
+  void _release(PointerUpEvent event) {
+    if (!mounted || _activePointer != event.pointer) return;
+    _activePointer = null;
+    final remaining = 70 - (_pressClock?.elapsedMilliseconds ?? 70);
+    if (remaining <= 0) {
+      _setPressed(false);
+      return;
+    }
+    _releaseTimer = Timer(Duration(milliseconds: remaining), () {
+      if (mounted) _setPressed(false);
+    });
+  }
+
+  void _cancel(PointerCancelEvent event) {
+    if (!mounted || _activePointer != event.pointer) return;
+    _releaseTimer?.cancel();
+    _activePointer = null;
+    _setPressed(false);
+  }
+
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  void didUpdateWidget(covariant _PressScale oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled) {
+      _releaseTimer?.cancel();
+      _activePointer = null;
+      _pressed = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _releaseTimer?.cancel();
+    _activePointer = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Listener(
     behavior: HitTestBehavior.translucent,
-    onTapDown: (_) => _setPressed(true),
-    onTapUp: (_) => _setPressed(false),
-    onTapCancel: () => _setPressed(false),
+    onPointerDown: _press,
+    onPointerUp: _release,
+    onPointerCancel: _cancel,
     child: AnimatedScale(
-      scale: _pressed ? 0.93 : 1,
-      duration: const Duration(milliseconds: 105),
+      scale: _pressed ? 0.96 : 1,
+      duration: Duration(milliseconds: _pressed ? 80 : 140),
       curve: _pressed ? Curves.easeOutCubic : Curves.easeOutBack,
       child: widget.child,
     ),

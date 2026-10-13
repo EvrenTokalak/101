@@ -735,6 +735,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   int _walletAnimationTo = 0;
   int _walletRewardGain = 0;
   bool _navigating = false;
+  bool? _settingsPanelOpen;
   bool _visualsPrewarmed = false;
   bool _tutorialPromptScheduled = false;
 
@@ -1205,41 +1206,28 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   }
 
   Future<void> _openSettings() async {
-    final updatedSettings = await showGeneralDialog<AppSettings>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Ayarları kapat',
-      barrierColor: Colors.black.withValues(alpha: 0.72),
-      transitionDuration: const Duration(milliseconds: 280),
-      pageBuilder: (_, _, _) => AppSettingsDialog(
-        initial: _settings.copyWith(
-          soundEffects: gameSoundEffectsEnabled,
-          vibration: gameVibrationEnabled,
-          showOpponentPictures: gameOpponentPicturesEnabled,
-          autoArrangeRack: gameAutoArrangeRackEnabled,
-        ),
-        onTutorial: () => unawaited(_launchTutorialFromSettings()),
-      ),
-      transitionBuilder: (_, animation, _, child) {
-        final scale = animation.drive(
-          TweenSequence<double>([
-            TweenSequenceItem(
-              tween: Tween(begin: 0.94, end: 0.988),
-              weight: 52,
+    if (_settingsPanelOpen == true || !mounted) return;
+    setState(() => _settingsPanelOpen = true);
+    final updatedSettings =
+        await showGeneralDialog<AppSettings>(
+          context: context,
+          barrierDismissible: true,
+          barrierLabel: 'Ayarları kapat',
+          barrierColor: Colors.black.withValues(alpha: 0.72),
+          transitionDuration: const Duration(milliseconds: 200),
+          pageBuilder: (_, _, _) => AppSettingsDialog(
+            initial: _settings.copyWith(
+              soundEffects: gameSoundEffectsEnabled,
+              vibration: gameVibrationEnabled,
+              showOpponentPictures: gameOpponentPicturesEnabled,
+              autoArrangeRack: gameAutoArrangeRackEnabled,
             ),
-            TweenSequenceItem(
-              tween: Tween(begin: 0.988, end: 0.998),
-              weight: 28,
-            ),
-            TweenSequenceItem(tween: Tween(begin: 0.998, end: 1), weight: 20),
-          ]),
-        );
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(scale: scale, child: child),
-        );
-      },
-    );
+            onTutorial: () => unawaited(_launchTutorialFromSettings()),
+          ),
+          transitionBuilder: appSettingsTransition,
+        ).whenComplete(() {
+          if (mounted) setState(() => _settingsPanelOpen = false);
+        });
 
     if (updatedSettings != null && mounted) {
       setState(() => _settings = updatedSettings);
@@ -1374,7 +1362,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         child: Scaffold(
           backgroundColor: OkeyColors.tableDark,
           body: TickerMode(
-            enabled: !_navigating,
+            enabled: !_navigating && _settingsPanelOpen != true,
             child: Stack(
               children: [
                 Positioned.fill(
@@ -2352,7 +2340,7 @@ class _ProfileChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: playerProgress,
+      animation: Listenable.merge([playerProgress, appLanguage]),
       builder: (context, _) => GestureDetector(
         key: const ValueKey('main-xp-chip'),
         onTap: onTap,
@@ -2424,7 +2412,7 @@ class _ProfileChip extends StatelessWidget {
                                 fit: BoxFit.scaleDown,
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  '${playerProgress.title} • SV. ${playerProgress.level}',
+                                  '${playerProgress.levelBand.localizedTitle(appLanguage.value)} · ${appText('Seviye', 'Level', german: 'Stufe')} ${playerProgress.level}',
                                   maxLines: 1,
                                   style: const TextStyle(
                                     color: OkeyColors.goldLight,
@@ -3208,33 +3196,42 @@ class _ProfileStatCard extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      color: OkeyColors.cream,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      height: 1.15,
+          child: LayoutBuilder(
+            builder: (context, bounds) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: OkeyColors.cream,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: OkeyColors.cream,
-                  fontSize: 36,
-                  fontWeight: FontWeight.w900,
-                  height: 1.05,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: bounds.maxHeight),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      value,
+                      style: const TextStyle(
+                        color: OkeyColors.cream,
+                        fontSize: 36,
+                        fontWeight: FontWeight.w900,
+                        height: 1.05,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -3307,13 +3304,13 @@ class _ProfileDialog extends StatelessWidget {
                         child: Column(
                           children: [
                             SizedBox(
-                              height: 42,
+                              height: 56,
                               child: Stack(
                                 children: [
                                   Center(
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 48,
+                                        horizontal: 70,
                                       ),
                                       child: FittedBox(
                                         fit: BoxFit.scaleDown,
@@ -3342,7 +3339,7 @@ class _ProfileDialog extends StatelessWidget {
                                         'profile-close-button',
                                       ),
                                       onTap: () => Navigator.of(context).pop(),
-                                      size: 38,
+                                      size: 54,
                                     ),
                                   ),
                                 ],
@@ -4175,7 +4172,13 @@ class _FeatureEntryCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 9),
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: onTap == null ? 0.055 : 0.085),
+        color: Colors.white.withValues(
+          alpha: entry.badge == 'YENİ'
+              ? 0.13
+              : onTap == null
+              ? 0.055
+              : 0.085,
+        ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: OkeyColors.gold.withValues(alpha: onTap == null ? 0.2 : 0.5),
@@ -4211,7 +4214,18 @@ class _FeatureEntryCard extends StatelessWidget {
               ],
             ),
           ),
-          if (entry.badge != null) ...[
+          if (entry.badge == 'YENİ') ...[
+            const SizedBox(width: 12),
+            Container(
+              key: ValueKey('inbox-unread-dot-${entry.title}'),
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                color: OkeyColors.goldLight,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ] else if (entry.badge != null) ...[
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
@@ -5418,6 +5432,7 @@ class _RightButtonColumn extends StatelessWidget {
     Widget buttonAt(int index) {
       final (icon, assetPath, label, description) = buttons[index];
       return _RightSideButton(
+        key: index == 3 ? const ValueKey('home-missions-button') : null,
         icon: icon,
         assetPath: assetPath,
         label: label,
@@ -5481,6 +5496,7 @@ class _RightSideButton extends StatefulWidget {
   final bool showIcon;
 
   const _RightSideButton({
+    super.key,
     required this.icon,
     this.assetPath,
     required this.label,
@@ -5540,28 +5556,28 @@ class _RightSideButtonState extends State<_RightSideButton>
             gradient: const LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0xFF24513D), Color(0xFF0A3222), Color(0xFF052418)],
+              colors: [Color(0xFF183D2D), Color(0xFF092D20), Color(0xFF052418)],
               stops: [0, 0.58, 1],
             ),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: OkeyColors.goldLight.withValues(alpha: 0.75),
-              width: 1.3,
+              color: OkeyColors.goldLight.withValues(alpha: 0.42),
+              width: 0.9,
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF02140C).withValues(alpha: 0.95),
+                color: const Color(0xFF02140C).withValues(alpha: 0.65),
                 blurRadius: 0,
-                offset: const Offset(0, 5),
+                offset: const Offset(0, 3),
               ),
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.5),
-                blurRadius: 9,
-                offset: const Offset(0, 7),
-              ),
-              BoxShadow(
-                color: OkeyColors.goldLight.withValues(alpha: 0.10),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 5,
+                offset: const Offset(0, 4),
+              ),
+              BoxShadow(
+                color: OkeyColors.goldLight.withValues(alpha: 0.03),
+                blurRadius: 3,
                 offset: const Offset(0, -1),
               ),
             ],

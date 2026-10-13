@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_launch.dart';
+import 'app_language.dart';
 
 const defaultPlayerProfileName = 'Evren';
 const initialPlayerCoins = 25600;
@@ -46,6 +47,34 @@ class LevelBand {
   const LevelBand(this.minLevel, this.maxLevel, this.title);
 
   bool contains(int level) => level >= minLevel && level <= maxLevel;
+
+  String localizedTitle(AppLanguage language) {
+    final (tr, de) = switch (title) {
+      'Beginner' => ('Başlangıç', 'Anfänger'),
+      'Rookie' => ('Çaylak', 'Neuling'),
+      'Learner' => ('Öğrenen', 'Lernender'),
+      'Novice' => ('Acemi', 'Einsteiger'),
+      'Trainee' => ('Aday', 'Anwärter'),
+      'Initiate' => ('Yeni Yetenek', 'Nachwuchstalent'),
+      'Apprentice' => ('Çırak', 'Lehrling'),
+      'Graduate' => ('Deneyimli', 'Erfahrener'),
+      'Aficionado' => ('Oyun Tutkunu', 'Spielbegeisterter'),
+      'Talented' => ('Yetenekli', 'Talentierter'),
+      'Skilled' => ('Becerikli', 'Versierter'),
+      'Pro' => ('Profesyonel', 'Profi'),
+      'Specialist' => ('Uzman', 'Spezialist'),
+      'All-Star' => ('Yıldız', 'Star'),
+      'Superstar' => ('Süper Yıldız', 'Superstar'),
+      'Genius' => ('Dahi', 'Genie'),
+      'Master' => ('Usta', 'Meister'),
+      'Maestro' => ('Üstat', 'Maestro'),
+      'Expert' => ('Üst Düzey Uzman', 'Experte'),
+      'Champion' => ('Şampiyon', 'Champion'),
+      'Grandmaster' => ('Büyük Usta', 'Großmeister'),
+      _ => (title, title),
+    };
+    return localizedText(language, tr, title, german: de);
+  }
 }
 
 const levelBands = <LevelBand>[

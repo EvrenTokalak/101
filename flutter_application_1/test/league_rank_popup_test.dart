@@ -75,7 +75,9 @@ void main() {
       expect(find.text('20 yarışmacı · 3/20 el tamamlandı'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 2200));
       await tester.tap(find.byKey(const ValueKey('rack-visible-tile-0')));
-      await tester.pump();
+      // A random first tile may be okey, whose single tap waits for the
+      // double-tap window used to reveal its face.
+      await tester.pump(const Duration(milliseconds: 350));
       final dynamic rackArea = tester.widget(
         find.byWidgetPredicate(
           (widget) => widget.runtimeType.toString() == '_RackArea',

@@ -21,6 +21,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 260));
 
     expect(find.text('AYARLAR'), findsOneWidget);
+    final table = find.byWidgetPredicate(
+      (w) => w.runtimeType.toString() == '_TableArea',
+    );
+    expect(
+      find
+          .ancestor(of: table, matching: find.byType(TickerMode))
+          .evaluate()
+          .any((element) => !(element.widget as TickerMode).enabled),
+      isTrue,
+    );
     expect(find.text('Ses Efektleri'), findsOneWidget);
     expect(find.text('Bildirimler'), findsOneWidget);
     expect(find.text('Rakip Resimleri'), findsOneWidget);

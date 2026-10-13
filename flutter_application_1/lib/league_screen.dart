@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'app_controls.dart';
+import 'app_language.dart';
 import 'app_settings_dialog.dart';
 import 'daily_league.dart';
 import 'game_launch.dart';
@@ -23,6 +24,8 @@ class _LeagueScreenState extends State<LeagueScreen>
     with WidgetsBindingObserver {
   Timer? _ticker;
   bool _opening = false;
+  ScrollController? _standingsScroll;
+  ScrollController get _listScroll => _standingsScroll ??= ScrollController();
 
   @override
   void initState() {
@@ -44,6 +47,7 @@ class _LeagueScreenState extends State<LeagueScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
+    _standingsScroll?.dispose();
     super.dispose();
   }
 
@@ -75,12 +79,15 @@ class _LeagueScreenState extends State<LeagueScreen>
             ),
           ),
           Positioned.fill(
-            child: ColoredBox(color: Colors.black.withValues(alpha: .28)),
+            child: ColoredBox(
+              color: const Color(0xFF071B12).withValues(alpha: .58),
+            ),
           ),
           SafeArea(
             child: LayoutBuilder(
               builder: (context, box) {
-                final wide = box.maxWidth / box.maxHeight > 1.2;
+                final wide =
+                    box.maxWidth / box.maxHeight > 1.2 || box.maxHeight < 480;
                 final compact = box.maxHeight < 620 || box.maxWidth < 650;
                 final summary = _sidebar(compact: compact);
                 return Padding(
@@ -125,7 +132,7 @@ class _LeagueScreenState extends State<LeagueScreen>
   );
 
   Widget _header(bool compact) => SizedBox(
-    height: compact ? 62 : 92,
+    height: compact ? 78 : 106,
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -147,7 +154,7 @@ class _LeagueScreenState extends State<LeagueScreen>
                 Text(
                   'GÜNLÜK LİG',
                   style: TextStyle(
-                    color: _leagueGold,
+                    color: _leagueCream,
                     fontFamily: 'Baloo 2',
                     fontSize: compact ? 26 : 40,
                     fontWeight: FontWeight.w900,
@@ -170,11 +177,27 @@ class _LeagueScreenState extends State<LeagueScreen>
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                if (!compact)
-                  const Text(
-                    'Botlara karşı günlük mücadele',
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.emoji_events_rounded,
+                      size: compact ? 13 : 17,
+                      color: const Color(0xFFB7C7AD),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'İlk 3’e ${[1, 2, 3].map((rank) => formatGameNumber(LeaguePrize.forRank(rank).coins)).join(' · ')} altın',
+                      key: const ValueKey('league-prize-summary'),
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: compact ? 10 : 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -187,7 +210,7 @@ class _LeagueScreenState extends State<LeagueScreen>
           decoration: BoxDecoration(
             color: Colors.black54,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: _leagueGold),
+            border: Border.all(color: _leagueGold, width: 1.2),
           ),
           child: Row(
             children: [
@@ -209,13 +232,14 @@ class _LeagueScreenState extends State<LeagueScreen>
   );
 
   Widget _standings(bool compact) => _LeagueCard(
+    compact: compact,
     child: Column(
       children: [
         Row(
           children: [
             Icon(
               Icons.leaderboard_rounded,
-              color: _leagueGold,
+              color: const Color(0xFF9AB29D),
               size: compact ? 24 : 34,
             ),
             const SizedBox(width: 10),
@@ -256,114 +280,194 @@ class _LeagueScreenState extends State<LeagueScreen>
         ),
         const SizedBox(height: 3),
         Expanded(
-          child: ListView.builder(
-            key: const ValueKey('league-standings'),
-            itemCount: dailyLeague.standings.length,
-            itemBuilder: (context, index) {
-              final entry = dailyLeague.standings[index];
-              final highlight = entry.isPlayer;
-              final medalColor = switch (entry.rank) {
-                1 => _leagueGold,
-                2 => const Color(0xFFCCD7DC),
-                3 => const Color(0xFFD79B55),
-                _ => Colors.white70,
-              };
-              return Container(
-                key: ValueKey('league-entry-${entry.id}'),
-                padding: EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: compact ? 6 : 8,
-                ),
-                decoration: BoxDecoration(
-                  color: highlight ? const Color(0x553F783C) : Colors.black12,
-                  borderRadius: BorderRadius.circular(highlight ? 10 : 0),
-                  border: highlight
-                      ? Border.all(color: _leagueGold, width: 1.5)
-                      : Border(
-                          bottom: BorderSide(
-                            color: Colors.white.withValues(alpha: .08),
+          child: Stack(
+            children: [
+              Scrollbar(
+                controller: _listScroll,
+                thumbVisibility: true,
+                child: ListView.builder(
+                  controller: _listScroll,
+                  key: const ValueKey('league-standings'),
+                  itemCount: dailyLeague.standings.length,
+                  itemBuilder: (context, index) {
+                    final entry = dailyLeague.standings[index];
+                    final highlight = entry.isPlayer;
+                    final medalColor = dailyLeague.completedRounds == 0
+                        ? Colors.white54
+                        : switch (entry.rank) {
+                            1 => _leagueGold,
+                            2 => const Color(0xFFCCD7DC),
+                            3 => const Color(0xFFD79B55),
+                            _ => Colors.white70,
+                          };
+                    return Container(
+                      key: ValueKey('league-entry-${entry.id}'),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: compact ? 6 : 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: highlight
+                            ? const Color(0x553F783C)
+                            : Colors.black12,
+                        borderRadius: BorderRadius.circular(highlight ? 10 : 0),
+                        border: highlight
+                            ? Border.all(color: _leagueGold, width: 1.5)
+                            : Border(
+                                bottom: BorderSide(
+                                  color: Colors.white.withValues(alpha: .08),
+                                ),
+                              ),
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: compact ? 35 : 48,
+                            child: Text(
+                              dailyLeague.completedRounds == 0
+                                  ? '—'
+                                  : '${entry.rank}',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: medalColor,
+                                fontSize: compact ? 18 : 25,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
                           ),
-                        ),
+                          CircleAvatar(
+                            radius: compact ? 16 : 23,
+                            backgroundColor: const Color(0xFF355341),
+                            backgroundImage: ResizeImage(
+                              AssetImage(entry.avatar),
+                              width: 64,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              highlight ? '${entry.name} · SEN' : entry.name,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                color: highlight ? _leagueGold : _leagueCream,
+                                fontSize: compact ? 13 : 18,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          if (!highlight && !compact)
+                            Container(
+                              margin: const EdgeInsets.only(right: 12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white12,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                'BOT',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          Text(
+                            dailyLeague.completedRounds == 0
+                                ? '—'
+                                : formatGameNumber(entry.penalty),
+                            key: ValueKey('league-penalty-${entry.id}'),
+                            style: TextStyle(
+                              color: _leagueCream,
+                              fontSize: compact ? 15 : 23,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: compact ? 35 : 48,
-                      child: Text(
-                        dailyLeague.completedRounds == 0
-                            ? '—'
-                            : '${entry.rank}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: medalColor,
-                          fontSize: compact ? 18 : 25,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    CircleAvatar(
-                      radius: compact ? 16 : 23,
-                      backgroundColor: _leagueGold,
-                      backgroundImage: ResizeImage(
-                        AssetImage(entry.avatar),
-                        width: 64,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        highlight ? '${entry.name} · SEN' : entry.name,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: TextStyle(
-                          color: highlight ? _leagueGold : _leagueCream,
-                          fontSize: compact ? 13 : 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    if (!highlight && !compact)
-                      Container(
-                        margin: const EdgeInsets.only(right: 12),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white12,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'BOT',
-                          style: TextStyle(color: Colors.white70, fontSize: 10),
-                        ),
-                      ),
-                    Text(
-                      formatGameNumber(entry.penalty),
-                      style: TextStyle(
-                        color: _leagueCream,
-                        fontSize: compact ? 15 : 23,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
+              ),
+              Positioned(
+                bottom: 5,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: AnimatedBuilder(
+                    animation: _listScroll,
+                    builder: (context, _) {
+                      final position = _listScroll.hasClients
+                          ? _listScroll.positions.last
+                          : null;
+                      final atTop =
+                          position == null ||
+                          !position.hasPixels ||
+                          position.pixels <= 1;
+                      return AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        child: !atTop
+                            ? const SizedBox.shrink(
+                                key: ValueKey('league-arrow-hidden'),
+                              )
+                            : SizedBox(
+                                key: const ValueKey('league-arrow-visible'),
+                                width: 48,
+                                height: 28,
+                                child: Material(
+                                  key: const ValueKey('league-scroll-hint'),
+                                  color: _leagueGold,
+                                  elevation: 3,
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(14),
+                                    onTap: () {
+                                      if (!_listScroll.hasClients) return;
+                                      final position =
+                                          _listScroll.positions.last;
+                                      if (!position.hasContentDimensions) {
+                                        return;
+                                      }
+                                      _listScroll.animateTo(
+                                        (position.pixels +
+                                                position.viewportDimension * .7)
+                                            .clamp(
+                                              0.0,
+                                              position.maxScrollExtent,
+                                            ),
+                                        duration: const Duration(
+                                          milliseconds: 320,
+                                        ),
+                                        curve: Curves.easeOutCubic,
+                                      );
+                                    },
+                                    child: const Center(
+                                      child: Icon(
+                                        Icons.keyboard_arrow_down_rounded,
+                                        color: Colors.white,
+                                        size: 27,
+                                        semanticLabel:
+                                            'Diğer yarışmacıları göster',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                      );
+                    },
+                  ),
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 8),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Expanded(
-              child: Text(
-                '20 yarışmacı',
-                style: _label(compact),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
             Expanded(
               child: Text(
                 'Tümü ${dailyLeague.completedRounds} el oynadı',
@@ -388,7 +492,7 @@ class _LeagueScreenState extends State<LeagueScreen>
           children: [
             Icon(
               Icons.schedule_rounded,
-              color: _leagueGold,
+              color: const Color(0xFF9AB29D),
               size: compact ? 25 : 38,
             ),
             const SizedBox(width: 12),
@@ -396,7 +500,7 @@ class _LeagueScreenState extends State<LeagueScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('YENİLENMEYE', style: _label(compact)),
+                  Text('LİG BİTİMİNE', style: _label(compact)),
                   Text(
                     dailyLeague.remainingText,
                     key: const ValueKey('league-countdown'),
@@ -424,7 +528,7 @@ class _LeagueScreenState extends State<LeagueScreen>
             Text(
               '${dailyLeague.completedRounds} / 20 EL',
               key: const ValueKey('league-progress'),
-              style: _title(compact ? 25 : 36).copyWith(color: _leagueGold),
+              style: _title(compact ? 25 : 36),
             ),
             const SizedBox(height: 8),
             ClipRRect(
@@ -433,13 +537,13 @@ class _LeagueScreenState extends State<LeagueScreen>
                 value: dailyLeague.completedRounds / leagueRoundLimit,
                 minHeight: compact ? 9 : 14,
                 backgroundColor: Colors.black38,
-                color: _leagueGold,
+                color: const Color(0xFF6DA77E),
               ),
             ),
             const SizedBox(height: 8),
             Text(
               dailyLeague.completedRounds == 0
-                  ? 'Sıralama ilk elden sonra oluşur'
+                  ? 'İlk elini oyna, sıralamaya katıl'
                   : 'Sıran: ${dailyLeague.playerRank} / 20',
               style: TextStyle(
                 color: _leagueCream,
@@ -466,7 +570,7 @@ class _LeagueScreenState extends State<LeagueScreen>
               : null,
           icon: const Icon(Icons.notifications_active_outlined, size: 17),
           label: const Text('Son 1 saat hatırlatıcısı'),
-          style: TextButton.styleFrom(foregroundColor: _leagueGold),
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF9AB29D)),
         ),
     ],
   );
@@ -491,14 +595,21 @@ class _LeagueScreenState extends State<LeagueScreen>
               borderRadius: BorderRadius.circular(20),
             ),
           ),
-          child: Text('HEMEN OYNA', style: _title(compact ? 19 : 27)),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              'HEMEN OYNA',
+              maxLines: 1,
+              style: _title(compact ? 19 : 27),
+            ),
+          ),
         ),
       ),
       const SizedBox(height: 7),
       Text(
         dailyLeague.complete
             ? 'Oynamaya devam et · Lig toplamın sabit'
-            : 'Hemen Oyna ile aynı sonsuz oyun',
+            : 'Oynadığın ilk 20 el günlük ligine sayılır',
         textAlign: TextAlign.center,
         style: _label(compact),
       ),
@@ -540,7 +651,7 @@ class _LeagueCard extends StatelessWidget {
       ),
       borderRadius: BorderRadius.circular(18),
       border: Border.all(
-        color: gold ? const Color(0xFFB5A641) : const Color(0xFF74A84D),
+        color: gold ? _leagueGold : const Color(0xFFB5A641),
         width: 1.4,
       ),
       boxShadow: const [
@@ -587,7 +698,7 @@ class _HomeLeagueSummaryState extends State<HomeLeagueSummary>
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: dailyLeague,
+    animation: Listenable.merge([dailyLeague, appLanguage]),
     builder: (context, _) => GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.onTap,
@@ -611,8 +722,9 @@ class _HomeLeagueSummaryState extends State<HomeLeagueSummary>
             const SizedBox(width: 7),
             Flexible(
               child: Text(
-                'Lig · ${dailyLeague.completedRounds == 0 ? 'İlk elini tamamla' : '${dailyLeague.playerRank}. sıra'} · '
-                '${dailyLeague.completedRounds}/20 el · ${dailyLeague.remainingText}',
+                '${appText('Lig', 'League', german: 'Liga')} · '
+                '${dailyLeague.completedRounds == 0 ? appText('İlk elini tamamla', 'Complete your first hand', german: 'Spiele deine erste Runde') : appText('${dailyLeague.playerRank}. sıra', 'Rank ${dailyLeague.playerRank}', german: 'Platz ${dailyLeague.playerRank}')} · '
+                '${dailyLeague.completedRounds}/20 ${appText('el', 'hands', german: 'Runden')} · ${dailyLeague.remainingText}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(

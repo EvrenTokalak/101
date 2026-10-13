@@ -32,75 +32,88 @@ class TutorialPromptDialog extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 70,
-            height: 70,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFFD4A017).withValues(alpha: 0.16),
-              border: Border.all(color: const Color(0xFFF0CC5A), width: 2),
-            ),
-            child: const Icon(
-              Icons.school_rounded,
-              color: Color(0xFFF0CC5A),
-              size: 38,
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'ÖĞRETİCİYİ GÖRMEK İSTER MİSİN?',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFFF5EDD6),
-              fontSize: 23,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.8,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Kontrollü bir eğitim elinde taş çekmeyi, dizmeyi, açmayı, işlemeyi ve bitmeyi sen uygulayacaksın.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
-          ),
-          const SizedBox(height: 22),
-          Row(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: SizedBox(
+          width: appPopupSize(context, horizontalInset: 44).width - 60,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  key: const ValueKey('tutorial-skip-button'),
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: const BorderSide(color: Colors.white38),
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                  ),
-                  child: const Text('ŞİMDİLİK GEÇ'),
+              Container(
+                width: 70,
+                height: 70,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFD4A017).withValues(alpha: 0.16),
+                  border: Border.all(color: const Color(0xFFF0CC5A), width: 2),
+                ),
+                child: const Icon(
+                  Icons.school_rounded,
+                  color: Color(0xFFF0CC5A),
+                  size: 38,
                 ),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: FilledButton.icon(
-                  key: const ValueKey('tutorial-start-button'),
-                  onPressed: () => Navigator.of(context).pop(true),
-                  style: FilledButton.styleFrom(
-                    foregroundColor: const Color(0xFF2D1C08),
-                    backgroundColor: const Color(0xFFF0CC5A),
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                  ),
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text(
-                    'EVET, GÖSTER',
-                    style: TextStyle(fontWeight: FontWeight.w900),
+              const SizedBox(height: 16),
+              const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFFF5EDD6),
+                    fontSize: 23,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
                   ),
                 ),
+              ),
+              const SizedBox(height: 22),
+              LayoutBuilder(
+                builder: (context, bounds) {
+                  final width = bounds.maxWidth < 360
+                      ? bounds.maxWidth
+                      : (bounds.maxWidth - 14) / 2;
+                  return Wrap(
+                    spacing: 14,
+                    runSpacing: 8,
+                    children: [
+                      SizedBox(
+                        width: width,
+                        child: OutlinedButton(
+                          key: const ValueKey('tutorial-skip-button'),
+                          onPressed: () => Navigator.of(context).pop(false),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: const BorderSide(color: Colors.white38),
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                          ),
+                          child: const Text('ŞİMDİLİK GEÇ'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: width,
+                        child: FilledButton.icon(
+                          key: const ValueKey('tutorial-start-button'),
+                          onPressed: () => Navigator.of(context).pop(true),
+                          style: FilledButton.styleFrom(
+                            foregroundColor: const Color(0xFF2D1C08),
+                            backgroundColor: const Color(0xFFF0CC5A),
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                          ),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text(
+                            'EVET, GÖSTER',
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ],
           ),
-        ],
+        ),
       ),
     ),
   );
@@ -128,15 +141,15 @@ class InGameTutorialOverlay extends StatelessWidget {
     ),
     _VisualTutorialStep(
       title: '2. SERİYİ ELLE DİZ',
-      description: 'Sağda ayrı duran sarı 3 taşını tutup sarı 1-2 taşlarının yanına sürükle. Böylece 1-2-3 serisini tamamla.',
+      description: 'Vurgulanan sarı 3 taşını tutup sarı 1-2 taşlarının yanına sürükle. Böylece 1-2-3 serisini tamamla.',
       icon: Icons.view_week_rounded,
       accent: Color(0xFFF0C64E),
       target: _TutorialTarget.rackArrange,
     ),
     _VisualTutorialStep(
       title: '3. ELİNİ AÇ',
-      description: 'TOPLAM en az 101 olduğunda SERİ AÇ düğmesine bas.',
-      emphasis: 'TOPLAM ≥ 101',
+      description: 'SERİ puanın en az 101 olduğunda SERİ AÇ düğmesine bas.',
+      emphasis: 'SERİ ≥ 101',
       icon: Icons.grid_view_rounded,
       accent: Color(0xFFD48AF4),
       target: _TutorialTarget.openButtons,
@@ -165,7 +178,10 @@ class InGameTutorialOverlay extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, box) {
           final (startKey, endKey) = _targetKeys(current.target);
-          final cardWidth = min(460.0, box.maxWidth * 0.42);
+          final cardWidth = min(
+            460.0,
+            max(230.0, box.maxWidth * 0.42),
+          ).clamp(0.0, box.maxWidth - 20);
           final cardLeft = switch (current.target) {
             _TutorialTarget.deck ||
             _TutorialTarget.discardButton => box.maxWidth * 0.015,
@@ -192,7 +208,10 @@ class InGameTutorialOverlay extends StatelessWidget {
                     ),
                     Positioned(
                       top: 6,
-                      left: cardLeft,
+                      left: cardLeft.clamp(
+                        10.0,
+                        max(10.0, box.maxWidth - cardWidth - 10),
+                      ),
                       child: _InstructionCard(
                         step: step,
                         totalSteps: _steps.length,
@@ -299,6 +318,16 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _TutorialFingerGuide oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.size != widget.size ||
+        oldWidget.startKey != widget.startKey ||
+        oldWidget.endKey != widget.endKey) {
+      _scheduleAnchorLookup();
+    }
+  }
+
   Rect? _rectForKey(Key key) {
     final overlayBox = widget.overlayContext.findRenderObject();
     if (overlayBox is! RenderBox || !overlayBox.hasSize) return null;
@@ -321,8 +350,12 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
     search(root);
     final targetBox = match?.findRenderObject();
     if (targetBox is! RenderBox || !targetBox.hasSize) return null;
-    final globalTopLeft = targetBox.localToGlobal(Offset.zero);
-    return overlayBox.globalToLocal(globalTopLeft) & targetBox.size;
+    return Rect.fromPoints(
+      overlayBox.globalToLocal(targetBox.localToGlobal(Offset.zero)),
+      overlayBox.globalToLocal(
+        targetBox.localToGlobal(targetBox.size.bottomRight(Offset.zero)),
+      ),
+    );
   }
 
   void _scheduleAnchorLookup() {
@@ -411,7 +444,44 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
             ),
           ),
         );
-        if (!opening) return finger;
+        if (!opening) {
+          return Positioned.fill(
+            child: Stack(
+              children: [
+                if (widget.target == _TutorialTarget.rackArrange ||
+                    widget.target == _TutorialTarget.processDrag)
+                  Positioned.fromRect(
+                    rect:
+                        (widget.target == _TutorialTarget.rackArrange
+                                ? _resolvedStartRect!
+                                : _resolvedEndRect!)
+                            .inflate(4),
+                    child: DecoratedBox(
+                      key: ValueKey(
+                        widget.target == _TutorialTarget.rackArrange
+                            ? 'tutorial-arrange-highlight'
+                            : 'tutorial-process-target-highlight',
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: widget.color, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: widget.color.withValues(
+                              alpha: .25 + pulse * .2,
+                            ),
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                finger,
+              ],
+            ),
+          );
+        }
         return Positioned.fill(
           child: Stack(
             children: [
@@ -485,12 +555,17 @@ class _InstructionCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                data.title,
-                style: TextStyle(
-                  color: data.accent,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  data.title,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: data.accent,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
               if (data.emphasis != null) ...[
@@ -562,6 +637,66 @@ class HomeFeatureTourDialog extends StatelessWidget {
   const HomeFeatureTourDialog({super.key, required this.daily});
 
   @override
+  Widget build(BuildContext context) => _AnchoredHomeFeatureTour(daily: daily);
+}
+
+class _AnchoredHomeFeatureTour extends StatefulWidget {
+  const _AnchoredHomeFeatureTour({required this.daily});
+  final bool daily;
+  @override
+  State<_AnchoredHomeFeatureTour> createState() =>
+      _HomeFeatureTourDialogState();
+}
+
+class _HomeFeatureTourDialogState extends State<_AnchoredHomeFeatureTour> {
+  Rect? _target;
+  bool _pending = false;
+  bool get daily => widget.daily;
+
+  void _resolveTarget(BuildContext overlayContext) {
+    if (_pending) return;
+    _pending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pending = false;
+      if (!mounted || !overlayContext.mounted) return;
+      Element root = overlayContext as Element;
+      overlayContext.visitAncestorElements((element) {
+        root = element;
+        return true;
+      });
+      Element? found;
+      final key = ValueKey(
+        daily ? 'daily-reward-button' : 'home-missions-button',
+      );
+      void visit(Element element) {
+        if (found != null) return;
+        if (element.widget.key == key) {
+          found = element;
+          return;
+        }
+        element.visitChildren(visit);
+      }
+
+      visit(root);
+      final target = found?.findRenderObject();
+      final overlay = overlayContext.findRenderObject();
+      if (target is! RenderBox ||
+          overlay is! RenderBox ||
+          !target.hasSize ||
+          !overlay.hasSize) {
+        return;
+      }
+      final rect = Rect.fromPoints(
+        overlay.globalToLocal(target.localToGlobal(Offset.zero)),
+        overlay.globalToLocal(
+          target.localToGlobal(target.size.bottomRight(Offset.zero)),
+        ),
+      );
+      if (_target != rect) setState(() => _target = rect);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final accent = daily ? const Color(0xFFF0CC5A) : const Color(0xFF55C96A);
     return Material(
@@ -570,25 +705,15 @@ class HomeFeatureTourDialog extends StatelessWidget {
       child: SafeArea(
         child: LayoutBuilder(
           builder: (context, box) {
-            final target = daily
-                ? Rect.fromLTWH(
-                    box.maxWidth * 0.012,
-                    box.maxHeight * 0.22,
-                    box.maxWidth * 0.105,
-                    box.maxHeight * 0.18,
-                  )
-                : Rect.fromLTWH(
-                    box.maxWidth * 0.50,
-                    box.maxHeight * 0.26,
-                    box.maxWidth * 0.22,
-                    box.maxHeight * 0.14,
-                  );
+            _resolveTarget(context);
+            final target = _target ?? Rect.zero;
             return Stack(
               children: [
                 Positioned.fromRect(
                   rect: target,
                   child: IgnorePointer(
                     child: Container(
+                      key: const ValueKey('home-feature-target'),
                       decoration: BoxDecoration(
                         color: accent.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(18),
@@ -631,60 +756,64 @@ class HomeFeatureTourDialog extends StatelessWidget {
                         BoxShadow(color: Colors.black87, blurRadius: 26),
                       ],
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          daily
-                              ? Icons.card_giftcard_rounded
-                              : Icons.task_alt_rounded,
-                          color: accent,
-                          size: 48,
-                        ),
-                        const SizedBox(height: 7),
-                        Text(
-                          daily ? 'GÜNLÜK ÖDÜL' : 'GÖREVLER',
-                          style: TextStyle(
-                            color: accent,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          daily
-                              ? 'Okla gösterilen hediye düğmesi günlük ödül alanıdır. Şimdi paneli açıp ilk ödülünü birlikte alalım.'
-                              : 'Okla gösterilen GÖREVLER düğmesinden günlük hedeflerini ve ilerlemeni takip edebilirsin.',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            height: 1.35,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        FilledButton.icon(
-                          key: const ValueKey('home-feature-next'),
-                          onPressed: () => Navigator.of(context).pop(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
                             daily
-                                ? HomeFeatureTourAction.openDailyReward
-                                : HomeFeatureTourAction.openMissions,
-                          ),
-                          style: FilledButton.styleFrom(
-                            foregroundColor: const Color(0xFF2D1C08),
-                            backgroundColor: accent,
-                          ),
-                          icon: Icon(
-                            daily
-                                ? Icons.open_in_new_rounded
+                                ? Icons.card_giftcard_rounded
                                 : Icons.task_alt_rounded,
+                            color: accent,
+                            size: 48,
                           ),
-                          label: Text(
-                            daily ? 'PANELİ AÇ' : 'GÖREVLERİ AÇ',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          const SizedBox(height: 7),
+                          Text(
+                            daily ? 'GÜNLÜK ÖDÜL' : 'GÖREVLER',
+                            style: TextStyle(
+                              color: accent,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 6),
+                          Text(
+                            daily
+                                ? 'Okla gösterilen hediye düğmesi günlük ödül alanıdır. Şimdi paneli açıp ilk ödülünü birlikte alalım.'
+                                : 'Okla gösterilen GÖREVLER düğmesinden günlük hedeflerini ve ilerlemeni takip edebilirsin.',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          FilledButton.icon(
+                            key: const ValueKey('home-feature-next'),
+                            onPressed: () => Navigator.of(context).pop(
+                              daily
+                                  ? HomeFeatureTourAction.openDailyReward
+                                  : HomeFeatureTourAction.openMissions,
+                            ),
+                            style: FilledButton.styleFrom(
+                              foregroundColor: const Color(0xFF2D1C08),
+                              backgroundColor: accent,
+                            ),
+                            icon: Icon(
+                              daily
+                                  ? Icons.open_in_new_rounded
+                                  : Icons.task_alt_rounded,
+                            ),
+                            label: Text(
+                              daily ? 'PANELİ AÇ' : 'GÖREVLERİ AÇ',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),

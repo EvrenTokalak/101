@@ -22,7 +22,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
     }
 
-    expect(find.text('ÖĞRETİCİYİ GÖRMEK İSTER MİSİN?'), findsOneWidget);
+    expect(find.text('ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('tutorial-skip-button')));
     await tester.pump();

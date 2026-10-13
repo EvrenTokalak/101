@@ -24,6 +24,7 @@ void main() {
       Size(768, 1024),
       Size(568, 320),
       Size(320, 568),
+      Size(320, 360),
       Size(390, 844),
     ]) {
       await tester.binding.setSurfaceSize(size);
@@ -32,7 +33,22 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
       expect(find.text('GÜNLÜK LİG'), findsOneWidget);
       expect(find.text('20 YARIŞMACI'), findsOneWidget);
-      expect(find.text('Sıralama ilk elden sonra oluşur'), findsOneWidget);
+      expect(find.text('İlk elini oyna, sıralamaya katıl'), findsOneWidget);
+      expect(find.text('LİG BİTİMİNE'), findsOneWidget);
+      expect(find.text('YENİLENMEYE'), findsNothing);
+      expect(find.text('İlk 3’e 3.000 · 2.000 · 1.000 altın'), findsOneWidget);
+      expect(find.byKey(const ValueKey('league-scroll-hint')), findsOneWidget);
+      expect(find.text('20 yarışmacı · Kaydır'), findsNothing);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('league-penalty-0')))
+            .data,
+        '—',
+      );
+      expect(
+        find.text('Oynadığın ilk 20 el günlük ligine sayılır'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Beginner'), findsNothing);
       expect(find.textContaining('BEGINNER'), findsNothing);
       expect(find.text('GÜNLÜK ÖDÜLLER'), findsNothing);
@@ -46,6 +62,12 @@ void main() {
         20,
       );
       expect(find.byKey(const ValueKey('league-entry-0')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('league-scroll-hint')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('league-scroll-hint')), findsNothing);
+      list.controller!.jumpTo(0);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('league-scroll-hint')), findsOneWidget);
       await tester.ensureVisible(find.byKey(const ValueKey('league-play')));
       await tester.pump();
       expect(
@@ -53,8 +75,8 @@ void main() {
         findsOneWidget,
       );
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
-      await tester.pumpWidget(const SizedBox.shrink());
     }
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('home league action opens standings and shows saved progress', (

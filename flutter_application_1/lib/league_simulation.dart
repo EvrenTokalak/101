@@ -230,6 +230,7 @@ Future<List<int>> _nativeLeagueRound(int seed, LeagueSeating? seating) =>
 Future<List<int>> playLeagueTables({
   required int seed,
   bool Function()? isActive,
+  bool Function()? shouldPause,
   bool useIsolate = true,
   LeagueSeating? seating,
 }) async {
@@ -247,6 +248,13 @@ Future<List<int>> playLeagueTables({
   while (tables.any((table) => !table.finished)) {
     if (isActive != null && !isActive()) return [];
     for (final table in tables) {
+      // Browser AI shares the UI thread. Leave input and visible animations
+      // time to finish before advancing another independent table turn.
+      while (shouldPause?.call() == true) {
+        if (isActive != null && !isActive()) return [];
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+      if (isActive != null && !isActive()) return [];
       table.step();
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }

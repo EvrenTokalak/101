@@ -39,6 +39,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('PLAY NOW'), findsOneWidget);
+    expect(find.text('Beginner · Level 0'), findsOneWidget);
+    expect(find.textContaining('League ·'), findsOneWidget);
     expect(find.text('GAME\nMODES'), findsOneWidget);
   });
 
@@ -66,6 +68,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('JETZT SPIELEN'), findsOneWidget);
+    expect(find.text('Anfänger · Stufe 0'), findsOneWidget);
+    expect(find.textContaining('Liga ·'), findsOneWidget);
     expect(find.text('SPIEL\nMODI'), findsOneWidget);
   });
 
@@ -82,7 +86,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
 
     expect(find.byKey(const ValueKey('main-xp-chip')), findsOneWidget);
-    expect(find.textContaining('SV. 0'), findsOneWidget);
+    expect(find.text('Başlangıç · Seviye 0'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pump();
@@ -96,6 +100,9 @@ void main() {
     expect(find.text('Rakip Resimleri'), findsOneWidget);
     expect(find.text('Otomatik Istaka Dizimi'), findsOneWidget);
     expect(find.text('Hamle İpuçları'), findsOneWidget);
+    expect(find.text('Ses ve titreşim'), findsOneWidget);
+    expect(find.text('Oynanış'), findsOneWidget);
+    expect(find.text('Görünüm'), findsOneWidget);
     expect(find.text('MÜZİK'), findsNothing);
     expect(find.text('KENAR TAŞLARI'), findsNothing);
     expect(find.text('PERFORMANS'), findsNothing);
@@ -126,6 +133,11 @@ void main() {
     expect(find.text('GELEN KUTUSU'), findsOneWidget);
     expect(find.text('Günlük ödülün hazır'), findsOneWidget);
     expect(find.text('Lig sıralamanı kontrol et'), findsOneWidget);
+    expect(find.text('YENİ'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('inbox-unread-dot-Günlük ödülün hazır')),
+      findsOneWidget,
+    );
     expect(find.textContaining('20.00'), findsNothing);
     expect(find.textContaining('Ödülünü almayı unutma'), findsNothing);
     expect(find.textContaining('masalarında bol şans'), findsNothing);
@@ -154,11 +166,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('PROFİLİM'), findsOneWidget);
     expect(find.byKey(const ValueKey('profile-name-field')), findsOneWidget);
-    expect(find.textContaining('Seviye 0'), findsNothing);
+    expect(find.text('Başlangıç · Seviye 0'), findsOneWidget);
     expect(find.text('Kazanma Oranı'), findsOneWidget);
     final profileDialog = find.byKey(const ValueKey('feature-dialog-PROFİLİM'));
     final profileDialogSize = tester.getSize(profileDialog);
     expect(profileDialogSize, settingsDialogSize);
+    final profileClose = find.byKey(const ValueKey('profile-close-button'));
+    expect(profileClose.hitTestable(), findsOneWidget);
+    expect(tester.getSize(profileClose).width, greaterThanOrEqualTo(40));
     expect(
       find.descendant(
         of: profileDialog,

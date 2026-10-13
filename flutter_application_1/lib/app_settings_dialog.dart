@@ -27,6 +27,22 @@ Size appSettingsPanelSize(BoxConstraints bounds) {
   return Size(height * 1671 / 941, height);
 }
 
+Widget appSettingsTransition(
+  BuildContext context,
+  Animation<double> animation,
+  Animation<double> secondaryAnimation,
+  Widget child,
+) => FadeTransition(
+  opacity: animation,
+  child: ScaleTransition(
+    scale: Tween<double>(
+      begin: .98,
+      end: 1,
+    ).chain(CurveTween(curve: Curves.easeOutCubic)).animate(animation),
+    child: RepaintBoundary(child: child),
+  ),
+);
+
 /// Decode the frame before a settings popup is requested, using the same
 /// provider as the visible artwork so no second decode is necessary.
 class SettingsArtworkWarmup extends StatefulWidget {
@@ -172,19 +188,21 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                         key: const ValueKey('settings-panel-ready'),
                         children: [
                           Positioned.fill(
-                            child: ClipPath(
-                              clipper: const _SettingsArtworkClipper(),
-                              child: Image(
-                                image: appSettingsArtwork,
-                                key: const ValueKey('settings-panel-artwork'),
-                                fit: BoxFit.fill,
-                                excludeFromSemantics: true,
-                                frameBuilder:
-                                    (_, artwork, frame, synchronous) =>
-                                        synchronous || frame != null
-                                        ? artwork
-                                        : _artworkFallback(),
-                                errorBuilder: (_, _, _) => _artworkFallback(),
+                            child: RepaintBoundary(
+                              child: ClipPath(
+                                clipper: const _SettingsArtworkClipper(),
+                                child: Image(
+                                  image: appSettingsArtwork,
+                                  key: const ValueKey('settings-panel-artwork'),
+                                  fit: BoxFit.fill,
+                                  excludeFromSemantics: true,
+                                  frameBuilder:
+                                      (_, artwork, frame, synchronous) =>
+                                          synchronous || frame != null
+                                          ? artwork
+                                          : _artworkFallback(),
+                                  errorBuilder: (_, _, _) => _artworkFallback(),
+                                ),
                               ),
                             ),
                           ),
@@ -233,9 +251,6 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                             bottom: 48,
                             child: LayoutBuilder(
                               builder: (context, inner) {
-                                const columns = 2;
-                                final itemWidth =
-                                    (inner.maxWidth - 16) / columns;
                                 final options = <Widget>[
                                   _toggle(
                                     'Ses Efektleri',
@@ -313,30 +328,61 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                                 return Column(
                                   children: [
                                     Expanded(
-                                      child: LayoutBuilder(
-                                        builder: (_, gridBounds) {
-                                          final rows =
-                                              (options.length / columns).ceil();
-                                          final cellHeight =
-                                              (gridBounds.maxHeight -
-                                                  (rows - 1) * 8) /
-                                              rows;
-                                          return Wrap(
-                                            spacing: 16,
-                                            runSpacing: 8,
-                                            children: [
-                                              for (final option in options)
-                                                SizedBox(
-                                                  width: itemWidth,
-                                                  height: cellHeight,
-                                                  child: option,
-                                                ),
-                                            ],
-                                          );
-                                        },
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Expanded(
+                                            child: _settingsGroup(
+                                              _text(
+                                                'Ses ve titreşim',
+                                                'Sound and vibration',
+                                                de: 'Ton und Vibration',
+                                              ),
+                                              [
+                                                options[0],
+                                                options[4],
+                                                options[2],
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          Expanded(
+                                            child: _settingsGroup(
+                                              _text(
+                                                'Oynanış',
+                                                'Gameplay',
+                                                de: 'Spielablauf',
+                                              ),
+                                              [
+                                                options[3],
+                                                options[5],
+                                                options[1],
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    const SizedBox(height: 6),
+                                    const SizedBox(height: 8),
+                                    _groupHeading(
+                                      _text(
+                                        'Görünüm',
+                                        'Appearance',
+                                        de: 'Darstellung',
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      height: 48,
+                                      child: Row(
+                                        children: [
+                                          Expanded(child: options[6]),
+                                          const SizedBox(width: 16),
+                                          Expanded(child: options[7]),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
                                     _fontScaleCard(),
                                     const SizedBox(height: 4),
                                     _footer(),
@@ -364,6 +410,32 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
     await Future<void>.delayed(const Duration(milliseconds: 180));
     if (mounted) _closeThen(widget.onTutorial!);
   }
+
+  Widget _groupHeading(String title) => SizedBox(
+    height: 22,
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: _goldLight,
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    ),
+  );
+
+  Widget _settingsGroup(String title, List<Widget> options) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _groupHeading(title),
+      for (var i = 0; i < options.length; i++) ...[
+        if (i > 0) const SizedBox(height: 6),
+        Expanded(child: options[i]),
+      ],
+    ],
+  );
 
   Widget _artworkFallback() => Stack(
     key: const ValueKey('settings-panel-fallback'),

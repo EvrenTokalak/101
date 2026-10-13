@@ -68,10 +68,11 @@ void main() {
           .take(8)
           .map((card) => tester.getRect(find.byWidget(card.widget)))
           .toList();
-      for (var i = 0; i < 8; i += 2) {
-        expect(rowRects[i].center.dy, closeTo(rowRects[i + 1].center.dy, 0.1));
-        expect(rowRects[i].right, lessThan(rowRects[i + 1].left));
+      for (var i = 0; i < 3; i++) {
+        expect(rowRects[i].center.dy, closeTo(rowRects[i + 3].center.dy, 0.1));
+        expect(rowRects[i].right, lessThan(rowRects[i + 3].left));
       }
+      expect(rowRects[6].center.dy, closeTo(rowRects[7].center.dy, 0.1));
       final soundSwitch = find
           .byKey(const ValueKey('settings-switch-indicator'))
           .first;

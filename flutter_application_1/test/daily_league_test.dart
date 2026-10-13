@@ -381,6 +381,31 @@ void main() {
           .toList();
       expect(await playLeagueTables(seed: 77), expected);
       expect(await playLeagueTables(seed: 77, useIsolate: false), expected);
+      var paused = true;
+      var finishedWhilePaused = false;
+      final pausedGame =
+          playLeagueTables(
+            seed: 77,
+            useIsolate: false,
+            shouldPause: () => paused,
+          ).then((scores) {
+            finishedWhilePaused = true;
+            return scores;
+          });
+      await Future<void>.delayed(const Duration(milliseconds: 35));
+      expect(finishedWhilePaused, isFalse);
+      paused = false;
+      expect(await pausedGame, expected);
+      var active = true;
+      final cancelledGame = playLeagueTables(
+        seed: 77,
+        useIsolate: false,
+        shouldPause: () => true,
+        isActive: () => active,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      active = false;
+      expect(await cancelledGame, isEmpty);
       expect(await playLeagueTables(seed: 77, isActive: () => false), isEmpty);
     },
   );

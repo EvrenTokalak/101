@@ -62,7 +62,8 @@ void main() {
         );
         expect(tester.widget<Text>(label).style?.fontSize, 22);
         expect(tester.widget<Text>(value).style?.fontSize, 36);
-        // Only the shared responsive canvas scales text, never individual cards.
+        // The shared canvas sets the normal size; large values can also fit
+        // vertically when the header uses more space at maximum text scale.
         final labelFitting = find
             .ancestor(of: label, matching: find.byType(FittedBox))
             .evaluate()
@@ -74,7 +75,13 @@ void main() {
             .map((element) => element.widget)
             .toSet();
         expect(labelFitting.length, 1);
-        expect(valueFitting, labelFitting);
+        expect(valueFitting.containsAll(labelFitting), isTrue);
+        expect(
+          valueFitting.where(
+            (widget) => (widget as FittedBox).fit == BoxFit.scaleDown,
+          ),
+          hasLength(1),
+        );
       }
       final rects = <Rect>[];
       for (final entry in [

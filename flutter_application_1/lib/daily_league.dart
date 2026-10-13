@@ -180,8 +180,11 @@ class DailyLeagueController extends ChangeNotifier {
   Future<void> load() => _loading ??= _load();
 
   @visibleForTesting
-  Future<void> resetForTesting() async {
-    await _writes;
+  Future<void> resetForTesting({bool waitForWrites = true}) async {
+    if (waitForWrites) await _writes;
+    // An already-awaited widget-test write can belong to a finished FakeAsync
+    // zone. Start subsequent test writes in the current zone instead.
+    _writes = Future.value();
     _loading = null;
     _lastRankNoticeRound = 0;
     lastRoundUpdate = null;

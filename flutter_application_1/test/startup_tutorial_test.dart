@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart' show GameScreen;
 import 'package:flutter_application_1/main.dart' as app;
+import 'package:flutter_application_1/startup_tutorial.dart';
 
 void main() {
   Future<void> expectFingerVisits(
@@ -113,9 +114,9 @@ void main() {
           .onTap,
       isNotNull,
     );
-    expect(find.text('TOPLAM ≥ 101'), findsOneWidget);
+    expect(find.text('SERİ ≥ 101'), findsOneWidget);
     expect(
-      find.text('TOPLAM en az 101 olduğunda SERİ AÇ düğmesine bas.'),
+      find.text('SERİ puanın en az 101 olduğunda SERİ AÇ düğmesine bas.'),
       findsOneWidget,
     );
 
@@ -157,15 +158,30 @@ void main() {
       matching: find.byWidgetPredicate((widget) => widget is Draggable),
     );
     final redSevenCenter = tester.getCenter(redSeven);
-    final processTarget =
-        tester.getCenter(find.byKey(const ValueKey('run-meld-0'))) -
-        tester.widget<Draggable>(redSeven).feedbackOffset;
+    final processTarget = tester.getCenter(
+      find.byKey(const ValueKey('run-meld-0')),
+    );
     await expectFingerVisits(
       tester,
       find.byKey(const ValueKey('rack-slot-22')),
       find.byKey(const ValueKey('run-meld-0')),
     );
-    await tester.dragFrom(redSevenCenter, processTarget - redSevenCenter);
+    await tester.dragFrom(redSevenCenter, const Offset(-500, -400));
+    await tester.pump();
+    expect(
+      find.text(
+        'Kırmızı 7’yi parlayan kırmızı 4–5–6 perinin üzerine veya sonundaki siluete bırak.',
+      ),
+      findsOneWidget,
+    );
+    final processingGesture = await tester.startGesture(redSevenCenter);
+    await processingGesture.moveBy(const Offset(0, -20));
+    await tester.pump();
+    await processingGesture.moveTo(processTarget);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('meld-drop-silhouette')), findsOneWidget);
+    expect(find.byKey(const ValueKey('meld-drop-target-glow')), findsOneWidget);
+    await processingGesture.up();
     await tester.pump();
     expect(
       find.byWidgetPredicate(
@@ -298,5 +314,75 @@ void main() {
       find.byKey(const ValueKey('in-game-tutorial-overlay')),
       findsOneWidget,
     );
+  });
+  testWidgets(
+    'tutorial prompt fits narrow and short screens without broken title words',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      for (final size in [
+        const Size(320, 568),
+        const Size(568, 320),
+        const Size(320, 360),
+      ]) {
+        await tester.binding.setSurfaceSize(size);
+        await tester.pumpWidget(
+          const MaterialApp(home: Scaffold(body: TutorialPromptDialog())),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(tester.takeException(), isNull);
+        expect(find.text('ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?'), findsOneWidget);
+        expect(find.byType(SingleChildScrollView), findsNothing);
+        expect(find.textContaining('Kontrollü bir eğitim'), findsNothing);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('tutorial-start-button')),
+        );
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('tutorial-start-button')).hitTestable(),
+          findsOneWidget,
+        );
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('missions tour follows actual button after resizing', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const app.OkeyApp(home: app.MainMenuScreen(showTutorialPrompt: false)),
+    );
+    await tester.pump(const Duration(milliseconds: 700));
+    final missions = find.byKey(const ValueKey('home-missions-button'));
+    expect(missions, findsOneWidget);
+    showDialog<void>(
+      context: tester.element(missions),
+      builder: (_) => const HomeFeatureTourDialog(daily: false),
+    );
+    for (final size in [
+      const Size(1280, 720),
+      const Size(390, 844),
+      const Size(568, 320),
+    ]) {
+      await tester.binding.setSurfaceSize(size);
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      final box = tester.renderObject<RenderBox>(missions);
+      final target = MatrixUtils.transformRect(
+        box.getTransformTo(null),
+        Offset.zero & box.size,
+      );
+      final highlight = tester.getRect(
+        find.byKey(const ValueKey('home-feature-target')),
+      );
+      expect(highlight.left, closeTo(target.left, 1));
+      expect(highlight.top, closeTo(target.top, 1));
+      expect(highlight.width, closeTo(target.width, 1));
+      expect(highlight.height, closeTo(target.height, 1));
+      expect(tester.takeException(), isNull);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }
