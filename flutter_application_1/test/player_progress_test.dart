@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter_application_1/game_launch.dart';
 import 'package:flutter_application_1/player_progress.dart';
@@ -18,6 +19,43 @@ void main() {
     expect(freshProgress.title, 'Beginner');
     expect(freshProgress.xpForNextLevel, 30);
     expect(freshProgress.coins, 25600);
+  });
+  test(
+    'legacy avatar indices preserve surviving images and replace deleted ones',
+    () async {
+      final preferences = SharedPreferencesAsync();
+      await preferences.clear();
+      await preferences.setInt('profile.avatar_index', 27);
+      await progress.load();
+      expect(
+        progress.playerAvatarAsset,
+        'görseller/pp/mm_av3_yaban_domuzu.png',
+      );
+      expect(progress.playerAvatarIndex, 23);
+      await preferences.clear();
+      await preferences.setInt('profile.avatar_index', 26);
+      final reopened = PlayerProgressController();
+      await reopened.load();
+      expect(reopened.playerAvatarAsset, playerAvatarAssets.first);
+    },
+  );
+  test('avatar file identity takes priority over old list position', () async {
+    final preferences = SharedPreferencesAsync();
+    await preferences.clear();
+    await preferences.setInt('profile.avatar_index', 0);
+    await preferences.setString(
+      'profile.avatar_asset',
+      'görseller/pp/mm_av1_boga.png',
+    );
+    await progress.load();
+    expect(progress.playerAvatarIndex, 21);
+    await preferences.setString(
+      'profile.avatar_asset',
+      'görseller/pp/deleted.png',
+    );
+    final reopened = PlayerProgressController();
+    await reopened.load();
+    expect(reopened.playerAvatarAsset, playerAvatarAssets.first);
   });
 
   test('profil adı düzenlenir ve geçersiz değerler reddedilir', () {
@@ -119,9 +157,51 @@ void main() {
       won: true,
       openedHand: false,
       finishedHand: true,
+      roundNumber: 3,
+      roomMatchWon: true,
     );
 
-    expect(reward.coins, 2000);
-    expect(progress.coins, 2500);
+    expect(reward.coins, 1000);
+    expect(progress.coins, 1500);
+  });
+
+  test('oda ara el galibiyeti para ödemez, masa kaybında yatırım kalır', () {
+    progress.reset(coins: 4000);
+    const room = GameLaunchConfig.room(
+      id: 'room-0',
+      label: 'Başlangıç',
+      entryFee: 2000,
+    );
+    expect(progress.trySpendCoins(2000), isTrue);
+    for (final matchWon in <bool?>[null, false]) {
+      final reward = progress.recordCompletedGame(
+        config: room,
+        won: true,
+        openedHand: true,
+        finishedHand: true,
+        roomMatchWon: matchWon,
+      );
+      expect(reward.coins, 0);
+      expect(progress.coins, 2000);
+    }
+  });
+
+  test('oda toplam galibiyeti son el kaybedilse de yatırımı iki kat öder', () {
+    progress.reset(coins: 4000);
+    expect(progress.trySpendCoins(2000), isTrue);
+    final reward = progress.recordCompletedGame(
+      config: const GameLaunchConfig.room(
+        id: 'room-0',
+        label: 'Başlangıç',
+        entryFee: 2000,
+      ),
+      won: false,
+      openedHand: true,
+      finishedHand: false,
+      roundNumber: 3,
+      roomMatchWon: true,
+    );
+    expect(reward.coins, 4000);
+    expect(progress.coins, 6000);
   });
 }

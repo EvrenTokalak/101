@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_1/game_launch.dart';
 import 'package:flutter_application_1/main.dart';
 import 'package:flutter_application_1/player_progress.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_application_1/progress_notifications.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() => progressNotifications.load());
+  setUp(() async => SharedPreferencesAsync().clear());
 
   void completeGame(PlayerProgressController player, {bool won = false}) {
     player.recordCompletedGame(

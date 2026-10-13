@@ -5,8 +5,9 @@ import 'package:flutter_application_1/daily_login_rewards.dart';
 import 'package:flutter_application_1/player_progress.dart';
 
 void main() {
-  setUp(() {
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    await SharedPreferencesAsync().clear();
     playerProgress.reset(coins: 1000);
   });
 
@@ -33,10 +34,11 @@ void main() {
           missedDay.day,
         ).millisecondsSinceEpoch ~/
         Duration.millisecondsPerDay;
-    SharedPreferences.setMockInitialValues({
-      'daily_login.last_claim_day': missedDayNumber,
-      'daily_login.streak': 4,
-    });
+    await SharedPreferencesAsync().setInt(
+      'daily_login.last_claim_day',
+      missedDayNumber,
+    );
+    await SharedPreferencesAsync().setInt('daily_login.streak', 4);
     final controller = DailyLoginController();
 
     await controller.load();

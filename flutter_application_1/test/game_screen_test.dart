@@ -5,9 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
 import 'package:flutter_application_1/player_progress.dart';
+import 'package:flutter_application_1/daily_league.dart';
 
 void main() {
-  setUp(() {
+  setUp(() async {
+    await dailyLeague.load();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(
@@ -847,8 +849,14 @@ void main() {
       indicatorRect.width / indicatorRect.height,
       closeTo(drawColumn.dragTileWidth / drawColumn.dragTileHeight, .001),
     );
-    expect(indicatorRect.width, lessThanOrEqualTo(drawColumn.dragTileWidth + .01));
-    expect(indicatorRect.height, lessThanOrEqualTo(drawColumn.dragTileHeight + .01));
+    expect(
+      indicatorRect.width,
+      lessThanOrEqualTo(drawColumn.dragTileWidth + .01),
+    );
+    expect(
+      indicatorRect.height,
+      lessThanOrEqualTo(drawColumn.dragTileHeight + .01),
+    );
     expect(drawnTileRect.bottom, closeTo(indicatorRect.bottom, 0.01));
     final deckRect = tester.getRect(deckSlot);
     expect(deckRect.inflate(0.01).contains(drawnTileRect.topLeft), isTrue);
@@ -1418,7 +1426,11 @@ void main() {
       2,
       reason: 'Discard should finish after the 2–3 second pause.',
     );
-    expect(firstBot.hand.length, 21);
+    final openedTileCount = (table().melds as List<Meld>).fold<int>(
+      0,
+      (sum, meld) => sum + meld.tiles.length,
+    );
+    expect(firstBot.hand.length + openedTileCount, 21);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 4));
     expect(tester.takeException(), isNull);
@@ -1468,6 +1480,22 @@ void main() {
         await tester.pump(const Duration(milliseconds: 650));
         expect(rack.length, openingTurnFinish ? 1 : 2);
         if (!openingTurnFinish) {
+          // Keep this animation fixture below 101 while the player waits a turn;
+          // league rivals may now legally open on their very first turn.
+          final dynamic fixtureTable = tester.widget(
+            find.byWidgetPredicate(
+              (w) => w.runtimeType.toString() == '_TableArea',
+            ),
+          );
+          for (final bot in fixtureTable.bots as List<BotPlayer>) {
+            bot.hand = [
+              for (final color in TileColor.values)
+                for (var number = 1; number <= 5; number++)
+                  Tile(id: id++, number: number, color: color),
+              Tile(id: id++, number: 1, color: TileColor.red),
+            ];
+            bot.tileCount = bot.hand.length;
+          }
           rack.first.selected = true;
           state.setState(() {});
           await tester.pump();
@@ -1492,6 +1520,11 @@ void main() {
           slots.fillRange(0, slots.length, null);
           slots[0] = rack.single.id;
         }
+        await tester.runAsync(() => dailyLeague.load());
+        final leagueRoundsBefore = dailyLeague.completedRounds;
+        final leaguePenaltyBefore = dailyLeague.standings
+            .firstWhere((e) => e.isPlayer)
+            .penalty;
         final completedBefore = playerProgress.gamesPlayed;
         rack.single.selected = true;
         state.setState(() {});
@@ -1588,6 +1621,21 @@ void main() {
         }
         expect(find.byType(GameEndDialog), findsOneWidget);
         expect(playerProgress.gamesPlayed, completedBefore + 1);
+        for (
+          var wait = 0;
+          wait < 50 && dailyLeague.completedRounds == leagueRoundsBefore;
+          wait++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 40)),
+          );
+          await tester.pump();
+        }
+        expect(dailyLeague.completedRounds, leagueRoundsBefore + 1);
+        expect(
+          dailyLeague.standings.firstWhere((e) => e.isPlayer).penalty,
+          leaguePenaltyBefore - 101,
+        );
         await tester.pump(const Duration(milliseconds: 900));
         expect(
           find.byKey(const ValueKey('round-end-tile-accent')),

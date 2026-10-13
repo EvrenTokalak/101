@@ -465,15 +465,23 @@ class _ModeCard extends StatelessWidget {
             children: [
               _ModeArtwork(mode: mode, selected: selected),
               const SizedBox(height: 7),
-              Text(
-                _localizedModeLabel(mode.id),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: selected ? Colors.white : OkeyColors.cream,
-                  fontSize: selected ? 31 : 28,
-                  fontWeight: FontWeight.w900,
-                  fontFamily: 'Georgia',
-                  letterSpacing: 0.7,
+              SizedBox(
+                height: 76,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    mode.id == 'classic-101'
+                        ? appText('KURALI SEN\nBELİRLE', 'SET YOUR\nRULES')
+                        : _localizedModeLabel(mode.id),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: selected ? Colors.white : OkeyColors.cream,
+                      fontSize: selected ? 31 : 28,
+                      fontWeight: FontWeight.w900,
+                      fontFamily: 'Georgia',
+                      letterSpacing: 0.7,
+                    ),
+                  ),
                 ),
               ),
             ],

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_language.dart';
+import 'avatar_picker.dart';
 import 'app_controls.dart';
 import 'app_settings_dialog.dart';
 import 'daily_login_rewards.dart';
@@ -1168,8 +1169,6 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       await _openDailyReward();
     } else if (selectedEntry!.startsWith('Lig')) {
       await _navigateToTournament();
-    } else if (selectedEntry!.startsWith('Hoş geldin')) {
-      await _openProfile();
     } else if (selectedEntry!.contains('masası açıldı')) {
       await _navigateToRoomSelect();
     } else if (selectedEntry!.startsWith('Görev tamamlandı')) {
@@ -2909,109 +2908,7 @@ class _ProfileSplitPanel extends StatelessWidget {
 
   Future<void> _showAvatarPicker(BuildContext context) => showDialog<void>(
     context: context,
-    builder: (pickerContext) {
-      final popupSize = appPopupSize(pickerContext);
-      return Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
-        child: Container(
-          key: const ValueKey('profile-avatar-picker'),
-          width: popupSize.width * 0.72,
-          height: popupSize.height * 0.52,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF174C36), Color(0xFF071F18)],
-            ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: OkeyColors.gold, width: 2),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black87,
-                blurRadius: 24,
-                offset: Offset(0, 10),
-              ),
-            ],
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.account_circle_rounded,
-                      color: OkeyColors.goldLight,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        appText('PROFİL FOTOĞRAFI', 'PROFILE PICTURE'),
-                        style: const TextStyle(
-                          color: OkeyColors.cream,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    AppCloseButton(
-                      onTap: () => Navigator.of(pickerContext).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                AnimatedBuilder(
-                  animation: playerProgress,
-                  builder: (context, _) => Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 10,
-                    runSpacing: 8,
-                    children: List.generate(playerAvatarAssets.length, (index) {
-                      final selected =
-                          index == playerProgress.playerAvatarIndex;
-                      return GestureDetector(
-                        key: ValueKey('profile-avatar-$index'),
-                        onTap: () {
-                          playerProgress.updatePlayerAvatar(index);
-                          Navigator.of(pickerContext).pop();
-                        },
-                        child: Container(
-                          width: 54,
-                          height: 54,
-                          padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: selected
-                                ? OkeyColors.goldLight.withValues(alpha: 0.18)
-                                : Colors.black26,
-                            border: Border.all(
-                              color: selected
-                                  ? OkeyColors.goldLight
-                                  : Colors.white24,
-                              width: selected ? 3 : 1,
-                            ),
-                          ),
-                          child: ClipOval(
-                            child: Image.asset(
-                              playerAvatarAssets[index],
-                              fit: BoxFit.cover,
-                              cacheWidth: 96,
-                              cacheHeight: 96,
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    },
+    builder: (_) => const AvatarPickerDialog(),
   );
 
   @override
@@ -3615,8 +3512,8 @@ class _FeatureDialog extends StatelessWidget {
     'OYUN MODLARI' => const [
       _FeatureEntry(
         Icons.looks_one_rounded,
-        'Klasik 101',
-        'Tekli oyun · Standart kurallar',
+        'Kuralı Sen Belirle',
+        'Kendi masan, kendi kuralların',
         null,
       ),
       _FeatureEntry(
@@ -3635,26 +3532,6 @@ class _FeatureDialog extends StatelessWidget {
         Icons.add_chart_rounded,
         'Katlamalı',
         'Risk ve ödülün giderek arttığı mod',
-        null,
-      ),
-    ],
-    'TURNUVALAR' => const [
-      _FeatureEntry(
-        Icons.nightlight_round,
-        'Akşam Kupası',
-        '20.00 · 64 oyuncu · 50.000 jeton',
-        '42/64',
-      ),
-      _FeatureEntry(
-        Icons.calendar_month_rounded,
-        'Hafta Sonu Ligi',
-        'Cumartesi 18.00 · Kayıtlar açık',
-        '18/32',
-      ),
-      _FeatureEntry(
-        Icons.leaderboard_rounded,
-        'Sezon Sıralaması',
-        'Şu anki sıran: 128',
         null,
       ),
     ],

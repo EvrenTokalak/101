@@ -12,6 +12,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'game_launch.dart';
 import 'daily_league.dart';
 import 'league_simulation.dart';
+import 'league_rank_popup.dart';
 import 'app_controls.dart';
 import 'app_language.dart';
 import 'app_settings_dialog.dart';
@@ -478,6 +479,14 @@ class BotPlayer {
   final String displayName;
   final BotDifficulty difficulty;
   final BotPersonality personality;
+  final int? leagueId;
+  String get avatarAsset => leagueId != null
+      ? rivalAvatarAsset(leagueId! - 1)
+      : rivalAvatarAsset(switch (name) {
+          'Oyuncu 2' => 0,
+          'Oyuncu 3' => 1,
+          _ => 2,
+        });
   int tileCount;
   int penalty;
   bool hasOpened;
@@ -491,6 +500,7 @@ class BotPlayer {
     String? displayName,
     this.difficulty = BotDifficulty.medium,
     this.personality = BotPersonality.aggressive,
+    this.leagueId,
     this.tileCount = 21,
     this.penalty = 0,
     this.hasOpened = false,
@@ -1067,6 +1077,12 @@ class _GameScreenState extends State<GameScreen> {
   String _playerOpenType = ''; // 'seri' | 'cift'
   int _totalPenalty = 0; // biriken ceza
   int _roundPlayerPenaltyStart = 0;
+  LeagueRoundTables? _leagueRoundTables;
+  Future<LeagueRoundUpdate?>? _leagueRoundUpdateFuture;
+  bool _startingNextRound = false;
+  LeagueRankNotice? _leagueRankNotice;
+  Timer? _leagueRankNoticeTimer;
+  bool _roomMatchSettled = false;
   final String _leagueSessionId = DateTime.now().microsecondsSinceEpoch
       .toString();
   int _elCount = 0; // kaçıncı el
@@ -1078,7 +1094,9 @@ class _GameScreenState extends State<GameScreen> {
       displayName: widget.launchConfig.entryPoint == GameEntryPoint.quickPlay
           ? leagueBotNames[0]
           : opponentNameSession.names[0],
-      difficulty: BotDifficulty.medium,
+      difficulty: widget.launchConfig.entryPoint == GameEntryPoint.quickPlay
+          ? LeagueBotStyle.forRival(0).difficulty
+          : BotDifficulty.medium,
       personality: BotPersonality.aggressive,
     ),
     BotPlayer(
@@ -1094,7 +1112,9 @@ class _GameScreenState extends State<GameScreen> {
       displayName: widget.launchConfig.entryPoint == GameEntryPoint.quickPlay
           ? leagueBotNames[2]
           : opponentNameSession.names[2],
-      difficulty: BotDifficulty.easy,
+      difficulty: widget.launchConfig.entryPoint == GameEntryPoint.quickPlay
+          ? LeagueBotStyle.forRival(2).difficulty
+          : BotDifficulty.easy,
       personality: BotPersonality.pairFocused,
     ),
   ];
@@ -1256,9 +1276,35 @@ class _GameScreenState extends State<GameScreen> {
     if (mounted && _turn == 0 && !_gameOverShown) _startTimedPlayerTurn();
   }
 
-  void _restartGameFromToolbar() {
+  Future<void> _restartGameFromToolbar({bool closeResult = false}) async {
+    if (_startingNextRound) return;
+    _startingNextRound = true;
+    await _leagueRoundUpdateFuture;
+    _startingNextRound = false;
+    if (!mounted) return;
+    if (widget.launchConfig.entryPoint == GameEntryPoint.room &&
+        !playerProgress.trySpendCoins(widget.launchConfig.entryFee ?? 0)) {
+      showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Yetersiz altın'),
+          content: Text(
+            'Yeni masa için ${formatGameNumber(widget.launchConfig.entryFee ?? 0)} altın gerekiyor.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Tamam'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (closeResult) Navigator.pop(context);
     _cancelTimedPlayerTurn();
     setState(() {
+      _roomMatchSettled = false;
       _totalPenalty = 0;
       _elCount = 0;
       for (final bot in _bots) {
@@ -1315,6 +1361,7 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   void dispose() {
+    _leagueRankNoticeTimer?.cancel();
     _dealTimer?.cancel();
     _cancelTimedPlayerTurn();
     _botThinkTimer?.cancel();
@@ -1349,6 +1396,55 @@ class _GameScreenState extends State<GameScreen> {
     final hadPreviousRound = _elCount > 0;
     _roundGeneration++;
     final currentRoundGeneration = _roundGeneration;
+    _leagueRankNoticeTimer?.cancel();
+    _leagueRankNotice = null;
+    if (widget.launchConfig.entryPoint == GameEntryPoint.quickPlay) {
+      _leagueRankNoticeTimer = Timer(const Duration(milliseconds: 450), () {
+        if (!mounted ||
+            currentRoundGeneration != _roundGeneration ||
+            _gameOverShown) {
+          return;
+        }
+        final notice = dailyLeague.takeRankNotice();
+        if (notice == null) return;
+        setState(() => _leagueRankNotice = notice);
+        _leagueRankNoticeTimer = Timer(const Duration(milliseconds: 3200), () {
+          if (mounted && currentRoundGeneration == _roundGeneration) {
+            setState(() => _leagueRankNotice = null);
+          }
+        });
+      });
+    }
+    _leagueRoundUpdateFuture = null;
+    final seating = LeagueSeating.forRound(dailyLeague.completedRounds);
+    if (widget.launchConfig.entryPoint == GameEntryPoint.quickPlay &&
+        dailyLeague.initialized &&
+        !dailyLeague.complete) {
+      final scores = {
+        for (final entry in dailyLeague.standings) entry.id: entry.penalty,
+      };
+      _totalPenalty = scores[0]!;
+      for (var seat = 0; seat < 3; seat++) {
+        final id = seating.table(0)[seat + 1];
+        final style = LeagueBotStyle.forRival(id - 1);
+        _bots[seat] = BotPlayer(
+          name: 'Oyuncu ${seat + 2}',
+          displayName: leagueBotNames[id - 1],
+          leagueId: id,
+          difficulty: style.difficulty,
+          personality: style.personality,
+          penalty: scores[id]!,
+        );
+      }
+    }
+    if (widget.launchConfig.entryPoint == GameEntryPoint.quickPlay &&
+        !dailyLeague.complete) {
+      final tables = LeagueRoundTables(seating: seating);
+      _leagueRoundTables = tables;
+      tables.scores = _prepareLeagueTables(tables, currentRoundGeneration);
+    } else {
+      _leagueRoundTables = null;
+    }
     _elCount++;
     _dealTimer?.cancel();
     _cancelTimedPlayerTurn();
@@ -3962,14 +4058,27 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       final bot = _bots[botIdx];
-      const earliestOpeningTurns = [3, 4, 3];
+      final isLeague =
+          widget.launchConfig.entryPoint == GameEntryPoint.quickPlay;
+      final earliestOpeningTurns = isLeague
+          ? List.generate(
+              3,
+              (index) => LeagueBotStyle.forRival(
+                (_bots[index].leagueId ?? index + 1) - 1,
+              ).openingTurn,
+            )
+          : const [3, 4, 3];
       const standardOpeningTargets = [105, 110, 103];
       const pairOpeningTargets = [5, 6, 5];
       final minimumStandardScore = _isProgressiveMode
           ? _minimumStandardOpeningScore
+          : isLeague
+          ? 101
           : standardOpeningTargets[botIdx];
       final minimumPairCount = _isProgressiveMode
           ? _minimumPairOpeningCount
+          : isLeague
+          ? 5
           : pairOpeningTargets[botIdx];
       final nextBotTurn = bot.turnsPlayed + 1;
       final allowOpening = nextBotTurn >= earliestOpeningTurns[botIdx];
@@ -4193,6 +4302,43 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  Future<List<int>> _prepareLeagueTables(
+    LeagueRoundTables tables,
+    int generation,
+  ) async {
+    await dailyLeague.load();
+    if (dailyLeague.complete) return [];
+    return playLeagueTables(
+      seed: DateTime.now().microsecondsSinceEpoch,
+      seating: tables.seating,
+      isActive: () =>
+          tables.humanCompleted || (mounted && generation == _roundGeneration),
+    );
+  }
+
+  Future<LeagueRoundUpdate?> _recordLeagueRound(
+    LeagueRoundTables tables,
+    String roundId,
+    List<int> tablePenalties,
+  ) async {
+    final penalties = await tables.scores;
+    if (penalties.length != 16) return null;
+    final counted = await dailyLeague.recordRound(
+      config: widget.launchConfig,
+      roundId: roundId,
+      tablePenalties: tablePenalties,
+      simulatedPenalties: penalties,
+      participantIds: tables.seating.participantIds,
+    );
+    return counted
+        ? dailyLeague.lastRoundUpdate
+        : LeagueRoundUpdate(
+            roundId: roundId,
+            rank: dailyLeague.playerRank,
+            counted: false,
+          );
+  }
+
   // ── El Bitti: Oyuncu Kazandı ──────────────────────────────────────────
   void _endRoundPlayerWins({bool? finishedFromHand}) {
     if (_gameOverShown) return;
@@ -4295,23 +4441,42 @@ class _GameScreenState extends State<GameScreen> {
         recordedReward == null &&
         widget.launchConfig.entryPoint == GameEntryPoint.quickPlay) {
       final roundId = '$_leagueSessionId/$_roundGeneration';
-      unawaited(
-        dailyLeague.recordRound(
-          config: widget.launchConfig,
-          roundId: roundId,
-          tablePenalties: [
-            _totalPenalty - _roundPlayerPenaltyStart,
-            ...botPens,
-          ],
-          simulatedPenalties: simulateLeaguePenalties(
-            seed: DateTime.now().microsecondsSinceEpoch,
-            noWinner: winner == 'Tur bitti',
+      var tables = _leagueRoundTables;
+      if (tables == null && !dailyLeague.complete) {
+        tables = LeagueRoundTables(
+          seating: LeagueSeating.forRound(dailyLeague.completedRounds),
+        );
+        _leagueRoundTables = tables;
+        tables.scores = _prepareLeagueTables(tables, _roundGeneration);
+      }
+      if (tables != null) {
+        tables.humanCompleted = true;
+        _leagueRoundUpdateFuture = _recordLeagueRound(tables, roundId, [
+          _totalPenalty - _roundPlayerPenaltyStart,
+          ...botPens,
+        ]);
+      } else {
+        _leagueRoundUpdateFuture = Future.value(
+          LeagueRoundUpdate(
+            roundId: roundId,
+            rank: dailyLeague.playerRank,
+            counted: false,
           ),
-        ),
-      );
+        );
+      }
     }
     final roundLimit = _hasThreeRoundLimit ? _roomAndModeRoundLimit : null;
     final matchComplete = roundLimit != null && _elCount >= roundLimit;
+    bool? roomMatchWon;
+    if (recordedReward == null &&
+        matchComplete &&
+        widget.launchConfig.entryPoint == GameEntryPoint.room &&
+        !_roomMatchSettled) {
+      _roomMatchSettled = true;
+      roomMatchWon = _bots.indexed.every(
+        (entry) => _totalPenalty <= entry.$2.penalty + botPens[entry.$1],
+      );
+    }
     final reward =
         recordedReward ??
         playerProgress.recordCompletedGame(
@@ -4320,6 +4485,7 @@ class _GameScreenState extends State<GameScreen> {
           openedHand: _playerOpened,
           finishedHand: playerWon,
           roundNumber: _elCount,
+          roomMatchWon: roomMatchWon,
         );
     final spectacular =
         playerWon && (finishedFromHand ?? _openedThisPlayerTurn);
@@ -4363,7 +4529,8 @@ class _GameScreenState extends State<GameScreen> {
       for (var i = 0; i < _bots.length; i++) {
         _bots[i].penalty += botPens[i];
       }
-      Future.delayed(const Duration(milliseconds: 900), () {
+      Future.delayed(const Duration(milliseconds: 900), () async {
+        await _leagueRoundUpdateFuture;
         if (!mounted ||
             completedRound != _roundGeneration ||
             !_gameSettings.autoPlay) {
@@ -4393,10 +4560,16 @@ class _GameScreenState extends State<GameScreen> {
         matchComplete: matchComplete,
         totalPenalty: _totalPenalty,
         reward: reward,
+        leagueUpdate: _leagueRoundUpdateFuture,
         homeLabel: _isTournamentGame
             ? appText('TURNUVAYA DÖN', 'TOURNAMENT')
             : appText('ANA SAYFA', 'HOME'),
-        onNewRound: () {
+        onNewRound: () async {
+          if (_startingNextRound) return;
+          _startingNextRound = true;
+          await _leagueRoundUpdateFuture;
+          _startingNextRound = false;
+          if (!mounted) return;
           Navigator.pop(context);
           setState(() {
             for (var i = 0; i < _bots.length; i++) {
@@ -4406,15 +4579,7 @@ class _GameScreenState extends State<GameScreen> {
           });
         },
         onResetMatch: () {
-          Navigator.pop(context);
-          setState(() {
-            _totalPenalty = 0;
-            _elCount = 0;
-            for (final bot in _bots) {
-              bot.penalty = 0;
-            }
-            _startNewRound();
-          });
+          _restartGameFromToolbar(closeResult: true);
         },
         onHome: () {
           if (_isTournamentGame) {
@@ -4923,6 +5088,23 @@ class _GameScreenState extends State<GameScreen> {
                           ),
 
                           // Tüm oyun mesajları aynı merkezî bildirimde gösterilir.
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Align(
+                                alignment: const Alignment(0, -0.48),
+                                child: AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 220),
+                                  child:
+                                      _leagueRankNotice == null ||
+                                          _gameOverShown
+                                      ? const SizedBox.shrink()
+                                      : LeagueRankPopup(
+                                          notice: _leagueRankNotice!,
+                                        ),
+                                ),
+                              ),
+                            ),
+                          ),
                           if (centerNotice != null)
                             Positioned.fill(
                               child: IgnorePointer(
@@ -5087,11 +5269,7 @@ class _PlayerInfo extends StatelessWidget {
           border: Border.all(color: const Color(0xFFB98532), width: 1.2),
         ),
         child: Image.asset(
-          switch (bot.name) {
-            'Oyuncu 2' => 'images/ui/avatar_bot2.jpg',
-            'Oyuncu 3' => 'images/ui/avatar_bot3.jpg',
-            _ => 'images/ui/avatar_bot4.jpg',
-          },
+          bot.avatarAsset,
           fit: BoxFit.cover,
           cacheWidth: 64,
           cacheHeight: 64,
@@ -8608,6 +8786,7 @@ class GameEndDialog extends StatelessWidget {
   final bool matchComplete;
   final int totalPenalty;
   final GameReward? reward;
+  final Future<LeagueRoundUpdate?>? leagueUpdate;
   final String homeLabel;
   final VoidCallback onNewRound;
   final VoidCallback onResetMatch;
@@ -8625,6 +8804,7 @@ class GameEndDialog extends StatelessWidget {
     this.matchComplete = false,
     required this.totalPenalty,
     this.reward,
+    this.leagueUpdate,
     this.homeLabel = 'ANA SAYFA',
     required this.onNewRound,
     required this.onResetMatch,
@@ -8660,8 +8840,7 @@ class GameEndDialog extends StatelessWidget {
                 total: bots[index].penalty + botPens[index],
                 highlighted: winner == bots[index].name,
                 isPlayer: false,
-                avatarAsset:
-                    playerAvatarAssets[(index + 1) % playerAvatarAssets.length],
+                avatarAsset: bots[index].avatarAsset,
               ),
           ]
           ..sort((left, right) {
@@ -8750,6 +8929,7 @@ class GameEndDialog extends StatelessWidget {
                             reward: reward!,
                             round: elCount,
                             maxRounds: maxRounds,
+                            leagueUpdate: leagueUpdate,
                           ),
                         ),
                       Padding(
@@ -8904,11 +9084,13 @@ class _GameRewardCard extends StatelessWidget {
   final GameReward reward;
   final int round;
   final int? maxRounds;
+  final Future<LeagueRoundUpdate?>? leagueUpdate;
 
   const _GameRewardCard({
     required this.reward,
     required this.round,
     this.maxRounds,
+    this.leagueUpdate,
   });
 
   @override
@@ -8933,6 +9115,12 @@ class _GameRewardCard extends StatelessWidget {
             value: maxRounds == null ? '$round' : '$round/$maxRounds',
             label: appText('TUR', 'ROUND'),
           ),
+          (
+            icon: Icons.leaderboard_rounded,
+            color: OC.goldLight,
+            value: '—',
+            label: 'LİG',
+          ),
         ];
 
     return Container(
@@ -8956,47 +9144,112 @@ class _GameRewardCard extends StatelessWidget {
                 color: OC.gold.withValues(alpha: 0.22),
               ),
             Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (index == 1)
-                    Image.asset(
-                      'images/ui/coin.png',
-                      width: 31,
-                      height: 31,
-                      cacheWidth: 62,
-                      cacheHeight: 62,
-                    )
-                  else
-                    Icon(
-                      rewards[index].icon,
-                      color: rewards[index].color,
-                      size: 30,
-                    ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        '${rewards[index].value} ${rewards[index].label}',
-                        maxLines: 1,
-                        style: TextStyle(
-                          color: rewards[index].color,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                          height: 1,
+              child: index == 3
+                  ? _LeagueStandingCell(update: leagueUpdate)
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (index == 1)
+                          Image.asset(
+                            'images/ui/coin.png',
+                            width: 23,
+                            height: 23,
+                            cacheWidth: 62,
+                            cacheHeight: 62,
+                          )
+                        else
+                          Icon(
+                            rewards[index].icon,
+                            color: rewards[index].color,
+                            size: 23,
+                          ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '${rewards[index].value} ${rewards[index].label}',
+                              maxLines: 1,
+                              style: TextStyle(
+                                color: rewards[index].color,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                height: 1,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
             ),
           ],
         ],
       ),
     );
   }
+}
+
+class _LeagueStandingCell extends StatelessWidget {
+  const _LeagueStandingCell({this.update});
+  final Future<LeagueRoundUpdate?>? update;
+  @override
+  Widget build(BuildContext context) => FutureBuilder<LeagueRoundUpdate?>(
+    future: update,
+    builder: (context, snapshot) {
+      final result = snapshot.data;
+      final delta = result?.placesGained ?? 0;
+      final message = result == null
+          ? update == null
+                ? 'Bu masa lig dışı'
+                : 'Sonuçlar hesaplanıyor'
+          : !result.counted
+          ? 'Lig tamamlandı'
+          : result.previousRank == null
+          ? 'İlk el tamamlandı'
+          : delta > 0
+          ? '$delta sıra yükseldin'
+          : delta < 0
+          ? '${-delta} sıra geriledin'
+          : 'Sıran değişmedi';
+      final color = delta > 0
+          ? const Color(0xFF70DB80)
+          : delta < 0
+          ? OC.numRed
+          : OC.goldLight;
+      return Padding(
+        key: const ValueKey('game-end-league-cell'),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                result == null ? '— LİG' : '${result.rank}/20 LİG',
+                style: TextStyle(
+                  color: OC.goldLight,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class _ScoreRow extends StatelessWidget {

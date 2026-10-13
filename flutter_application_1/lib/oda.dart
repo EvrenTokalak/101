@@ -15,12 +15,13 @@ class RoomSelectScreen extends StatefulWidget {
 
 class _RoomSelectScreenState extends State<RoomSelectScreen> {
   int _selectedIndex = 0;
+  bool _entering = false;
 
   static const _rooms = [
     _RoomData(
       label: 'Başlangıç',
-      entryFee: 500,
-      feeLabel: '500',
+      entryFee: 2000,
+      feeLabel: '2.000',
       maxPlayers: 8,
       currentPlayers: 6,
       tier: 0,
@@ -33,8 +34,8 @@ class _RoomSelectScreenState extends State<RoomSelectScreen> {
     ),
     _RoomData(
       label: 'Standart',
-      entryFee: 1000,
-      feeLabel: '1.000',
+      entryFee: 2500,
+      feeLabel: '2.500',
       maxPlayers: 8,
       currentPlayers: 5,
       tier: 1,
@@ -48,8 +49,8 @@ class _RoomSelectScreenState extends State<RoomSelectScreen> {
     ),
     _RoomData(
       label: 'VIP',
-      entryFee: 5000,
-      feeLabel: '5.000',
+      entryFee: 6500,
+      feeLabel: '6.500',
       maxPlayers: 6,
       currentPlayers: 3,
       tier: 2,
@@ -62,8 +63,8 @@ class _RoomSelectScreenState extends State<RoomSelectScreen> {
     ),
     _RoomData(
       label: 'Elit',
-      entryFee: 10000,
-      feeLabel: '10.000',
+      entryFee: 11500,
+      feeLabel: '11.500',
       maxPlayers: 4,
       currentPlayers: 2,
       tier: 3,
@@ -82,6 +83,7 @@ class _RoomSelectScreenState extends State<RoomSelectScreen> {
   }
 
   Future<void> _enterRoom() async {
+    if (_entering) return;
     final room = _rooms[_selectedIndex];
     if (playerProgress.level < room.requiredLevel) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -121,14 +123,19 @@ class _RoomSelectScreenState extends State<RoomSelectScreen> {
         ),
       ),
     );
-    await openGameScreen<void>(
-      context,
-      config: GameLaunchConfig.room(
-        id: 'room-${room.tier}',
-        label: room.label,
-        entryFee: room.entryFee,
-      ),
-    );
+    _entering = true;
+    try {
+      await openGameScreen<void>(
+        context,
+        config: GameLaunchConfig.room(
+          id: 'room-${room.tier}',
+          label: room.label,
+          entryFee: room.entryFee,
+        ),
+      );
+    } finally {
+      _entering = false;
+    }
   }
 
   @override

@@ -34,6 +34,38 @@ const leagueRoundLimit = 20;
 const leagueTierNames = ['Beginner', 'Amateur', 'Skilled', 'Pro', 'Master'];
 const leagueTierThresholds = [0, 5, 15, 30, 50];
 
+class LeagueSeating {
+  LeagueSeating.forRound(int completedRounds)
+    : participantIds = List.unmodifiable([
+        0,
+        for (var seat = 0; seat < 19; seat++)
+          1 + (seat + (completedRounds ~/ 3) * 3) % 19,
+      ]);
+  final List<int> participantIds;
+  List<int> table(int index) =>
+      participantIds.sublist(index * 4, index * 4 + 4);
+}
+
+class LeagueRoundUpdate {
+  const LeagueRoundUpdate({
+    required this.roundId,
+    required this.rank,
+    this.previousRank,
+    this.counted = true,
+  });
+  final String roundId;
+  final int rank;
+  final int? previousRank;
+  final bool counted;
+  int get placesGained => (previousRank ?? rank) - rank;
+}
+
+class LeagueRankNotice {
+  const LeagueRankNotice(this.rank, this.completedRounds);
+  final int rank;
+  final int completedRounds;
+}
+
 class LeagueEntry {
   final int id;
   final String name;
@@ -41,9 +73,8 @@ class LeagueEntry {
   final int rank;
   const LeagueEntry(this.id, this.name, this.penalty, this.rank);
   bool get isPlayer => id == 0;
-  String get avatar => isPlayer
-      ? playerProgress.playerAvatarAsset
-      : playerAvatarAssets[1 + (id - 1) % 3];
+  String get avatar =>
+      isPlayer ? playerProgress.playerAvatarAsset : rivalAvatarAsset(id - 1);
 }
 
 class LeaguePrize {
@@ -81,6 +112,22 @@ class DailyLeagueController extends ChangeNotifier {
   List<String> _roundIds = [];
   int? _finalRank;
   bool _notificationsEnabled = true;
+  LeagueRoundUpdate? lastRoundUpdate;
+  int? _lastRankNoticeRound = 0;
+
+  LeagueRankNotice? takeRankNotice() {
+    if (!initialized) return null;
+    refresh();
+    final milestone = completedRounds ~/ 3 * 3;
+    if (complete ||
+        milestone == 0 ||
+        milestone <= (_lastRankNoticeRound ?? 0)) {
+      return null;
+    }
+    _lastRankNoticeRound = milestone;
+    unawaited(_persist());
+    return LeagueRankNotice(playerRank, completedRounds);
+  }
 
   bool get initialized => _deadline != null;
   DateTime? get deadline => _deadline;
@@ -136,6 +183,8 @@ class DailyLeagueController extends ChangeNotifier {
   Future<void> resetForTesting() async {
     await _writes;
     _loading = null;
+    _lastRankNoticeRound = 0;
+    lastRoundUpdate = null;
     _deadline = null;
     _totals = List.filled(20, 0);
     _roundIds = [];
@@ -158,6 +207,10 @@ class DailyLeagueController extends ChangeNotifier {
           _totals = totals;
           _roundIds = ids;
           _finalRank = complete ? data['finalRank'] as int? : null;
+          _lastRankNoticeRound = ((data['rankNoticeRound'] as int?) ?? 0).clamp(
+            0,
+            ids.length,
+          );
         }
       } catch (_) {
         // A damaged league save starts a fresh cycle; the wallet is independent.
@@ -169,7 +222,9 @@ class DailyLeagueController extends ChangeNotifier {
       await _grantPrize();
     }
     if (_deadline == null) {
-      final taskDeadline = await _read(() => _preferences.getInt('tasks.deadline_ms'));
+      final taskDeadline = await _read(
+        () => _preferences.getInt('tasks.deadline_ms'),
+      );
       _deadline = taskDeadline == null
           ? _now().add(cycleDuration)
           : DateTime.fromMillisecondsSinceEpoch(taskDeadline);
@@ -194,6 +249,8 @@ class DailyLeagueController extends ChangeNotifier {
     _totals = List.filled(20, 0);
     _roundIds = [];
     _finalRank = null;
+    lastRoundUpdate = null;
+    _lastRankNoticeRound = 0;
     return true;
   }
 
@@ -225,6 +282,7 @@ class DailyLeagueController extends ChangeNotifier {
     required String roundId,
     required List<int> tablePenalties,
     required List<int> simulatedPenalties,
+    List<int>? participantIds,
   }) async {
     if (config.entryPoint != GameEntryPoint.quickPlay) return false;
     if (tablePenalties.length != 4 || simulatedPenalties.length != 16) {
@@ -235,12 +293,25 @@ class DailyLeagueController extends ChangeNotifier {
     await load();
     refresh();
     if (complete || _roundIds.contains(roundId)) return false;
+    final ids = participantIds ?? List.generate(20, (index) => index);
+    if (ids.length != 20 ||
+        ids.first != 0 ||
+        ids.toSet().length != 20 ||
+        ids.any((id) => id < 0 || id >= 20)) {
+      throw ArgumentError('Every contestant must occupy exactly one seat.');
+    }
+    final previousRank = completedRounds == 0 ? null : playerRank;
     final scores = [...tablePenalties, ...simulatedPenalties];
     for (var i = 0; i < 20; i++) {
-      _totals[i] += scores[i];
+      _totals[ids[i]] += scores[i];
     }
     _roundIds.add(roundId);
     if (complete) _finalRank = standings.firstWhere((e) => e.isPlayer).rank;
+    lastRoundUpdate = LeagueRoundUpdate(
+      roundId: roundId,
+      rank: playerRank,
+      previousRank: previousRank,
+    );
     final award = complete ? finalPrize : null;
     final awardId = settlementId;
     notifyListeners();
@@ -248,7 +319,10 @@ class DailyLeagueController extends ChangeNotifier {
     await _persist();
     if (award != null) {
       await _wallet.grantLeagueReward(
-        id: awardId, coins: award.coins, stars: award.stars);
+        id: awardId,
+        coins: award.coins,
+        stars: award.stars,
+      );
     }
     await _updateReminder();
     notifyListeners();
@@ -270,6 +344,7 @@ class DailyLeagueController extends ChangeNotifier {
       'totals': _totals,
       'roundIds': _roundIds,
       'finalRank': _finalRank,
+      'rankNoticeRound': _lastRankNoticeRound ?? 0,
     });
     final write = _writes.then((_) async {
       try {

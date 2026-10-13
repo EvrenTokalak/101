@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
@@ -7,7 +8,8 @@ import 'package:flutter_application_1/game_mode_select.dart';
 import 'package:flutter_application_1/main.dart' as app;
 import 'package:flutter_application_1/oda.dart';
 import 'package:flutter_application_1/player_progress.dart';
-import 'package:flutter_application_1/tournament.dart';
+import 'package:flutter_application_1/daily_league.dart';
+import 'package:flutter_application_1/league_screen.dart';
 
 Future<void> pumpRouteTransition(WidgetTester tester) async {
   for (var frame = 0; frame < 10; frame++) {
@@ -21,9 +23,15 @@ Future<void> disposeGameRoute(WidgetTester tester) async {
 }
 
 void main() {
-  setUp(() {
+  setUp(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('okey/league_reminder'),
+          (call) async => call.method == 'requestPermission' ? false : null,
+        );
     playerProgress.reset();
+    await dailyLeague.load();
   });
 
   testWidgets('Renkli seçim ayrı oyun modu olarak açılır', (tester) async {
@@ -81,53 +89,66 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: RoomSelectScreen()));
     await tester.pump(const Duration(milliseconds: 700));
 
-    await tester.tap(find.text('Odaya Gir'));
+    final coinsBefore = playerProgress.coins;
+    final dynamic enterButton = tester.widget(
+      find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_EnterRoomButton',
+      ),
+    );
+    enterButton.onTap();
+    enterButton.onTap();
     await pumpRouteTransition(tester);
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
     expect(game.launchConfig.entryPoint, GameEntryPoint.room);
     expect(game.launchConfig.selectionLabel, 'Başlangıç');
-    expect(game.launchConfig.entryFee, 500);
+    expect(game.launchConfig.entryFee, 2000);
+    expect(playerProgress.coins, coinsBefore - 2000);
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
   });
 
-  testWidgets('turnuva maçı oyun ekranına tur bilgisiyle gider', (
+  testWidgets('lig Oyna butonu ayni sonsuz Hemen Oyna masasına gider', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(const MaterialApp(home: TournamentScreen()));
+    await tester.pumpWidget(const MaterialApp(home: LeagueScreen()));
     await tester.pump();
 
-    await tester.tap(find.byKey(const ValueKey('tournament-action')));
+    await tester.tap(find.byKey(const ValueKey('league-play')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 30)),
+    );
     await pumpRouteTransition(tester);
 
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
-    expect(game.launchConfig.entryPoint, GameEntryPoint.tournament);
-    expect(game.launchConfig.tournamentRound, 0);
+    expect(game.launchConfig.entryPoint, GameEntryPoint.quickPlay);
+    expect(game.launchConfig.tournamentRound, isNull);
     expect(game.launchConfig.opponent, isNull);
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
   });
 
-  testWidgets(
-    'başlanmış turnuva maçı devam ve tekrar başla seçeneklerini gösterir',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1280, 720));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(const MaterialApp(home: TournamentScreen()));
-      await tester.pump();
+  testWidgets('ligden oyuna girip cikmak tamamlanmamis eli lige eklemez', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: LeagueScreen()));
+    await tester.pump();
 
-      await tester.tap(find.byKey(const ValueKey('tournament-action')));
-      await pumpRouteTransition(tester);
-      tester.state<NavigatorState>(find.byType(Navigator)).pop();
-      await pumpRouteTransition(tester);
+    await tester.tap(find.byKey(const ValueKey('league-play')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 30)),
+    );
+    await pumpRouteTransition(tester);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await pumpRouteTransition(tester);
 
-      expect(find.text('DEVAM ET'), findsOneWidget);
-      expect(find.text('TEKRAR BAŞLA'), findsOneWidget);
-      expect(find.textContaining('Rakip'), findsNothing);
-      expect(tester.takeException(), isNull);
-    },
-  );
+    expect(find.byKey(const ValueKey('league-progress')), findsOneWidget);
+    expect(find.text('0 / 20 EL'), findsOneWidget);
+    expect(find.textContaining('Rakip'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

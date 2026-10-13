@@ -253,6 +253,7 @@ Future<_BotComputation> _computeBotTurnInBackground(
     displayName: sourceBot.displayName,
     difficulty: sourceBot.difficulty,
     personality: sourceBot.personality,
+    leagueId: sourceBot.leagueId,
     tileCount: sourceBot.tileCount,
     penalty: sourceBot.penalty,
     hasOpened: sourceBot.hasOpened,
@@ -413,6 +414,7 @@ class BotEngine {
     int minimumPairCount = 5,
     TileColor? bonusColor,
     int pairAreaLimit = 24,
+    Random? random,
   }) {
     var openedMeldCount = 0;
     var processedTileCount = 0;
@@ -493,6 +495,7 @@ class BotEngine {
       tableMelds
           .where((m) => m.type != 'cift' || remainingPairSlots() > 0)
           .toList(),
+      random: random,
     );
     if (discarded != null) {
       bot.hand.removeWhere((tile) => tile.id == discarded.id);
@@ -569,7 +572,11 @@ class BotEngine {
     return processed;
   }
 
-  static Tile? _chooseDiscard(BotPlayer bot, List<Meld> tableMelds) {
+  static Tile? _chooseDiscard(
+    BotPlayer bot,
+    List<Meld> tableMelds, {
+    Random? random,
+  }) {
     final hand = bot.hand;
     if (hand.isEmpty) return null;
     final plannedIds = _standardMelds(hand)
@@ -664,7 +671,7 @@ class BotEngine {
         .take(candidateCount)
         .where((tile) => utilities[tile.id]! <= weakestScore + tolerance)
         .toList();
-    return plausible[_random.nextInt(plausible.length)];
+    return plausible[(random ?? _random).nextInt(plausible.length)];
   }
 
   static bool _canProcess(Tile tile, List<Meld> tableMelds) {

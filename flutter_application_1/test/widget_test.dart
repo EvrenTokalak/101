@@ -79,24 +79,21 @@ void main() {
     final missions = tester.getCenter(find.text('GÖREVLER'));
     final modes = tester.getCenter(find.text('OYUN\nMODLARI'));
     final rooms = tester.getCenter(find.text('MASA SEÇ'));
-    final tournament = tester.getCenter(find.text('TURNUVA'));
+    final tournament = tester.getCenter(find.text('LİG'));
     final quickPlay = tester.getCenter(find.text('HEMEN OYNA'));
 
     expect(missions.dy, closeTo(modes.dy, 0.1));
     expect(rooms.dy, closeTo(tournament.dy, 0.1));
     expect(missions.dy, lessThan(rooms.dy));
     expect(rooms.dy, lessThan(quickPlay.dy));
-    for (final label in ['GÖREVLER', 'OYUN\nMODLARI', 'MASA SEÇ', 'TURNUVA']) {
+    for (final label in ['GÖREVLER', 'OYUN\nMODLARI', 'MASA SEÇ', 'LİG']) {
       expect(find.byKey(ValueKey('home-action-icon-$label')), findsOneWidget);
     }
     expect(
       find.byKey(const ValueKey('home-action-icon-GÖREVLER')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('home-action-icon-TURNUVA')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('home-action-icon-LİG')), findsOneWidget);
     expect(find.byKey(const ValueKey('quick-play-icon')), findsNothing);
     expect(find.byIcon(Icons.add_rounded), findsOneWidget);
     expect(tester.takeException(), isNull);

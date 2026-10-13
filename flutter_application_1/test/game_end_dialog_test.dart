@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
+import 'package:flutter_application_1/daily_league.dart';
 import 'package:flutter_application_1/player_progress.dart';
 
 void main() {
@@ -41,6 +42,13 @@ void main() {
                 levelsGained: 1,
                 xpBreakdown: ['Oyun tamamlama +30 XP'],
               ),
+              leagueUpdate: Future.value(
+                const LeagueRoundUpdate(
+                  roundId: 'result-test',
+                  rank: 4,
+                  previousRank: 6,
+                ),
+              ),
               onNewRound: () => newRoundPressed = true,
               onResetMatch: () => resetPressed = true,
               onHome: () => homePressed = true,
@@ -50,6 +58,10 @@ void main() {
       ),
     );
 
+    await tester.pump();
+    expect(find.byKey(const ValueKey('game-end-league-cell')), findsOneWidget);
+    expect(find.text('4/20 LİG'), findsOneWidget);
+    expect(find.text('2 sıra yükseldin'), findsOneWidget);
     expect(find.text('DEVAM ET'), findsOneWidget);
     expect(find.text('TUR BİTTİ'), findsNothing);
     expect(

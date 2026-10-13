@@ -9,11 +9,34 @@ import 'game_launch.dart';
 const defaultPlayerProfileName = 'Evren';
 const initialPlayerCoins = 25600;
 const playerAvatarAssets = <String>[
-  'images/ui/avatar_player.jpg',
-  'images/ui/avatar_bot2.jpg',
-  'images/ui/avatar_bot3.jpg',
-  'images/ui/avatar_bot4.jpg',
+  'görseller/pp/01_tilki.png',
+  'görseller/pp/02_kurt.png',
+  'görseller/pp/03_aslan.png',
+  'görseller/pp/04_kaplan.png',
+  'görseller/pp/05_ayi.png',
+  'görseller/pp/06_panda.png',
+  'görseller/pp/07_tavsan.png',
+  'görseller/pp/08_rakun.png',
+  'görseller/pp/09_baykus.png',
+  'görseller/pp/10_kartal.png',
+  'görseller/pp/11_timsah.png',
+  'görseller/pp/12_kopekbaligi.png',
+  'görseller/pp/13_goril.png',
+  'görseller/pp/14_keci.png',
+  'görseller/pp/15_koc.png',
+  'görseller/pp/16_fil.png',
+  'görseller/pp/17_zurafa.png',
+  'görseller/pp/18_suaygiri.png',
+  'görseller/pp/19_penguen.png',
+  'görseller/pp/20_ejderha.png',
+  'görseller/pp/mm_av0_tavuk.png',
+  'görseller/pp/mm_av1_boga.png',
+  'görseller/pp/mm_av2_domuz.png',
+  'görseller/pp/mm_av3_yaban_domuzu.png',
 ];
+
+String rivalAvatarAsset(int rivalIndex) =>
+    playerAvatarAssets[(rivalIndex + 1) % playerAvatarAssets.length];
 
 class LevelBand {
   final int minLevel;
@@ -66,6 +89,7 @@ class GameReward {
 class PlayerProgressController extends ChangeNotifier {
   static const _playerNameKey = 'profile.player_name';
   static const _playerAvatarKey = 'profile.avatar_index';
+  static const _playerAvatarAssetKey = 'profile.avatar_asset';
   static const _coinsKey = 'progress.coins';
   static const _levelKey = 'progress.level';
   static const _levelXpKey = 'progress.level_xp';
@@ -92,6 +116,7 @@ class PlayerProgressController extends ChangeNotifier {
   int _totalXpEarned = 0;
   String _playerName = defaultPlayerProfileName;
   int _playerAvatarIndex = 0;
+  String? _selectedAvatarAsset;
 
   int get coins => _coins;
   int get leagueStars => _leagueStars;
@@ -103,8 +128,27 @@ class PlayerProgressController extends ChangeNotifier {
   int get handsFinished => _handsFinished;
   int get totalXpEarned => _totalXpEarned;
   String get playerName => _playerName;
-  int get playerAvatarIndex => _playerAvatarIndex;
-  String get playerAvatarAsset => playerAvatarAssets[_playerAvatarIndex];
+  int get playerAvatarIndex => playerAvatarAssets.indexOf(playerAvatarAsset);
+  String get playerAvatarAsset {
+    final asset =
+        _selectedAvatarAsset ?? _legacyAvatarAsset(_playerAvatarIndex);
+    return playerAvatarAssets.contains(asset)
+        ? asset
+        : playerAvatarAssets.first;
+  }
+
+  static String _legacyAvatarAsset(int index) {
+    final migrated = switch (index) {
+      >= 0 && < 20 => index,
+      21 => 20,
+      23 => 21,
+      25 => 22,
+      27 => 23,
+      _ => 0,
+    };
+    return playerAvatarAssets[migrated];
+  }
+
   bool get isMaxLevel => _level >= 99;
 
   LevelBand get levelBand => levelBands.firstWhere(
@@ -176,9 +220,13 @@ class PlayerProgressController extends ChangeNotifier {
     if (savedPlayerName != null && savedPlayerName.isNotEmpty) {
       _playerName = savedPlayerName;
     }
-    _playerAvatarIndex =
-        (await preferences.getInt(_playerAvatarKey) ?? _playerAvatarIndex)
-            .clamp(0, playerAvatarAssets.length - 1);
+    final savedAvatar = await preferences.getString(_playerAvatarAssetKey);
+    final savedIndex = await preferences.getInt(_playerAvatarKey) ?? 0;
+    final requestedAsset = savedAvatar ?? _legacyAvatarAsset(savedIndex);
+    _selectedAvatarAsset = playerAvatarAssets.contains(requestedAsset)
+        ? requestedAsset
+        : playerAvatarAssets.first;
+    _playerAvatarIndex = playerAvatarIndex;
 
     // Eski geliştirme sürümünde boş profiller seviye 9 ile başlıyordu.
     if (_level == 9 &&
@@ -209,7 +257,8 @@ class PlayerProgressController extends ChangeNotifier {
     await preferences.setInt(_handsFinishedKey, _handsFinished);
     await preferences.setInt(_totalXpKey, _totalXpEarned);
     await preferences.setString(_playerNameKey, _playerName);
-    await preferences.setInt(_playerAvatarKey, _playerAvatarIndex);
+    await preferences.setInt(_playerAvatarKey, playerAvatarIndex);
+    await preferences.setString(_playerAvatarAssetKey, playerAvatarAsset);
   }
 
   void _schedulePersist() => unawaited(_persist());
@@ -259,8 +308,9 @@ class PlayerProgressController extends ChangeNotifier {
 
   void updatePlayerAvatar(int index) {
     final safeIndex = index.clamp(0, playerAvatarAssets.length - 1);
-    if (_playerAvatarIndex == safeIndex) return;
+    if (playerAvatarIndex == safeIndex) return;
     _playerAvatarIndex = safeIndex;
+    _selectedAvatarAsset = playerAvatarAssets[safeIndex];
     notifyListeners();
     _schedulePersist();
   }
@@ -308,6 +358,7 @@ class PlayerProgressController extends ChangeNotifier {
     required bool openedHand,
     required bool finishedHand,
     int roundNumber = 1,
+    bool? roomMatchWon,
   }) {
     assert(roundNumber >= 1);
     final breakdown = <String>[];
@@ -341,11 +392,13 @@ class PlayerProgressController extends ChangeNotifier {
       }
     }
 
-    final baseCoinReward = won
+    final baseCoinReward = config.entryPoint == GameEntryPoint.room
+        ? (roomMatchWon == true ? (config.entryFee ?? 0) * 2 : 0)
+        : won
         ? switch (config.entryPoint) {
             GameEntryPoint.quickPlay => 150,
             GameEntryPoint.gameMode => 300,
-            GameEntryPoint.room => (config.entryFee ?? 0) * 4,
+            GameEntryPoint.room => 0,
             GameEntryPoint.tournament =>
               1000 * ((config.tournamentRound ?? 0) + 1),
             GameEntryPoint.tutorial => 0,
@@ -391,6 +444,7 @@ class PlayerProgressController extends ChangeNotifier {
     _totalXpEarned = 0;
     _playerName = defaultPlayerProfileName;
     _playerAvatarIndex = 0;
+    _selectedAvatarAsset = playerAvatarAssets.first;
     notifyListeners();
   }
 }

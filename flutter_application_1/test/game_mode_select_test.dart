@@ -48,7 +48,7 @@ void main() {
         find.byKey(const ValueKey('game-mode-info-dialog-classic-101')),
         findsOneWidget,
       );
-      expect(find.text('Standart 101 kuralları'), findsOneWidget);
+      expect(find.text('Kendi masan, kendi kuralların'), findsOneWidget);
       await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pump(const Duration(milliseconds: 320));
     }

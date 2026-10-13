@@ -31,6 +31,9 @@ void main() {
       expect(find.text('MASA SEÇ'), findsOneWidget);
       expect(find.text('Odaya Gir'), findsOneWidget);
       expect(find.text('BAŞLANGIÇ'), findsOneWidget);
+      for (final fee in ['2.000', '2.500', '6.500', '11.500']) {
+        expect(find.text(fee), findsOneWidget);
+      }
     }
   });
 
@@ -63,7 +66,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.byType(GameScreen), findsNothing);
-    expect(find.textContaining('500 altın gerekiyor'), findsOneWidget);
+    expect(find.textContaining('2.000 altın gerekiyor'), findsOneWidget);
     expect(playerProgress.coins, 100);
     expect(tester.takeException(), isNull);
   });

@@ -1,41 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'package:flutter_application_1/tournament.dart';
+import 'package:flutter_application_1/daily_league.dart';
+import 'package:flutter_application_1/league_screen.dart';
 import 'package:flutter_application_1/main.dart' as app;
+import 'package:flutter_application_1/player_progress.dart';
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
-
-  test('turnuva sayacı ilk açılışta başlar', () async {
-    final firstDeadline = await initializeTournamentCycle();
-    expect(firstDeadline.isAfter(DateTime.now()), isTrue);
-    expect(
-      firstDeadline.difference(DateTime.now()),
-      lessThanOrEqualTo(const Duration(hours: 24)),
-    );
+  setUp(() async {
+    await dailyLeague.resetForTesting();
+    await SharedPreferencesAsync().clear();
+    playerProgress.reset();
+    await dailyLeague.load();
   });
 
-  test('geçmiş turnuva süresi yeni döneme taşınır', () async {
-    SharedPreferences.setMockInitialValues({
-      'tournament.deadline_ms': DateTime.now()
-          .subtract(const Duration(hours: 25))
-          .millisecondsSinceEpoch,
-    });
-    final rolledDeadline = await initializeTournamentCycle();
-    expect(rolledDeadline.isAfter(DateTime.now()), isTrue);
-    expect(
-      rolledDeadline.difference(DateTime.now()),
-      lessThanOrEqualTo(const Duration(hours: 24)),
-    );
-  });
-
-  testWidgets('turnuva ağacı geniş ve dar ekranlarda taşmadan görünür', (
+  testWidgets('league standings adapt to desktop tablet and phone sizes', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
-
     for (final size in const [
       Size(1180, 700),
       Size(1024, 768),
@@ -45,55 +27,50 @@ void main() {
       Size(390, 844),
     ]) {
       await tester.binding.setSurfaceSize(size);
-      await tester.pumpWidget(const MaterialApp(home: TournamentScreen()));
+      await tester.pumpWidget(const MaterialApp(home: LeagueScreen()));
       await tester.pumpAndSettle();
-
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
-      expect(find.text('ALTIN ISTAKA TURNUVASI'), findsOneWidget);
-      expect(find.text('ÇEYREK FİNAL'), findsOneWidget);
-      expect(find.text('YARI FİNAL'), findsOneWidget);
-      expect(find.text('FİNAL'), findsOneWidget);
-      expect(find.text('4 OYUNCU'), findsOneWidget);
-      expect(find.text('3 TUR'), findsWidgets);
-      expect(find.text('EN DÜŞÜK PUAN'), findsOneWidget);
-      expect(find.textContaining('Rakip'), findsNothing);
+      expect(find.text('GÜNLÜK LİG'), findsOneWidget);
+      expect(find.text('20 YARIŞMACI'), findsOneWidget);
+      expect(find.text('Sıralama ilk elden sonra oluşur'), findsOneWidget);
+      expect(find.textContaining('Beginner'), findsNothing);
+      expect(find.textContaining('BEGINNER'), findsNothing);
+      expect(find.text('GÜNLÜK ÖDÜLLER'), findsNothing);
+      expect(find.byKey(const ValueKey('league-progress')), findsOneWidget);
+      final list = tester.widget<ListView>(
+        find.byKey(const ValueKey('league-standings')),
+      );
       expect(
-        find.byKey(const ValueKey('tournament-action')).hitTestable(),
+        (list.childrenDelegate as SliverChildBuilderDelegate)
+            .estimatedChildCount,
+        20,
+      );
+      expect(find.byKey(const ValueKey('league-entry-0')), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const ValueKey('league-play')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('league-play')).hitTestable(),
         findsOneWidget,
       );
-      expect(
-        find.byWidgetPredicate(
-          (w) => w.runtimeType.toString() == '_StageTrack',
-        ),
-        findsOneWidget,
-      );
-      expect(find.textContaining('1. AŞAMA'), findsOneWidget);
-      expect(
-        find.byWidgetPredicate(
-          (w) =>
-              w is Image &&
-              w.image is AssetImage &&
-              (w.image as AssetImage).assetName == 'images/anamenu/menubg.png',
-        ),
-        findsNothing,
-      );
+      expect(tester.takeException(), isNull, reason: 'viewport: $size');
+      await tester.pumpWidget(const SizedBox.shrink());
     }
   });
 
-  testWidgets('ana menü turnuva butonu popup yerine turnuva sahnesini açar', (
+  testWidgets('home league action opens standings and shows saved progress', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const app.OkeyApp(home: app.MainMenuScreen()));
     await tester.pump(const Duration(milliseconds: 750));
-
-    await tester.tap(find.text('TURNUVA'));
+    expect(find.byKey(const ValueKey('home-league-summary')), findsOneWidget);
+    await tester.tap(find.text('LİG'));
     await tester.pumpAndSettle();
-
-    expect(find.byType(TournamentScreen), findsOneWidget);
-    expect(find.text('ALTIN ISTAKA TURNUVASI'), findsOneWidget);
-    expect(find.textContaining('Yaklaşan turnuvalar'), findsNothing);
+    expect(find.byType(LeagueScreen), findsOneWidget);
+    expect(find.text('GÜNLÜK LİG'), findsOneWidget);
+    expect(find.text('ÇEYREK FİNAL'), findsNothing);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

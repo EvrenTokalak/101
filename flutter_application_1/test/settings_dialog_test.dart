@@ -9,8 +9,9 @@ import 'package:flutter_application_1/player_progress.dart';
 import 'package:flutter_application_1/performance_overlay.dart';
 
 void main() {
-  setUp(() {
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    await SharedPreferencesAsync().clear();
     performanceOverlayEnabled.value = false;
   });
 
@@ -124,7 +125,7 @@ void main() {
 
     expect(find.text('GELEN KUTUSU'), findsOneWidget);
     expect(find.text('Günlük ödülün hazır'), findsOneWidget);
-    expect(find.text('Turnuva ilerlemeni kontrol et'), findsOneWidget);
+    expect(find.text('Lig sıralamanı kontrol et'), findsOneWidget);
     expect(find.textContaining('20.00'), findsNothing);
     expect(find.textContaining('Ödülünü almayı unutma'), findsNothing);
     expect(find.textContaining('masalarında bol şans'), findsNothing);
@@ -172,13 +173,28 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-avatar-edit')));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.byKey(const ValueKey('profile-avatar-picker')), findsOneWidget);
+    expect(playerAvatarAssets, hasLength(24));
+    final avatarGrid = tester.widget<GridView>(
+      find.byKey(const ValueKey('profile-avatar-grid')),
+    );
+    expect(
+      (avatarGrid.childrenDelegate as SliverChildBuilderDelegate)
+          .estimatedChildCount,
+      24,
+    );
     expect(find.byKey(const ValueKey('profile-avatar-1')), findsOneWidget);
     final avatarPickerSize = tester.getSize(
       find.byKey(const ValueKey('profile-avatar-picker')),
     );
     expect(avatarPickerSize.width, lessThan(profileDialogSize.width));
-    expect(avatarPickerSize.height, lessThan(profileDialogSize.height));
+    expect(
+      avatarPickerSize.height,
+      lessThan(tester.view.physicalSize.height / tester.view.devicePixelRatio),
+    );
     await tester.tap(find.byKey(const ValueKey('profile-avatar-1')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('profile-avatar-picker')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('profile-avatar-confirm')));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.byKey(const ValueKey('profile-avatar-picker')), findsNothing);
 
@@ -264,7 +280,9 @@ void main() {
     expect(find.text('Günlük ödülün hazır'), findsNothing);
   });
 
-  testWidgets('hoş geldin bildirimi açılınca okunmuş kalır', (tester) async {
+  testWidgets('hoş geldin bildirimi yalnız gelen kutusunu kapatır ve okunur', (
+    tester,
+  ) async {
     appLanguage.value = AppLanguage.turkish;
     await dailyLogin.load();
     await tester.binding.setSurfaceSize(const Size(1280, 720));
@@ -277,13 +295,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('Hoş geldin!'));
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('PROFİLİM'), findsOneWidget);
-    await tester.tap(find.text('TAMAM').last);
-    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('PROFİLİM'), findsNothing);
+    expect(find.text('GELEN KUTUSU'), findsNothing);
+    expect(find.text('HEMEN OYNA'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.mail_outlined));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Hoş geldin!'), findsNothing);
-    expect(find.text('Turnuva ilerlemeni kontrol et'), findsOneWidget);
+    expect(find.text('Lig sıralamanı kontrol et'), findsOneWidget);
   });
 }

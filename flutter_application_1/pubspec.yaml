@@ -35,6 +35,7 @@ dependencies:
   shared_preferences: ^2.5.5
 
 dev_dependencies:
+  shared_preferences_platform_interface: 2.4.2
   flutter_test:
     sdk: flutter
 
@@ -58,16 +59,13 @@ flutter:
 
   assets:
     - assets/sounds/
+    - görseller/pp/
     - images/rack2.jpg
     - images/tas_ters.png
     - images/anamenu/menubg.png
     - images/ui/action_blue.png
     - images/ui/action_gold.png
     - images/ui/action_green.png
-    - images/ui/avatar_bot2.jpg
-    - images/ui/avatar_bot3.jpg
-    - images/ui/avatar_bot4.jpg
-    - images/ui/avatar_player.jpg
     - images/ui/coin.png
     - images/ui/end_round_banner.png
     - images/ui/game_settings.png
