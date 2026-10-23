@@ -25,7 +25,7 @@ class DailyLoginRewardCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: width,
     height: height,
-    padding: const EdgeInsets.fromLTRB(3, 4, 3, 0),
+    padding: const EdgeInsets.fromLTRB(5, 6, 5, 4),
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(12),
       gradient: const LinearGradient(
@@ -35,7 +35,7 @@ class DailyLoginRewardCard extends StatelessWidget {
       ),
       border: Border.all(
         color: active && !completed
-            ? const Color(0xFFFFED9A)
+            ? const Color(0xFF7EE893)
             : const Color(0xFFE1B449),
         width: 1.4,
       ),
@@ -100,6 +100,39 @@ class DailyLoginRewardCard extends StatelessWidget {
               ),
             ),
           ),
+          SizedBox(
+            height: 18,
+            child: active && !completed
+                ? Container(
+                    key: ValueKey('daily-login-today-$day'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF307D46),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFF7EE893),
+                        width: .7,
+                      ),
+                    ),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        appText('BUGÜN', 'TODAY'),
+                        style: const TextStyle(
+                          fontFamily: 'Baloo 2',
+                          fontSize: 10,
+                          height: 1,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFFE5FFD9),
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+          ),
           Expanded(
             child: Stack(
               fit: StackFit.expand,
@@ -125,53 +158,41 @@ class DailyLoginRewardCard extends StatelessWidget {
           ),
           SizedBox(
             key: ValueKey('daily-login-reward-$day'),
-            height: 34,
-            child: Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      formatGameNumber(reward.coins),
-                      semanticsLabel: appText(
-                        '${reward.coins} Altın',
-                        '${reward.coins} Gold',
-                      ),
-                      style: const TextStyle(
-                        fontFamily: 'Baloo 2',
-                        fontSize: 23,
-                        height: 1,
-                        color: Color(0xFFFFF2BE),
-                        fontWeight: FontWeight.w900,
-                        shadows: [
-                          Shadow(
-                            color: Colors.black87,
-                            blurRadius: 2,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (reward.xp > 0)
-                      Text(
-                        '+${reward.xp} XP',
-                        style: const TextStyle(
-                          fontFamily: 'Baloo 2',
-                          fontSize: 12,
-                          height: 1.1,
-                          color: Color(0xFF91EBFB),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                  ],
+            height: 40,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 26,
+                  child: Center(
+                    child: _RewardAmount(day: day, coins: reward.coins),
+                  ),
                 ),
-              ),
+                SizedBox(
+                  height: 14,
+                  child: reward.xp > 0
+                      ? Center(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '+${reward.xp} XP',
+                              style: const TextStyle(
+                                fontFamily: 'Baloo 2',
+                                fontSize: 12,
+                                height: 1.1,
+                                color: Color(0xFF91EBFB),
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 4),
           SizedBox(
-            height: 34,
+            height: 44,
             child: OverflowBox(
               alignment: Alignment.bottomCenter,
               minHeight: 44,
@@ -311,6 +332,54 @@ class DailyRewardArtwork extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RewardAmount extends StatelessWidget {
+  final int day, coins;
+  const _RewardAmount({required this.day, required this.coins});
+
+  static const style = TextStyle(
+    fontFamily: 'Baloo 2',
+    fontSize: 23,
+    height: 1,
+    color: Color(0xFFFFF2BE),
+    fontWeight: FontWeight.w900,
+    shadows: [
+      Shadow(color: Colors.black87, blurRadius: 2, offset: Offset(0, 1)),
+    ],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final measurement = TextPainter(
+      text: const TextSpan(text: '8.888', style: style),
+      textDirection: Directionality.of(context),
+      textScaler: scaler,
+    )..layout();
+    final size = measurement.size;
+    measurement.dispose();
+    // All amounts share the longest number's bounds, including days without XP
+    // and the wider final card, so text scaling cannot move their baseline.
+    return SizedBox(
+      width: 84,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: SizedBox.fromSize(
+          size: size,
+          child: Center(
+            child: Text(
+              formatGameNumber(coins),
+              key: ValueKey('daily-login-amount-$day'),
+              style: style,
+              textScaler: scaler,
+              semanticsLabel: appText('$coins Altın', '$coins Gold'),
             ),
           ),
         ),

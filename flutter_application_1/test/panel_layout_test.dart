@@ -99,4 +99,48 @@ void main() {
     expect(find.byType(Scrollbar), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('scroll hint follows remaining content and advances the list', (
+    tester,
+  ) async {
+    Widget panel(double contentHeight) => MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: 300,
+            height: 180,
+            child: AppPanelScrollView(
+              showScrollbar: false,
+              showScrollHint: true,
+              child: SizedBox(height: contentHeight),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(panel(700));
+    await tester.pump();
+    final hint = find.byKey(const ValueKey('panel-scroll-hint'));
+    expect(hint.hitTestable(), findsOneWidget);
+    expect(find.byType(Scrollbar), findsNothing);
+    final position = tester
+        .state<ScrollableState>(find.byType(Scrollable))
+        .position;
+    await tester.tap(hint);
+    await tester.pumpAndSettle();
+    expect(position.pixels, greaterThan(0));
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    await tester.pump();
+    expect(hint, findsNothing);
+    position.jumpTo(0);
+    await tester.pump();
+    await tester.pump();
+    expect(hint, findsOneWidget);
+    await tester.pumpWidget(panel(80));
+    await tester.pump();
+    await tester.pump();
+    expect(hint, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

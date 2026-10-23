@@ -1188,7 +1188,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       icon: Icons.task_alt_rounded,
       title: 'GÖREVLER',
       description:
-          'Günlük görevlerini tamamlayarak jeton ve tecrübe kazanabilirsin.',
+          'Günlük görevlerini tamamlayarak altın ve tecrübe kazanabilirsin.',
     );
   }
 
@@ -2220,10 +2220,7 @@ class _ProfileSplitPanel extends StatefulWidget {
 }
 
 class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
-  late String _draftName = playerProgress.playerName;
   bool _editingName = false;
-  late int _selectedAvatar = playerProgress.playerAvatarIndex;
-
   @override
   void initState() {
     super.initState();
@@ -2241,27 +2238,25 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
       context: context,
       barrierColor: Colors.black54,
       builder: (_) => ProfileNameDialog(
-        initialName: requestName && _draftName == defaultPlayerProfileName
+        initialName:
+            requestName && playerProgress.playerName == defaultPlayerProfileName
             ? ''
-            : _draftName,
+            : playerProgress.playerName,
       ),
     );
     _editingName = false;
-    if (mounted && selected != null) setState(() => _draftName = selected);
-  }
-
-  void _saveProfile() {
-    if (!playerProgress.updatePlayerName(_draftName)) return;
-    playerProgress.updatePlayerAvatar(_selectedAvatar);
-    Navigator.of(context).pop();
+    if (mounted && selected != null) playerProgress.updatePlayerName(selected);
   }
 
   Future<void> _showAvatarPicker(BuildContext context) async {
     final selected = await showDialog<int>(
       context: context,
-      builder: (_) => AvatarPickerDialog(selectedIndex: _selectedAvatar),
+      builder: (_) =>
+          AvatarPickerDialog(selectedIndex: playerProgress.playerAvatarIndex),
     );
-    if (mounted && selected != null) setState(() => _selectedAvatar = selected);
+    if (mounted && selected != null) {
+      playerProgress.updatePlayerAvatar(selected);
+    }
   }
 
   @override
@@ -2326,7 +2321,7 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
                 ),
                 child: ClipOval(
                   child: Image.asset(
-                    playerAvatarAssets[_selectedAvatar],
+                    playerAvatarAssets[playerProgress.playerAvatarIndex],
                     key: const ValueKey('profile-draft-avatar'),
                     width: avatarSize,
                     height: avatarSize,
@@ -2373,7 +2368,16 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
                     key: const ValueKey('profile-name-edit'),
                     borderRadius: BorderRadius.circular(12),
                     onTap: _editName,
-                    child: Padding(
+                    child: Container(
+                      key: const ValueKey('profile-name-underline'),
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: OkeyColors.goldLight,
+                            width: 1.4,
+                          ),
+                        ),
+                      ),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
                         vertical: 12,
@@ -2384,7 +2388,7 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
                             child: FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Text(
-                                _draftName,
+                                playerProgress.playerName,
                                 style: const TextStyle(
                                   color: OkeyColors.cream,
                                   fontFamily: 'Baloo 2',
@@ -2405,15 +2409,6 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  AppArtworkButton(
-                    key: const ValueKey('profile-name-save'),
-                    width: double.infinity,
-                    height: 49,
-                    fontSize: 18,
-                    label: appText('KAYDET', 'SAVE', german: 'SPEICHERN'),
-                    onPressed: _saveProfile,
-                  ),
                 ],
               ),
             ),
@@ -2426,30 +2421,36 @@ class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
             const SizedBox(width: 16),
             Expanded(
               flex: 7,
-              child: Column(
-                key: const ValueKey('profile-career-panel'),
-                children: [
-                  for (final (index, entry) in stats.indexed)
-                    Expanded(
-                      child: Container(
-                        key: ValueKey('profile-stat-separator-$index'),
-                        decoration: BoxDecoration(
-                          color: index.isEven
-                              ? Colors.white.withValues(alpha: .045)
-                              : Colors.transparent,
-                          border: const Border(
-                            top: BorderSide(color: Color(0xFF397765), width: 2),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 16, bottom: 22),
+                child: Column(
+                  key: const ValueKey('profile-career-panel'),
+                  children: [
+                    for (final (index, entry) in stats.indexed)
+                      Expanded(
+                        child: Container(
+                          key: ValueKey('profile-stat-separator-$index'),
+                          decoration: BoxDecoration(
+                            color: index.isEven
+                                ? Colors.white.withValues(alpha: .045)
+                                : Colors.transparent,
+                            border: const Border(
+                              top: BorderSide(
+                                color: Color(0xFF397765),
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          child: _ProfileStatCard(
+                            id: entry.$1,
+                            label: entry.$2,
+                            value: entry.$3,
+                            icon: entry.$4,
                           ),
                         ),
-                        child: _ProfileStatCard(
-                          id: entry.$1,
-                          label: entry.$2,
-                          value: entry.$3,
-                          icon: entry.$4,
-                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -2533,9 +2534,9 @@ class _ProfileStatCard extends StatelessWidget {
               value,
               style: const TextStyle(
                 color: OkeyColors.goldLight,
-                fontSize: 46,
-                height: 1,
-                fontWeight: FontWeight.w900,
+                fontSize: 26,
+                height: 1.1,
+                fontWeight: FontWeight.w800,
               ),
             ),
           ),
@@ -2725,7 +2726,7 @@ class _FeatureDialog extends StatelessWidget {
       _FeatureEntry(
         Icons.card_giftcard_rounded,
         'Günlük Bonus',
-        '+500 jeton almaya hazır',
+        '+500 altın almaya hazır',
         null,
       ),
       _FeatureEntry(
@@ -2802,7 +2803,7 @@ class _FeatureDialog extends StatelessWidget {
         _FeatureEntry(
           mission.complete ? Icons.task_alt_rounded : Icons.casino_rounded,
           mission.title,
-          'Ödül: ${mission.reward} jeton',
+          'Ödül: ${mission.reward} altın',
           '${mission.current}/${mission.target}',
         ),
     ],
@@ -2831,12 +2832,23 @@ class _FeatureDialog extends StatelessWidget {
         'GÜNLÜK GİRİŞ ÖDÜLÜ' => 'images/ui/panels/gunluk-odul.png',
         _ => appGenericPanelAsset,
       };
-      final size = appArtworkPanelSize(
-        BoxConstraints(
-          maxWidth: max(0, viewport.maxWidth - 24),
-          maxHeight: max(0, viewport.maxHeight - 24),
-        ),
+      final availableWidth = max(0.0, viewport.maxWidth - 24);
+      final availableHeight = max(0.0, viewport.maxHeight - 24);
+      final portrait = viewport.maxWidth < viewport.maxHeight;
+      final dailyWidth = min(
+        1280.0,
+        min(availableWidth, availableHeight * 2.35),
       );
+      final size = isDailyReward
+          ? portrait
+                ? Size(min(620.0, availableWidth), min(760.0, availableHeight))
+                : Size(dailyWidth, dailyWidth / 2.35)
+          : appArtworkPanelSize(
+              BoxConstraints(
+                maxWidth: availableWidth,
+                maxHeight: availableHeight,
+              ),
+            );
       return Center(
         child: Material(
           color: Colors.transparent,
@@ -2852,7 +2864,7 @@ class _FeatureDialog extends StatelessWidget {
               size.width * (isInbox || isMissions ? .075 : .035),
               size.height *
                   (isDailyReward
-                      ? .27
+                      ? .22
                       : isInbox || isMissions
                       ? .235
                       : .24),
@@ -2861,7 +2873,7 @@ class _FeatureDialog extends StatelessWidget {
                   (isInbox || isMissions
                       ? .18
                       : isDailyReward
-                      ? .16
+                      ? .10
                       : .12),
             ),
             child: isDailyReward
@@ -2870,9 +2882,7 @@ class _FeatureDialog extends StatelessWidget {
                       horizontal: 10,
                       vertical: 6,
                     ),
-                    child: _DailyLoginRewardPanel(
-                      compact: viewport.maxHeight < 500,
-                    ),
+                    child: const _DailyLoginRewardPanel(),
                   )
                 : ClipRRect(
                     key: ValueKey('feature-content-viewport-$title'),
@@ -2882,6 +2892,7 @@ class _FeatureDialog extends StatelessWidget {
                         Expanded(
                           child: AppPanelScrollView(
                             showScrollbar: false,
+                            showScrollHint: isMissions,
                             padding: const EdgeInsets.fromLTRB(18, 6, 18, 12),
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
@@ -2936,10 +2947,12 @@ class _FeatureDialog extends StatelessWidget {
                                 Flexible(
                                   child: AppArtworkButton(
                                     key: const ValueKey('inbox-mark-all-read'),
+                                    enabled: _entries.isNotEmpty,
                                     yellow: true,
                                     width: 196,
                                     height: 34,
                                     fontSize: 11,
+                                    fontFamily: 'Baloo 2',
                                     label: appText(
                                       'Tümünü okundu işaretle',
                                       'Mark all as read',
@@ -2955,10 +2968,12 @@ class _FeatureDialog extends StatelessWidget {
                                 const SizedBox(width: 8),
                                 AppArtworkButton(
                                   key: const ValueKey('inbox-clear-all'),
+                                  enabled: _entries.isNotEmpty,
                                   yellow: true,
                                   width: 92,
                                   height: 34,
                                   fontSize: 11,
+                                  fontFamily: 'Baloo 2',
                                   label: appText('Temizle', 'Clear'),
                                   onPressed: _inboxNotifications.clearAll,
                                 ),
@@ -3095,8 +3110,7 @@ class _XpRewardParticlesPainter extends CustomPainter {
 }
 
 class _DailyLoginRewardPanel extends StatefulWidget {
-  final bool compact;
-  const _DailyLoginRewardPanel({this.compact = false});
+  const _DailyLoginRewardPanel();
 
   @override
   State<_DailyLoginRewardPanel> createState() => _DailyLoginRewardPanelState();
@@ -3170,19 +3184,23 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
       final currentDay = dailyLogin.displayDay;
       return LayoutBuilder(
         builder: (context, bounds) {
-          final columns = bounds.maxWidth >= 360 ? 7 : 2;
-          final rows = (dailyLoginRewards.length / columns).ceil();
+          const gap = 8.0;
           const finalRewardScale = 1.5;
-          final cardWidth =
-              (bounds.maxWidth - (columns - 1) * 5) /
-              (columns - 1 + finalRewardScale);
-          final cardHeight = max(136.0, min(cardWidth * 2.3, bounds.maxHeight));
-          final contentHeight = rows * cardHeight + (rows - 1) * 8;
+          const cardWidth = 104.0;
+          const cardHeight = 236.0;
+          final portrait =
+              MediaQuery.sizeOf(context).width <
+              MediaQuery.sizeOf(context).height;
+          final contentWidth = portrait
+              ? cardWidth * 3 + gap * 2
+              : cardWidth * 7.5 + gap * 6;
+          final contentHeight = portrait
+              ? cardHeight * 3 + gap * 2
+              : cardHeight;
           final cards = Wrap(
             alignment: WrapAlignment.center,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 5,
-            runSpacing: 8,
+            spacing: gap,
+            runSpacing: gap,
             children: List.generate(dailyLoginRewards.length, (index) {
               final day = index + 1;
               final reward = dailyLoginRewards[index];
@@ -3209,9 +3227,16 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
               );
             }),
           );
-          return contentHeight > bounds.maxHeight + .1
-              ? SingleChildScrollView(child: cards)
-              : Center(child: cards);
+          return Center(
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: contentWidth,
+                height: contentHeight,
+                child: cards,
+              ),
+            ),
+          );
         },
       );
     },
@@ -3452,7 +3477,7 @@ class _MissionPanelState extends State<_MissionPanel>
                           ? Icons.task_alt_rounded
                           : Icons.casino_rounded,
                       mission.title,
-                      'Ödül: ${mission.reward} jeton',
+                      'Ödül: ${mission.reward} altın',
                       '${mission.current}/${mission.target}',
                     ),
                     claimKey: _claimKeys[mission.slot],
@@ -3527,6 +3552,8 @@ class _MissionEntryCard extends StatelessWidget {
                   const SizedBox(height: 3),
                   Row(
                     children: [
+                      Image.asset('images/ui/coin.png', width: 12, height: 12),
+                      const SizedBox(width: 3),
                       Flexible(
                         child: Text(
                           rewardText,
@@ -3801,7 +3828,7 @@ class _RightButtonColumn extends StatelessWidget {
         'images/ui/icons/gorevler.png',
         appText('GÖREVLER', 'MISSIONS'),
         appText(
-          'Günlük görevlerini tamamlayarak jeton ve tecrübe kazanabilirsin.',
+          'Günlük görevlerini tamamlayarak altın ve tecrübe kazanabilirsin.',
           'Complete daily missions to earn coins and experience.',
         ),
       ),

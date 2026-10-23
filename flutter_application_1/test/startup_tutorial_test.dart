@@ -311,8 +311,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-name-confirm')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(playerProgress.playerName, defaultPlayerProfileName);
-    await tester.tap(find.byKey(const ValueKey('profile-name-save')));
+    expect(playerProgress.playerName, 'Gökde');
+    await tester.tap(find.byKey(const ValueKey('profile-close-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(playerProgress.playerName, 'Gökde');

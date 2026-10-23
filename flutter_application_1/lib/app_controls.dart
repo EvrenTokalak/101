@@ -287,7 +287,12 @@ Rect appPanelTitleRect(String asset, Size size) {
   final bounds = switch (asset.split('/').last) {
     'ayarlar.png' => const Rect.fromLTRB(.27, .084, .64, .165),
     'gelen-kutusu.png' => const Rect.fromLTRB(.31, .12, .69, .195),
-    'gunluk-odul.png' => const Rect.fromLTRB(.31, .153, .69, .226),
+    'gunluk-odul.png' => const Rect.fromLTRB(
+      .31,
+      (.153 - .10) / .82,
+      .69,
+      (.226 - .10) / .82,
+    ),
     'ogretici.png' => const Rect.fromLTRB(.30, .116, .69, .19),
     'nasil-oynanir.png' => const Rect.fromLTRB(.29, .087, .66, .17),
     _ => const Rect.fromLTRB(.30, .086, .69, .17),
@@ -302,14 +307,17 @@ Rect appPanelTitleRect(String asset, Size size) {
 
 Rect appPanelCloseRect(String asset, Size size) {
   const extent = 46.0;
+  final daily = asset == 'images/ui/panels/gunluk-odul.png';
+  final profile = asset == 'images/ui/panels/profilim.png';
   final rimY = switch (asset.split('/').last) {
     'gelen-kutusu.png' => .225,
-    'gunluk-odul.png' => .255,
+    'gunluk-odul.png' => (.255 - .10) / .82 + .018,
     'ogretici.png' => .24,
+    'profilim.png' => .17,
     _ => .205,
   };
   final center = Offset(
-    (size.width * .958).clamp(
+    (size.width * (daily || profile ? .935 : .958)).clamp(
       extent / 2,
       max(extent / 2, size.width - extent / 2 - 2),
     ),
@@ -384,7 +392,15 @@ class AppArtworkClose extends StatelessWidget {
       children: [
         Positioned.fromRect(
           rect: appPanelCloseRect(asset, bounds.biggest),
-          child: AppCloseButton(onTap: onTap, buttonKey: buttonKey),
+          child: AppCloseButton(
+            onTap: onTap,
+            buttonKey: buttonKey,
+            size:
+                asset == 'images/ui/panels/gunluk-odul.png' ||
+                    asset == 'images/ui/panels/profilim.png'
+                ? 32
+                : 40,
+          ),
         ),
       ],
     ),
@@ -528,8 +544,12 @@ class _PanelArtwork extends StatelessWidget {
       fit: BoxFit.fill,
       filterQuality: FilterQuality.high,
     );
-    if (asset != appGenericPanelAsset) return image;
-    // Only the middle 64% contains the frame; preserve the original PNG.
+    final daily = asset == 'images/ui/panels/gunluk-odul.png';
+    if (asset != appGenericPanelAsset && !daily) return image;
+    // Use the daily artwork's transparent margins to extend the visible frame
+    // vertically inside the screen, keeping the source PNG unchanged.
+    final cropTop = daily ? .10 : .16;
+    final cropHeight = daily ? .82 : .64;
     return LayoutBuilder(
       builder: (_, bounds) => ClipRect(
         child: Stack(
@@ -537,8 +557,8 @@ class _PanelArtwork extends StatelessWidget {
             Positioned(
               left: 0,
               right: 0,
-              top: -bounds.maxHeight * .16 / .64,
-              height: bounds.maxHeight / .64,
+              top: -bounds.maxHeight * cropTop / cropHeight,
+              height: bounds.maxHeight / cropHeight,
               child: image,
             ),
           ],
@@ -605,11 +625,13 @@ class AppPanelScrollView extends StatefulWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final bool showScrollbar;
+  final bool showScrollHint;
   const AppPanelScrollView({
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
     this.showScrollbar = true,
+    this.showScrollHint = false,
   });
 
   @override
@@ -618,6 +640,43 @@ class AppPanelScrollView extends StatefulWidget {
 
 class _AppPanelScrollViewState extends State<AppPanelScrollView> {
   final _controller = ScrollController();
+  bool _canScrollDown = false;
+  bool _hintUpdatePending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_scheduleHintUpdate);
+    _scheduleHintUpdate();
+  }
+
+  void _scheduleHintUpdate() {
+    if (!widget.showScrollHint || _hintUpdatePending) return;
+    _hintUpdatePending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hintUpdatePending = false;
+      if (!mounted) return;
+      final canScroll =
+          _controller.hasClients &&
+          _controller.position.hasContentDimensions &&
+          _controller.position.extentAfter > 1;
+      if (canScroll != _canScrollDown) {
+        setState(() => _canScrollDown = canScroll);
+      }
+    });
+  }
+
+  void _scrollDown() {
+    final position = _controller.position;
+    _controller.animateTo(
+      (position.pixels + position.viewportDimension * .65).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   void dispose() {
@@ -637,21 +696,68 @@ class _AppPanelScrollViewState extends State<AppPanelScrollView> {
       },
       scrollbars: false,
     ),
-    child: widget.showScrollbar
-        ? Scrollbar(
-            controller: _controller,
-            thumbVisibility: true,
-            interactive: true,
-            child: _scrollView(),
-          )
-        : _scrollView(),
+    child: NotificationListener<ScrollMetricsNotification>(
+      onNotification: (_) {
+        _scheduleHintUpdate();
+        return false;
+      },
+      child: widget.showScrollHint
+          ? Stack(
+              children: [
+                Positioned.fill(child: _scrollbarView()),
+                if (widget.showScrollHint && _canScrollDown)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Tooltip(
+                        message: 'Diğer görevleri göster',
+                        child: Material(
+                          color: const Color(0xFF0B4935),
+                          shape: const StadiumBorder(
+                            side: BorderSide(color: Color(0xFFD9BC6A)),
+                          ),
+                          child: InkWell(
+                            key: const ValueKey('panel-scroll-hint'),
+                            customBorder: const StadiumBorder(),
+                            onTap: _scrollDown,
+                            child: const SizedBox(
+                              width: 46,
+                              height: 24,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: Color(0xFFFFE395),
+                                size: 24,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            )
+          : _scrollbarView(),
+    ),
   );
+
+  Widget _scrollbarView() => widget.showScrollbar
+      ? Scrollbar(
+          controller: _controller,
+          thumbVisibility: true,
+          interactive: true,
+          child: _scrollView(),
+        )
+      : _scrollView();
 
   Widget _scrollView() => SingleChildScrollView(
     controller: _controller,
     primary: false,
     physics: const ClampingScrollPhysics(),
-    padding: widget.padding,
+    padding: widget.padding.add(
+      EdgeInsets.only(bottom: widget.showScrollHint ? 18 : 0),
+    ),
     child: widget.child,
   );
 }

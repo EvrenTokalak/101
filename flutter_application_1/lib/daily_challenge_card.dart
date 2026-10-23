@@ -70,7 +70,7 @@ class _DailyChallengeCardState extends State<DailyChallengeCard> {
     builder: (context, _) => Container(
       key: const ValueKey('daily-challenge-card'),
       margin: const EdgeInsets.only(bottom: 7),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: const Color(0xFF0A4835),
         borderRadius: BorderRadius.circular(14),
@@ -81,6 +81,7 @@ class _DailyChallengeCardState extends State<DailyChallengeCard> {
         ),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -126,59 +127,83 @@ class _DailyChallengeCardState extends State<DailyChallengeCard> {
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            _challenge.definition.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 12),
-          ),
           const SizedBox(height: 3),
-          Row(
-            children: [
-              Image.asset('images/ui/coin.png', width: 16, height: 16),
-              Text(
-                ' +${_challenge.definition.coins}',
+          LayoutBuilder(
+            builder: (context, bounds) {
+              final description = Text(
+                _challenge.definition.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  color: Color(0xFFF2D36C),
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 12,
+                  height: 1.1,
                 ),
-              ),
-              const Spacer(),
-              if (_challenge.canClaim)
-                TextButton(
-                  key: const ValueKey('daily-challenge-claim'),
-                  onPressed: _claiming ? null : _claim,
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 28),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 4,
+              );
+              final rewards = Row(
+                children: [
+                  Image.asset('images/ui/coin.png', width: 14, height: 14),
+                  Expanded(
+                    child: Text(
+                      ' +${_challenge.definition.coins} altın',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFF2D36C),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                  child: const Text(
-                    'TOPLA',
-                    style: TextStyle(
-                      color: Color(0xFFF2D36C),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
+                  const SizedBox(width: 8),
+                  if (_challenge.canClaim)
+                    TextButton(
+                      key: const ValueKey('daily-challenge-claim'),
+                      onPressed: _claiming ? null : _claim,
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
+                      ),
+                      child: const Text(
+                        'TOPLA',
+                        style: TextStyle(
+                          color: Color(0xFFF2D36C),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    )
+                  else
+                    Text(
+                      _challenge.claimed
+                          ? 'ALINDI'
+                          : '${_challenge.current}/${_challenge.definition.target}',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                )
-              else
-                Text(
-                  _challenge.claimed
-                      ? 'ALINDI'
-                      : '${_challenge.current}/${_challenge.definition.target}',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-            ],
+                ],
+              );
+              if (bounds.maxWidth < 320) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [description, const SizedBox(height: 1), rewards],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: description),
+                  const SizedBox(width: 12),
+                  SizedBox(width: 200, child: rewards),
+                ],
+              );
+            },
           ),
         ],
       ),

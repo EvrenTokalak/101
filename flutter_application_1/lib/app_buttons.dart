@@ -29,6 +29,8 @@ class AppArtworkButton extends StatelessWidget {
   final IconData? icon;
   final bool outlinedText;
   final int maxLines;
+  final bool enabled;
+  final String? fontFamily;
   const AppArtworkButton({
     super.key,
     required this.label,
@@ -41,6 +43,8 @@ class AppArtworkButton extends StatelessWidget {
     this.icon,
     this.outlinedText = false,
     this.maxLines = 1,
+    this.enabled = true,
+    this.fontFamily,
   });
 
   @override
@@ -50,48 +54,56 @@ class AppArtworkButton extends StatelessWidget {
         : outlinedText
         ? Colors.white
         : const Color(0xFFFFF2D0);
-    return SizedBox(
-      width: width,
-      height: height,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Positioned.fill(
-            child: AppButtonArtwork(
-              asset:
-                  artworkAsset ??
-                  (yellow ? AppButtonAssets.neutral : AppButtonAssets.save),
+    return AnimatedOpacity(
+      opacity: enabled ? 1 : .45,
+      duration: const Duration(milliseconds: 160),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: AppButtonArtwork(
+                asset:
+                    artworkAsset ??
+                    (yellow ? AppButtonAssets.neutral : AppButtonAssets.save),
+              ),
             ),
-          ),
-          TextButton(
-            onPressed: onPressed,
-            style: TextButton.styleFrom(
-              foregroundColor: color,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              shape: const StadiumBorder(),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              minimumSize: Size.zero,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (icon != null) ...[
-                  Icon(icon, size: math.min(23, fontSize + 1), color: color),
-                  const SizedBox(width: 5),
-                ],
-                Flexible(
-                  child: AppButtonLabel(
-                    label: label,
-                    fontSize: fontSize,
-                    color: color,
-                    outlined: outlinedText,
-                    maxLines: maxLines,
-                  ),
+            TextButton(
+              onPressed: enabled ? onPressed : null,
+              style: TextButton.styleFrom(
+                foregroundColor: color,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
                 ),
-              ],
+                shape: const StadiumBorder(),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                minimumSize: Size.zero,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (icon != null) ...[
+                    Icon(icon, size: math.min(23, fontSize + 1), color: color),
+                    const SizedBox(width: 5),
+                  ],
+                  Flexible(
+                    child: AppButtonLabel(
+                      label: label,
+                      fontSize: fontSize,
+                      color: color,
+                      outlined: outlinedText,
+                      maxLines: maxLines,
+                      fontFamily: fontFamily,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -104,6 +116,7 @@ class AppButtonLabel extends StatelessWidget {
   final Color color;
   final bool outlined;
   final int maxLines;
+  final String? fontFamily;
   const AppButtonLabel({
     super.key,
     required this.label,
@@ -111,6 +124,7 @@ class AppButtonLabel extends StatelessWidget {
     required this.color,
     this.outlined = false,
     this.maxLines = 1,
+    this.fontFamily,
   });
 
   @override
@@ -123,7 +137,7 @@ class AppButtonLabel extends StatelessWidget {
           color: color,
           fontSize: fontSize,
           fontWeight: FontWeight.w900,
-          fontFamily: outlined ? 'Baloo 2' : null,
+          fontFamily: fontFamily ?? (outlined ? 'Baloo 2' : null),
           height: 1.1,
         ),
       );

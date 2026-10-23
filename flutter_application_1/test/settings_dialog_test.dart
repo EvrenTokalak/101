@@ -141,7 +141,7 @@ void main() {
     expect(find.text('Hamle İpuçları'), findsOneWidget);
     expect(find.text('Ses ve titreşim'), findsOneWidget);
     expect(find.text('Oynanış'), findsOneWidget);
-    expect(find.text('Görünüm'), findsOneWidget);
+    expect(find.text('Görünüm ve dil'), findsOneWidget);
     expect(find.text('MÜZİK'), findsNothing);
     expect(find.text('KENAR TAŞLARI'), findsNothing);
     expect(find.text('PERFORMANS'), findsNothing);
@@ -291,7 +291,7 @@ void main() {
             find.descendant(of: profileClose, matching: find.byType(Image)),
           )
           .size,
-      const Size(40, 40),
+      const Size(32, 32),
     );
     expect(
       find.descendant(
@@ -327,7 +327,7 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('profile-avatar-1')));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(playerProgress.playerAvatarIndex, 0);
+    expect(playerProgress.playerAvatarIndex, 1);
     expect(find.byKey(const ValueKey('profile-avatar-picker')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('profile-name-edit')));
@@ -340,9 +340,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-name-confirm')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(playerProgress.playerName, defaultPlayerProfileName);
-    expect(playerProgress.playerAvatarIndex, 0);
-    await tester.tap(find.byKey(const ValueKey('profile-name-save')));
+    expect(playerProgress.playerName, 'Gökde');
+    expect(playerProgress.playerAvatarIndex, 1);
+    await tester.tap(find.byKey(const ValueKey('profile-close-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(playerProgress.playerName, 'Gökde');
@@ -405,14 +405,18 @@ void main() {
             .image,
         appPopupArtwork('images/ui/panels/gunluk-odul.png'),
       );
-      expect(tester.getSize(dialog), const Size(620, 620 / 1.5));
+      expect(tester.getSize(dialog), const Size(1256, 1256 / 2.35));
       final outsideClose = find.byKey(const ValueKey('popup-outside-close'));
       final artwork = find.byKey(const ValueKey('popup-panel-artwork'));
       expect(outsideClose.hitTestable(), findsOneWidget);
       expect(
         tester.getRect(outsideClose).center.dy,
         closeTo(
-          tester.getRect(artwork).top + tester.getRect(artwork).height * .255,
+          tester.getRect(dialog).top +
+              appPanelCloseRect(
+                'images/ui/panels/gunluk-odul.png',
+                tester.getSize(dialog),
+              ).center.dy,
           0.1,
         ),
       );
@@ -430,6 +434,12 @@ void main() {
       expect(find.byKey(const ValueKey('daily-login-claim')), findsNothing);
       expect(find.byKey(const ValueKey('daily-login-day-1')), findsOneWidget);
       expect(find.text('TOPLA'), findsOneWidget);
+      expect(find.byKey(const ValueKey('daily-login-today-1')), findsOneWidget);
+      final closeButton = tester.widget<AppCloseButton>(
+        find.descendant(of: dialog, matching: find.byType(AppCloseButton)),
+      );
+      expect(closeButton.size, 32);
+      expect(tester.getSize(outsideClose), const Size(46, 46));
       expect(find.text('ALINDI'), findsNothing);
       expect(find.byIcon(Icons.check_circle_rounded), findsNothing);
       expect(find.text('KİLİTLİ'), findsNWidgets(6));
@@ -448,7 +458,7 @@ void main() {
         find.byKey(const ValueKey('daily-login-day-5')),
       );
       expect(firstDay.top, fourthDay.top);
-      expect(firstDay.height, lessThanOrEqualTo(180));
+      expect(firstDay.height, lessThanOrEqualTo(420));
       expect(fifthDay.top, firstDay.top);
       final finalDay = tester.getRect(
         find.byKey(const ValueKey('daily-login-day-7')),
@@ -483,6 +493,18 @@ void main() {
           isNull,
           reason: 'daily reward layout at $size',
         );
+        final firstCard = tester.getRect(
+          find.byKey(const ValueKey('daily-login-day-1')),
+        );
+        expect(firstCard.width, greaterThan(30));
+        expect(firstCard.height / firstCard.width, closeTo(236 / 104, .001));
+        final amount = tester.getRect(
+          find.byKey(const ValueKey('daily-login-reward-1')),
+        );
+        final collect = tester.getRect(
+          find.byKey(const ValueKey('daily-login-collect-1')),
+        );
+        expect(amount.bottom, lessThanOrEqualTo(collect.top));
         expect(outsideClose.hitTestable(), findsOneWidget);
         if (size == const Size(800, 360)) {
           final firstDayCoin = find.descendant(
@@ -501,7 +523,11 @@ void main() {
         expect(
           tester.getRect(outsideClose).center.dy,
           closeTo(
-            tester.getRect(artwork).top + tester.getRect(artwork).height * .255,
+            tester.getRect(dialog).top +
+                appPanelCloseRect(
+                  'images/ui/panels/gunluk-odul.png',
+                  tester.getSize(dialog),
+                ).center.dy,
             0.1,
           ),
         );
@@ -519,7 +545,21 @@ void main() {
           of: dialog,
           matching: find.byType(SingleChildScrollView),
         );
-        if (size.width < 530) expect(scrollViews, findsOneWidget);
+        expect(scrollViews, findsNothing);
+        expect(find.byKey(const ValueKey('daily-days-next')), findsNothing);
+        expect(find.byKey(const ValueKey('daily-days-previous')), findsNothing);
+        final contentBounds = tester.getRect(
+          find.byKey(const ValueKey('artwork-panel-content')),
+        );
+        for (var day = 1; day <= 7; day++) {
+          final card = find.byKey(ValueKey('daily-login-day-$day'));
+          expect(card.hitTestable(), findsOneWidget);
+          final rect = tester.getRect(card);
+          expect(rect.left, greaterThanOrEqualTo(contentBounds.left - .1));
+          expect(rect.right, lessThanOrEqualTo(contentBounds.right + .1));
+          expect(rect.top, greaterThanOrEqualTo(contentBounds.top - .1));
+          expect(rect.bottom, lessThanOrEqualTo(contentBounds.bottom + .1));
+        }
         await tester.ensureVisible(
           find.byKey(const ValueKey('daily-login-day-7')),
         );
@@ -560,6 +600,16 @@ void main() {
           );
           expect(labelCenter.dy, lessThan(rewardCenter.dy));
           expect(labelCenter.dx, closeTo(rewardCenter.dx, .1));
+          final amount = tester.getRect(
+            find.byKey(ValueKey('daily-login-amount-$day')),
+          );
+          final firstAmount = tester.getRect(
+            find.byKey(const ValueKey('daily-login-amount-1')),
+          );
+          if (size.width > size.height) {
+            expect(amount.top, closeTo(firstAmount.top, .1));
+            expect(amount.bottom, closeTo(firstAmount.bottom, .1));
+          }
         }
         await tester.ensureVisible(
           find.byKey(const ValueKey('daily-login-day-1')),
@@ -809,6 +859,29 @@ void main() {
       }
       expect(find.byType(Dismissible), findsNothing);
       expect(find.text('Yeni bildirimin yok.'), findsOneWidget);
+      for (final key in ['inbox-mark-all-read', 'inbox-clear-all']) {
+        final button = find.byKey(ValueKey(key));
+        expect(button, findsOneWidget);
+        expect(
+          tester
+              .widget<AnimatedOpacity>(
+                find.descendant(
+                  of: button,
+                  matching: find.byType(AnimatedOpacity),
+                ),
+              )
+              .opacity,
+          .45,
+        );
+        expect(
+          tester
+              .widget<TextButton>(
+                find.descendant(of: button, matching: find.byType(TextButton)),
+              )
+              .onPressed,
+          isNull,
+        );
+      }
       expect(playerProgress.coins, coins);
       expect(dailyLogin.canClaimToday, isTrue);
       await tester.tap(find.byKey(const ValueKey('popup-outside-close')));
@@ -816,6 +889,8 @@ void main() {
       await tester.tap(find.byIcon(Icons.mail_outlined));
       await tester.pump(const Duration(milliseconds: 600));
       expect(find.text('Yeni bildirimin yok.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('inbox-mark-all-read')), findsOneWidget);
+      expect(find.byKey(const ValueKey('inbox-clear-all')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('main-notification-badge')),
         findsNothing,

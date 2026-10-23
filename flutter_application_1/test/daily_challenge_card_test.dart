@@ -60,4 +60,68 @@ void main() {
       progress.dispose();
     },
   );
+
+  testWidgets(
+    'compact challenge fits narrow screens and keeps claim reachable',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await SharedPreferencesAsync().clear();
+      final progress = PlayerProgressController();
+      final challenge = DailyChallengeController(
+        progress,
+        clock: () => DateTime(2026, 10, 23, 12),
+      );
+      await challenge.load();
+      final config = GameLaunchConfig.gameMode(
+        mode: challenge.definition.mode ?? OkeyGameMode.standard,
+        id: 'test',
+        label: 'Test',
+      );
+      for (var i = 0; i < challenge.definition.target; i++) {
+        await challenge.recordRound(config: config, won: true);
+      }
+      final heights = <double>[];
+      for (final width in [194.0, 300.0, 500.0]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topCenter,
+                child: MediaQuery(
+                  data: const MediaQueryData(
+                    textScaler: TextScaler.linear(1.25),
+                  ),
+                  child: SizedBox(
+                    width: width,
+                    child: DailyChallengeCard(controller: challenge),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('daily-challenge-claim')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull, reason: 'width $width');
+        heights.add(
+          tester
+              .getSize(find.byKey(const ValueKey('daily-challenge-card')))
+              .height,
+        );
+      }
+      expect(heights.last, lessThan(heights[1]));
+      final before = progress.coins;
+      await tester.tap(find.byKey(const ValueKey('daily-challenge-claim')));
+      await tester.pump();
+      expect(challenge.claimed, isTrue);
+      expect(progress.coins, before + challenge.definition.coins);
+      expect(find.text('ALINDI'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      challenge.dispose();
+      progress.dispose();
+    },
+  );
 }

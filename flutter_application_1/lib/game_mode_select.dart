@@ -200,8 +200,8 @@ class _ModeInfoDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final viewport = MediaQuery.sizeOf(context);
     final size = Size(
-      math.min(420, math.max(0, viewport.width - 32)),
-      math.min(300, math.max(0, viewport.height - 32)),
+      math.min(480, math.max(0, viewport.width - 32)),
+      math.min(320, math.max(0, viewport.height - 32)),
     );
     return Center(
       child: Material(
@@ -212,28 +212,88 @@ class _ModeInfoDialog extends StatelessWidget {
           height: size.height,
           title: Text(_localizedModeLabel(mode.id), maxLines: 1),
           onClose: () => Navigator.of(context).pop(),
-          child: LayoutBuilder(
-            builder: (context, bounds) => Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: SizedBox(
-                  width: bounds.maxWidth,
-                  child: Text(
-                    _localizedModeDescription(mode.id),
-                    key: ValueKey('game-mode-info-paragraph-${mode.id}'),
-                    textAlign: TextAlign.left,
-                    style: const TextStyle(
-                      color: OkeyColors.cream,
-                      fontSize: 16,
-                      height: 1.5,
+          child: AppPanelScrollView(
+            showScrollbar: false,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 72,
+                  height: 2,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        OkeyColors.goldLight,
+                        Colors.transparent,
+                      ],
                     ),
                   ),
                 ),
-              ),
+                Text.rich(
+                  _modeDescriptionSpan(mode.id),
+                  key: ValueKey('game-mode-info-paragraph-${mode.id}'),
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                    color: OkeyColors.cream,
+                    fontSize: 17,
+                    height: 1.55,
+                    letterSpacing: .15,
+                    shadows: [
+                      Shadow(color: Colors.black38, offset: Offset(0, 1)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
     );
   }
+}
+
+TextSpan _modeDescriptionSpan(String id) {
+  final description = _localizedModeDescription(id);
+  final highlights = switch (id) {
+    'classic-101' => [
+      appText('üç tur', 'three individual rounds'),
+      appText('günlük lige sayılmaz', 'do not count toward the daily league'),
+    ],
+    'timed-101' => [
+      appText('7 saniyen', '7 seconds'),
+      appText('otomatik taş çeker', 'draws a tile'),
+    ],
+    'color-bonus-101' => [
+      appText('bonus renk', 'bonus color'),
+      appText('iki kat', 'double'),
+    ],
+    _ => [
+      appText('bir fazlasına', 'one above'),
+      appText(
+        'Seri ve çift hedefleri ayrı ilerler',
+        'The two targets rise separately',
+      ),
+    ],
+  };
+  final pattern = RegExp(highlights.map(RegExp.escape).join('|'));
+  var offset = 0;
+  final spans = <InlineSpan>[];
+  for (final match in pattern.allMatches(description)) {
+    spans.add(TextSpan(text: description.substring(offset, match.start)));
+    spans.add(
+      TextSpan(
+        text: match.group(0),
+        style: const TextStyle(
+          color: OkeyColors.goldLight,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+    offset = match.end;
+  }
+  spans.add(TextSpan(text: description.substring(offset)));
+  return TextSpan(children: spans);
 }

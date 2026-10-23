@@ -101,7 +101,7 @@ void main() {
       final soundSwitch = find
           .byKey(const ValueKey('settings-switch-indicator'))
           .first;
-      expect(tester.getSize(soundSwitch), const Size(50, 24));
+      expect(tester.getSize(soundSwitch), const Size(62, 32));
       expect(
         tester.widget<Text>(find.text('Ses Efektleri')).style?.fontSize,
         closeTo(15 * 900 / 620, .01),

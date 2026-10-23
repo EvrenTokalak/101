@@ -236,7 +236,13 @@ void main() {
       await tester.pump();
       await tester.ensureVisible(claim);
       expect(claim.hitTestable(), findsOneWidget);
-      expect(tester.takeException(), isNull);
+      final error = tester.takeException();
+      expect(
+        error,
+        isNull,
+        reason:
+            'At $size: ${error is FlutterError ? error.toDiagnosticsNode().toStringDeep() : error}',
+      );
     }
     final balance = playerProgress.coins;
     await tester.tap(claim);

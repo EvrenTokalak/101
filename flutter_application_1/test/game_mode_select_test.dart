@@ -90,14 +90,14 @@ void main() {
       final infoSize = tester.getSize(
         find.byKey(const ValueKey('game-mode-info-dialog-classic-101')),
       );
-      expect(infoSize.width, lessThanOrEqualTo(420));
-      expect(infoSize.height, lessThanOrEqualTo(300));
+      expect(infoSize.width, lessThanOrEqualTo(480));
+      expect(infoSize.height, lessThanOrEqualTo(320));
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('game-mode-info-dialog-classic-101')),
           matching: find.byType(Scrollable),
         ),
-        findsNothing,
+        findsOneWidget,
       );
       await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pump(const Duration(milliseconds: 320));
@@ -191,15 +191,28 @@ void main() {
             findsNothing,
           );
           final text = tester.widget<Text>(paragraph);
-          expect(text.data, isNot(contains('\n')));
-          expect(text.data!.length, greaterThan(150));
+          expect(text.textSpan!.toPlainText(), isNot(contains('\n')));
+          expect(text.textSpan!.toPlainText().length, greaterThan(150));
           expect(text.maxLines, isNull);
           final panelRect = tester.getRect(dialog);
           final paragraphRect = tester.getRect(paragraph);
           expect(paragraphRect.left, greaterThanOrEqualTo(panelRect.left));
           expect(paragraphRect.top, greaterThanOrEqualTo(panelRect.top));
           expect(paragraphRect.right, lessThanOrEqualTo(panelRect.right));
-          expect(paragraphRect.bottom, lessThanOrEqualTo(panelRect.bottom));
+          final scroll = find.descendant(
+            of: dialog,
+            matching: find.byType(Scrollable),
+          );
+          expect(scroll, findsOneWidget);
+          final viewport = tester.getRect(scroll);
+          expect(viewport.bottom, lessThanOrEqualTo(panelRect.bottom));
+          final position = tester.state<ScrollableState>(scroll).position;
+          position.jumpTo(position.maxScrollExtent);
+          await tester.pump();
+          expect(
+            tester.getBottomRight(paragraph).dy,
+            lessThanOrEqualTo(viewport.bottom + 1),
+          );
           expect(
             tester.takeException(),
             isNull,

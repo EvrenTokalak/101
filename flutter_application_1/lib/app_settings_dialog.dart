@@ -392,9 +392,9 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                                             const SizedBox(height: 8),
                                             _groupHeading(
                                               _text(
-                                                'Görünüm',
-                                                'Appearance',
-                                                de: 'Darstellung',
+                                                'Görünüm ve dil',
+                                                'Appearance and language',
+                                                de: 'Darstellung und Sprache',
                                               ),
                                             ),
                                             SizedBox(
@@ -481,7 +481,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
         Expanded(
           child: Align(
             alignment: Alignment.center,
-            child: SizedBox(height: 42, child: options[i]),
+            child: SizedBox(height: 48, child: options[i]),
           ),
         ),
       ],
@@ -610,8 +610,8 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   Widget _switchIndicator(bool enabled) => AnimatedContainer(
     key: const ValueKey('settings-switch-indicator'),
     duration: const Duration(milliseconds: 160),
-    width: 50,
-    height: 24,
+    width: 62,
+    height: 32,
     padding: const EdgeInsets.all(2),
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(20),
@@ -635,8 +635,8 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
       curve: Curves.easeOut,
       alignment: enabled ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        width: 18,
-        height: 18,
+        width: 26,
+        height: 26,
         decoration: const BoxDecoration(
           shape: BoxShape.circle,
           gradient: LinearGradient(
@@ -649,7 +649,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
         child: enabled
             ? const Icon(
                 Icons.check_rounded,
-                size: 13,
+                size: 17,
                 color: Color(0xFF145037),
               )
             : null,
@@ -819,17 +819,46 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
       required String label,
       required VoidCallback onPressed,
       String? artworkAsset,
-      bool yellow = false,
-    }) => AppArtworkButton(
-      key: ValueKey(key),
-      width: actionWidth,
-      height: AppButtonMetrics.height,
-      fontSize: appPopupBodyFontSize * _metricScale,
-      label: label,
-      artworkAsset: artworkAsset,
-      yellow: yellow,
-      onPressed: onPressed,
-    );
+      bool primary = false,
+    }) {
+      final button = AppArtworkButton(
+        key: ValueKey(key),
+        width: actionWidth,
+        height: AppButtonMetrics.height,
+        fontSize: appPopupBodyFontSize * _metricScale,
+        fontFamily: 'Baloo 2',
+        label: label,
+        artworkAsset: artworkAsset,
+        onPressed: onPressed,
+      );
+      return primary
+          ? ColorFiltered(
+              colorFilter: const ColorFilter.matrix([
+                1.12,
+                0,
+                0,
+                0,
+                6,
+                0,
+                1.22,
+                0,
+                0,
+                10,
+                0,
+                0,
+                1.12,
+                0,
+                6,
+                0,
+                0,
+                0,
+                1,
+                0,
+              ]),
+              child: button,
+            )
+          : button;
+    }
 
     final actions = [
       if (widget.onHome != null)
@@ -846,15 +875,32 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
           artworkAsset: AppButtonAssets.restart,
           onPressed: () => _closeThen(widget.onRestart!),
         ),
-      action(
-        key: 'settings-default-button',
-        label: _text('VARSAYILAN', 'DEFAULT'),
-        yellow: true,
-        onPressed: () => setState(() => settings = const AppSettings()),
+      SizedBox(
+        width: actionWidth,
+        height: AppButtonMetrics.height,
+        child: OutlinedButton(
+          key: const ValueKey('settings-default-button'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFD0DACA),
+            backgroundColor: const Color(0xFF103C2D),
+            side: const BorderSide(color: Color(0xFF63856A)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          onPressed: () => setState(() => settings = const AppSettings()),
+          child: AppButtonLabel(
+            label: _text('VARSAYILAN', 'DEFAULT'),
+            fontFamily: 'Baloo 2',
+            fontSize: appPopupBodyFontSize * _metricScale,
+            color: const Color(0xFFD0DACA),
+          ),
+        ),
       ),
       action(
         key: 'settings-save-button',
         label: _text('KAYDET', 'SAVE', de: 'SPEICHERN'),
+        primary: true,
         onPressed: () => Navigator.of(context).pop(settings),
       ),
     ];

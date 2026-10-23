@@ -21,6 +21,70 @@ Rect _paintedRect(WidgetTester tester, Finder finder) {
 
 void main() {
   preparePanelArtwork();
+  testWidgets('profile edits save immediately without a save button', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    playerProgress.reset();
+    appLanguage.value = AppLanguage.turkish;
+    appSettings.value = const AppSettings();
+    addTearDown(playerProgress.reset);
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
+    await tester.pump(const Duration(milliseconds: 750));
+    await tester.tap(find.text(defaultPlayerProfileName));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byKey(const ValueKey('profile-name-save')), findsNothing);
+    final nameArea = tester.widget<Container>(
+      find.byKey(const ValueKey('profile-name-underline')),
+    );
+    final border = (nameArea.decoration! as BoxDecoration).border! as Border;
+    expect(border.bottom.width, greaterThan(0));
+    expect(border.top, BorderSide.none);
+    expect(border.left, BorderSide.none);
+    expect(border.right, BorderSide.none);
+    Future<void> name(String value) async {
+      await tester.tap(find.byKey(const ValueKey('profile-name-edit')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.enterText(
+        find.byKey(const ValueKey('profile-name-field')),
+        value,
+      );
+      await tester.tap(find.byKey(const ValueKey('profile-name-confirm')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+    }
+
+    await name('Yeni Oyuncu');
+    expect(playerProgress.playerName, 'Yeni Oyuncu');
+    await name(defaultPlayerProfileName);
+    expect(playerProgress.playerName, defaultPlayerProfileName);
+    for (final index in [1, 0]) {
+      await tester.tap(find.byKey(const ValueKey('profile-avatar-edit')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.tap(find.byKey(ValueKey('profile-avatar-$index')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(playerProgress.playerAvatarIndex, index);
+    }
+    expect(playerProgress.playerName, defaultPlayerProfileName);
+    expect(playerProgress.playerAvatarIndex, 0);
+    final career = tester.getRect(
+      find.byKey(const ValueKey('profile-career-panel')),
+    );
+    final panel = tester.getRect(
+      find.byKey(const ValueKey('feature-dialog-PROFİLİM')),
+    );
+    expect(career.right, lessThan(panel.right - panel.width * .06));
+    expect(career.bottom, lessThanOrEqualTo(panel.top + panel.height * .85));
+    final close = tester.widget<AppCloseButton>(find.byType(AppCloseButton));
+    expect(close.size, 32);
+    expect(tester.takeException(), isNull);
+  });
   for (final size in const [Size(568, 320), Size(800, 360), Size(390, 844)]) {
     testWidgets('separate name editor fits above a phone keyboard at $size', (
       tester,
@@ -111,15 +175,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       expect(nameDialog, findsNothing);
       expect(profile, findsOneWidget);
-      expect(playerProgress.playerName, defaultPlayerProfileName);
-      await tester.tap(find.byKey(const ValueKey('profile-name-save')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.byKey(const ValueKey('profile-name-save')), findsNothing);
       expect(playerProgress.playerName, 'Yeni Oyuncu');
       expect(tester.takeException(), isNull);
     });
   }
-  testWidgets('name validation and cancel preserve the unsaved profile draft', (
+  testWidgets('name validation and cancel preserve the last confirmed name', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -155,7 +216,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     expect(dialog, findsNothing);
-    expect(playerProgress.playerName, defaultPlayerProfileName);
+    expect(playerProgress.playerName, 'Taslak Oyuncu');
     await tester.tap(edit);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
@@ -175,17 +236,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('profile-close-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    expect(playerProgress.playerName, defaultPlayerProfileName);
-    await tester.tap(find.text(defaultPlayerProfileName));
+    expect(playerProgress.playerName, 'Taslak Oyuncu');
+    await tester.tap(find.text('Taslak Oyuncu'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     await tester.tap(edit);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    expect(
-      tester.widget<TextField>(field).controller!.text,
-      defaultPlayerProfileName,
-    );
+    expect(tester.widget<TextField>(field).controller!.text, 'Taslak Oyuncu');
     expect(tester.takeException(), isNull);
   });
   for (final size in const [
@@ -241,7 +299,7 @@ void main() {
           matching: find.text('1 / 1'),
         );
         expect(tester.widget<Text>(label).style?.fontSize, 26);
-        expect(tester.widget<Text>(value).style?.fontSize, 46);
+        expect(tester.widget<Text>(value).style?.fontSize, 26);
         for (final textFinder in [label, value]) {
           final box = tester.renderObject<RenderBox>(textFinder);
           final textRect = Rect.fromPoints(
@@ -303,14 +361,14 @@ void main() {
         findsNothing,
       );
       expect(tester.takeException(), isNull);
-      for (final save in [false, true]) {
+      for (final index in [1, 0]) {
         await tester.tap(find.byKey(const ValueKey('profile-avatar-edit')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
-        await tester.tap(find.byKey(const ValueKey('profile-avatar-1')));
+        await tester.tap(find.byKey(ValueKey('profile-avatar-$index')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
-        expect(playerProgress.playerAvatarIndex, 0);
+        expect(playerProgress.playerAvatarIndex, index);
         expect(
           tester
               .widget<Image>(find.byKey(const ValueKey('profile-draft-avatar')))
@@ -318,17 +376,13 @@ void main() {
           isA<ResizeImage>().having(
             (image) => image.imageProvider,
             'asset',
-            AssetImage(playerAvatarAssets[1]),
+            AssetImage(playerAvatarAssets[index]),
           ),
         );
-        await tester.tap(
-          find.byKey(
-            ValueKey(save ? 'profile-name-save' : 'profile-close-button'),
-          ),
-        );
+        await tester.tap(find.byKey(const ValueKey('profile-close-button')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
-        expect(playerProgress.playerAvatarIndex, save ? 1 : 0);
+        expect(playerProgress.playerAvatarIndex, index);
         await tester.tap(find.text(defaultPlayerProfileName));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
@@ -339,7 +393,7 @@ void main() {
           isA<ResizeImage>().having(
             (image) => image.imageProvider,
             'asset',
-            AssetImage(playerAvatarAssets[save ? 1 : 0]),
+            AssetImage(playerAvatarAssets[index]),
           ),
         );
       }
