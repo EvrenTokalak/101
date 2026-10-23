@@ -60,6 +60,11 @@ flutter:
   assets:
     - assets/sounds/
     - görseller/pp/
+    - görseller/kaydet
+    - görseller/sarı buton
+    - görseller/ana sayfa.png
+    - görseller/devam et.png
+    - görseller/yeniden başlat.png
     - images/rack2.jpg
     - images/tas_ters.png
     - images/anamenu/menubg.png
@@ -67,7 +72,6 @@ flutter:
     - images/ui/action_gold.png
     - images/ui/action_green.png
     - images/ui/coin.png
-    - images/ui/end_round_banner.png
     - images/ui/game_settings.png
     - images/ui/settings.png
     - images/ui/settings_close.png
@@ -80,18 +84,18 @@ flutter:
     - images/ui/home/gold_icon.png
     - images/ui/home/hemenoyna2.png
     - images/ui/home/level_icon.png
+    - images/ui/home/settings.png
+    - images/ui/home/store.png
+    - images/ui/home/inbox.png
+    - images/ui/home/help.png
+    - images/ui/home/daily_reward.png
+    - images/ui/home/profile_panel.png
+    - images/ui/home/action_button.png
+    - images/ui/home/play_button.png
+    - görseller/icon/
+    - images/ui/icons/
+    - images/ui/panels/
     - images/ui/home/logoasil.png
-    - images/ui/icons/gorevler.png
-    - images/ui/icons/gunluk_odul_opt.png
-    - images/ui/icons/katlamali.png
-    - images/ui/icons/klasik.png
-    - images/ui/icons/masa_sec.png
-    - görseller/icon/oyun_modlari_kompakt.png
-    - görseller/icon/hand.png
-    - görseller/icon/Ornate AYARLAR Game Settings Panel.png
-    - images/ui/icons/renk_bonusu.png
-    - images/ui/icons/turnuva.png
-    - images/ui/icons/zamanli.png
     - images/rooms/
     - images/store/racks/
     - images/store/tiles/
@@ -104,6 +108,14 @@ flutter:
     - images/store/backgrounds/
 
   fonts:
+    - family: Scene Button
+      fonts:
+        - asset: fonts/SceneSans-Medium.ttf
+          weight: 500
+    - family: Scene Sans
+      fonts:
+        - asset: fonts/SceneSans-Medium.ttf
+          weight: 700
     - family: Baloo 2
       fonts:
         - asset: fonts/Baloo2-Variable.ttf

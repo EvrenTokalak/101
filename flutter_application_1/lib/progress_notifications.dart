@@ -42,6 +42,7 @@ class ProgressNotifications extends ChangeNotifier {
   static const _key = 'inbox.progress_events_v1';
   static const rooms = [(5, 'Standart'), (15, 'VIP'), (25, 'Elit')];
   final List<ProgressNotice> _unread = [];
+  final List<ProgressNotice> _notices = [];
   final List<ProgressNotice> _toasts = [];
   final Set<String> _completed = {};
   final List<int> _generations = [0, 0, 0];
@@ -52,6 +53,7 @@ class ProgressNotifications extends ChangeNotifier {
   Future<void>? _loading;
   Future<void> _writes = Future.value();
   List<ProgressNotice> get unread => List.unmodifiable(_unread);
+  List<ProgressNotice> get notices => List.unmodifiable(_notices);
   void refresh() => _sync();
   List<DailyMission> get missions => List.generate(3, (slot) {
     final generation = _generations[slot];
@@ -142,6 +144,11 @@ class ProgressNotifications extends ChangeNotifier {
             ProgressNotice(entry['id'], entry['title'], room: entry['room']),
           );
         }
+        for (final entry in (data['notices'] ?? data['unread']) as List) {
+          _notices.add(
+            ProgressNotice(entry['id'], entry['title'], room: entry['room']),
+          );
+        }
       } else {
         _level = progress.level;
       }
@@ -185,6 +192,7 @@ class ProgressNotifications extends ChangeNotifier {
         progress.gamesWon < _wins ||
         progress.level < _level) {
       _unread.clear();
+      _notices.clear();
       _toasts.clear();
       _level = progress.level;
       _resetDay();
@@ -220,6 +228,7 @@ class ProgressNotifications extends ChangeNotifier {
   void _add(ProgressNotice notice) {
     if (_unread.any((entry) => entry.id == notice.id)) return;
     _unread.add(notice);
+    if (!_notices.any((entry) => entry.id == notice.id)) _notices.add(notice);
     _toasts.add(notice);
   }
 
@@ -235,6 +244,32 @@ class ProgressNotifications extends ChangeNotifier {
     unawaited(_persist());
   }
 
+  Future<void> markAllRead() async {
+    await load();
+    _unread.clear();
+    _toasts.clear();
+    notifyListeners();
+    await _persist();
+  }
+
+  Future<void> dismissNotice(String id) async {
+    if (!_ready) await load();
+    _notices.removeWhere((notice) => notice.id == id);
+    _unread.removeWhere((notice) => notice.id == id);
+    _toasts.removeWhere((notice) => notice.id == id);
+    notifyListeners();
+    await _persist();
+  }
+
+  Future<void> clearNotices() async {
+    await load();
+    _notices.clear();
+    _unread.clear();
+    _toasts.clear();
+    notifyListeners();
+    await _persist();
+  }
+
   Future<void> _persist() {
     if (_deadline == null) return Future.value();
     final value = jsonEncode({
@@ -246,6 +281,9 @@ class ProgressNotifications extends ChangeNotifier {
       'completed': _completed.toList(),
       'generations': _generations,
       'claimed': _claimed,
+      'notices': _notices
+          .map((e) => {'id': e.id, 'title': e.title, 'room': e.room})
+          .toList(),
       'unread': _unread
           .map((e) => {'id': e.id, 'title': e.title, 'room': e.room})
           .toList(),

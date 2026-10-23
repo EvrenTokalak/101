@@ -256,7 +256,9 @@ Future<List<int>> playLeagueTables({
       }
       if (isActive != null && !isActive()) return [];
       table.step();
-      await Future<void>.delayed(const Duration(milliseconds: 1));
+      // On web all four background tables share the rendering thread. Reserve
+      // a frame between turns instead of continuously queuing more AI work.
+      await Future<void>.delayed(Duration(milliseconds: kIsWeb ? 16 : 1));
     }
   }
   return tables.expand((table) => table.result.penalties).toList();

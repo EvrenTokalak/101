@@ -1,3 +1,5 @@
+import 'panel_artwork_test_support.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +17,13 @@ Future<void> pumpRouteTransition(WidgetTester tester) async {
   for (var frame = 0; frame < 10; frame++) {
     await tester.pump(const Duration(milliseconds: 100));
   }
+  final difficulty = find.byKey(const ValueKey('difficulty-medium'));
+  if (difficulty.evaluate().isNotEmpty) {
+    await tester.tap(difficulty);
+    for (var frame = 0; frame < 10; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
 }
 
 Future<void> disposeGameRoute(WidgetTester tester) async {
@@ -23,6 +32,7 @@ Future<void> disposeGameRoute(WidgetTester tester) async {
 }
 
 void main() {
+  preparePanelArtwork();
   setUp(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -102,8 +112,8 @@ void main() {
     final game = tester.widget<GameScreen>(find.byType(GameScreen));
     expect(game.launchConfig.entryPoint, GameEntryPoint.room);
     expect(game.launchConfig.selectionLabel, 'Başlangıç');
-    expect(game.launchConfig.entryFee, 2000);
-    expect(playerProgress.coins, coinsBefore - 2000);
+    expect(game.launchConfig.entryFee, 1500);
+    expect(playerProgress.coins, coinsBefore - 1500);
     expect(tester.takeException(), isNull);
     await disposeGameRoute(tester);
   });
@@ -146,8 +156,9 @@ void main() {
     tester.state<NavigatorState>(find.byType(Navigator)).pop();
     await pumpRouteTransition(tester);
 
-    expect(find.byKey(const ValueKey('league-progress')), findsOneWidget);
-    expect(find.text('0 / 20 EL'), findsOneWidget);
+    expect(find.byKey(const ValueKey('league-player-summary')), findsOneWidget);
+    expect(dailyLeague.completedRounds, 0);
+    expect(find.text('HAZIR MISIN?'), findsNothing);
     expect(find.textContaining('Rakip'), findsNothing);
     expect(tester.takeException(), isNull);
   });

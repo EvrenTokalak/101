@@ -125,6 +125,7 @@ class PlayerProgressController extends ChangeNotifier {
   static const _gamesPlayedKey = 'progress.games_played';
   static const _gamesWonKey = 'progress.games_won';
   static const _handsOpenedKey = 'progress.hands_opened';
+  static const _highestOpeningKey = 'progress.highest_opening';
   static const _handsFinishedKey = 'progress.hands_finished';
   static const _totalXpKey = 'progress.total_xp';
   static const _economyV2MigrationKey = 'progress.economy_v2';
@@ -141,6 +142,7 @@ class PlayerProgressController extends ChangeNotifier {
   int _gamesPlayed = 0;
   int _gamesWon = 0;
   int _handsOpened = 0;
+  int _highestOpening = 0;
   int _handsFinished = 0;
   int _totalXpEarned = 0;
   String _playerName = defaultPlayerProfileName;
@@ -154,6 +156,7 @@ class PlayerProgressController extends ChangeNotifier {
   int get gamesPlayed => _gamesPlayed;
   int get gamesWon => _gamesWon;
   int get handsOpened => _handsOpened;
+  int get highestOpening => _highestOpening;
   int get handsFinished => _handsFinished;
   int get totalXpEarned => _totalXpEarned;
   String get playerName => _playerName;
@@ -224,6 +227,10 @@ class PlayerProgressController extends ChangeNotifier {
     );
     _handsOpened = (await preferences.getInt(_handsOpenedKey) ?? _handsOpened)
         .clamp(0, 1 << 31);
+    _highestOpening = (await preferences.getInt(_highestOpeningKey) ?? 0).clamp(
+      0,
+      1 << 31,
+    );
     _handsFinished =
         (await preferences.getInt(_handsFinishedKey) ?? _handsFinished).clamp(
           0,
@@ -283,6 +290,7 @@ class PlayerProgressController extends ChangeNotifier {
     await preferences.setInt(_gamesPlayedKey, _gamesPlayed);
     await preferences.setInt(_gamesWonKey, _gamesWon);
     await preferences.setInt(_handsOpenedKey, _handsOpened);
+    await preferences.setInt(_highestOpeningKey, _highestOpening);
     await preferences.setInt(_handsFinishedKey, _handsFinished);
     await preferences.setInt(_totalXpKey, _totalXpEarned);
     await preferences.setString(_playerNameKey, _playerName);
@@ -291,6 +299,13 @@ class PlayerProgressController extends ChangeNotifier {
   }
 
   void _schedulePersist() => unawaited(_persist());
+
+  void recordOpening(int points) {
+    if (points <= _highestOpening) return;
+    _highestOpening = points;
+    notifyListeners();
+    _schedulePersist();
+  }
 
   Future<void> _persistWallet() {
     final preferences = _preferences;
@@ -315,7 +330,11 @@ class PlayerProgressController extends ChangeNotifier {
     required int coins,
     required int stars,
   }) async {
-    if (_leagueAwards.contains(id)) return;
+    if (_leagueAwards.contains(id)) {
+      // A previous attempt may have credited memory before storage failed.
+      await _persistWallet();
+      return;
+    }
     _leagueAwards.add(id);
     _coins += coins.clamp(0, 1 << 30);
     _leagueStars += stars.clamp(0, 1 << 30);
@@ -469,6 +488,7 @@ class PlayerProgressController extends ChangeNotifier {
     _gamesPlayed = 0;
     _gamesWon = 0;
     _handsOpened = 0;
+    _highestOpening = 0;
     _handsFinished = 0;
     _totalXpEarned = 0;
     _playerName = defaultPlayerProfileName;

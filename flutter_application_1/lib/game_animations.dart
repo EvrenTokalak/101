@@ -5,11 +5,15 @@ class _TileMotionScope extends InheritedWidget {
   final ValueNotifier<Set<int>> finishHiddenTileIds;
   final ValueNotifier<_RackDragVisualState> dragVisual;
   final ValueNotifier<_ProcessedTileHighlight?> processedHighlight;
+  final int? drawAttentionTileId;
+  final int drawAttentionSerial;
   const _TileMotionScope({
     required this.motion,
     required this.finishHiddenTileIds,
     required this.dragVisual,
     required this.processedHighlight,
+    required this.drawAttentionTileId,
+    required this.drawAttentionSerial,
     required super.child,
   });
   @override
@@ -17,13 +21,22 @@ class _TileMotionScope extends InheritedWidget {
       motion != oldWidget.motion ||
       finishHiddenTileIds != oldWidget.finishHiddenTileIds ||
       dragVisual != oldWidget.dragVisual ||
-      processedHighlight != oldWidget.processedHighlight;
+      processedHighlight != oldWidget.processedHighlight ||
+      drawAttentionTileId != oldWidget.drawAttentionTileId ||
+      drawAttentionSerial != oldWidget.drawAttentionSerial;
 }
 
 class _ProcessedTileHighlight {
   final int serial;
   final Set<int> tileIds;
-  const _ProcessedTileHighlight(this.serial, this.tileIds);
+  final Duration duration;
+  final Color? color;
+  const _ProcessedTileHighlight(
+    this.serial,
+    this.tileIds, {
+    this.duration = const Duration(milliseconds: 280),
+    this.color,
+  });
 }
 
 class _ProcessedTileAccent extends StatelessWidget {
@@ -54,16 +67,16 @@ class _ProcessedTileAccent extends StatelessWidget {
                       'processed-tile-highlight-${tile.id}-${value.serial}',
                     ),
                     tween: Tween(begin: 0, end: 1),
-                    duration: const Duration(milliseconds: 280),
+                    duration: value.duration,
                     builder: (context, progress, _) => DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(3),
                         color: Colors.white.withValues(
-                          alpha: sin(progress * pi) * .28,
+                          alpha: _intensity(progress, value) * .28,
                         ),
                         border: Border.all(
-                          color: tile.displayColor.withValues(
-                            alpha: sin(progress * pi) * .65,
+                          color: (value.color ?? tile.displayColor).withValues(
+                            alpha: _intensity(progress, value) * .85,
                           ),
                           width: 1.5,
                         ),
@@ -76,6 +89,12 @@ class _ProcessedTileAccent extends StatelessWidget {
           );
         },
       );
+
+  double _intensity(double progress, _ProcessedTileHighlight value) =>
+      value.color == null
+      ? sin(progress * pi)
+      : (progress / .12).clamp(0.0, 1.0) *
+            ((1 - progress) / .35).clamp(0.0, 1.0);
 }
 
 Rect? _gameRectForKey(
@@ -259,7 +278,9 @@ class _PressScaleState extends State<_PressScale> {
     onPointerCancel: _cancel,
     child: AnimatedScale(
       scale: _pressed ? 0.96 : 1,
-      duration: Duration(milliseconds: _pressed ? 80 : 140),
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : Duration(milliseconds: _pressed ? 80 : 140),
       curve: _pressed ? Curves.easeOutCubic : Curves.easeOutBack,
       child: widget.child,
     ),
@@ -326,12 +347,6 @@ class _DrawnTileAttentionState extends State<_DrawnTileAttention>
                     color: OC.okeyGold.withValues(alpha: 0.45 + pulse * 0.55),
                     width: 2,
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: OC.okeyGold.withValues(alpha: 0.10 + pulse * 0.28),
-                      blurRadius: 3 + pulse * 5,
-                    ),
-                  ],
                 ),
               ),
             ),
@@ -342,16 +357,20 @@ class _DrawnTileAttentionState extends State<_DrawnTileAttention>
   );
 }
 
-/// Tiles spring out of the rack and lock into a fan for an opening-turn finish.
+/// Player wins use the tile fan and confetti; other results close the table tiles.
 /// Both variants finish on the game table before the result popup opens.
 class _FinishCelebration extends StatelessWidget {
+  final bool finishedWithProcessing;
   final bool tutorial;
   final bool spectacular;
+  final bool finishedFromHand;
   final List<_GridFinishTile> gridTiles;
   final VoidCallback? onComplete;
   const _FinishCelebration({
+    this.finishedWithProcessing = false,
     this.tutorial = false,
     this.spectacular = true,
+    this.finishedFromHand = false,
     this.gridTiles = const [],
     this.onComplete,
   });
@@ -360,7 +379,12 @@ class _FinishCelebration extends StatelessWidget {
   Widget build(BuildContext context) => tutorial
       ? const _TutorialFinishCelebration(tutorial: true)
       : spectacular
-      ? _TileFinishMotion(spectacular: true, onComplete: onComplete)
+      ? _TileFinishMotion(
+          spectacular: true,
+          finishedFromHand: finishedFromHand,
+          finishedWithProcessing: finishedWithProcessing,
+          onComplete: onComplete,
+        )
       : _GridFinishMotion(tiles: gridTiles, onComplete: onComplete);
 }
 
@@ -559,9 +583,16 @@ class _GridFinishTileFlight extends StatelessWidget {
 }
 
 class _TileFinishMotion extends StatefulWidget {
+  final bool finishedWithProcessing;
   final bool spectacular;
+  final bool finishedFromHand;
   final VoidCallback? onComplete;
-  const _TileFinishMotion({required this.spectacular, this.onComplete});
+  const _TileFinishMotion({
+    this.finishedWithProcessing = false,
+    required this.spectacular,
+    this.finishedFromHand = false,
+    this.onComplete,
+  });
 
   @override
   State<_TileFinishMotion> createState() => _TileFinishMotionState();
@@ -599,70 +630,30 @@ class _TileFinishMotionState extends State<_TileFinishMotion>
         builder: (context, _) {
           final t = _controller.value;
           if (t >= 1) return const SizedBox.shrink();
-          final opacity = (1 - ((t - 0.72) / 0.28).clamp(0.0, 1.0));
           return Stack(
             key: ValueKey(
-              widget.spectacular
+              widget.finishedWithProcessing
+                  ? 'processed-finish-celebration'
+                  : widget.spectacular
                   ? 'elden-tile-celebration'
                   : 'round-end-tile-accent',
             ),
             children: [
               Positioned.fill(
                 child: CustomPaint(
-                  painter: _FinishTilesPainter(
-                    progress: t,
-                    spectacular: widget.spectacular,
-                  ),
+                  painter: widget.finishedWithProcessing
+                      ? _ProcessedFinishPainter(t)
+                      : _FinishTilesPainter(
+                          progress: t,
+                          spectacular: widget.spectacular,
+                        ),
                 ),
               ),
-              if (widget.spectacular)
+              if (widget.spectacular && !widget.finishedWithProcessing)
                 Positioned.fill(
                   child: CustomPaint(
                     key: const ValueKey('elden-finish-confetti'),
                     painter: _EldenConfettiPainter(t),
-                  ),
-                ),
-              if (widget.spectacular)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 74),
-                    child: Opacity(
-                      opacity: opacity * (t / 0.16).clamp(0.0, 1.0),
-                      child: Transform.scale(
-                        scale:
-                            0.82 +
-                            0.18 *
-                                Curves.easeOutBack.transform(
-                                  (t / 0.4).clamp(0.0, 1.0),
-                                ),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: Text(
-                              appText('ELDEN BİTTİN!', 'ONE-TURN FINISH!'),
-                              style: const TextStyle(
-                                fontSize: 32,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 2.8,
-                                color: Color(0xFFFFF1B5),
-                                shadows: [
-                                  Shadow(
-                                    color: Color(0xFFFFAB28),
-                                    blurRadius: 22,
-                                  ),
-                                  Shadow(
-                                    color: Colors.black,
-                                    blurRadius: 8,
-                                    offset: Offset(0, 3),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
                   ),
                 ),
             ],
@@ -671,6 +662,83 @@ class _TileFinishMotionState extends State<_TileFinishMotion>
       ),
     ),
   );
+}
+
+/// A completed run assembles from the final processed tile, with green rings.
+class _ProcessedFinishPainter extends CustomPainter {
+  final double progress;
+  const _ProcessedFinishPainter(this.progress);
+
+  static final _labels = List.generate(
+    4,
+    (index) => TextPainter(
+      text: TextSpan(
+        text: '${index + 4}',
+        style: const TextStyle(
+          color: Color(0xFFB52B24),
+          fontSize: 24,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(),
+  );
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2 - 35);
+    final fade = 1 - ((progress - .72) / .28).clamp(0.0, 1.0);
+    final width = min(40.0, size.shortestSide * .11);
+    final arrival = Curves.easeOutCubic.transform(
+      (progress / .48).clamp(0.0, 1.0),
+    );
+    for (var ring = 0; ring < 3; ring++) {
+      final phase = ((progress - ring * .12) / .7).clamp(0.0, 1.0);
+      if (phase <= 0) continue;
+      canvas.drawCircle(
+        center,
+        width * (1 + phase * 2.8),
+        Paint()
+          ..color = const Color(0xFF55E69B)
+              .withValues(alpha: (1 - phase) * fade)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+    }
+    for (var index = 0; index < 4; index++) {
+      final target = center + Offset((index - 1.5) * (width + 5), 0);
+      final source =
+          target +
+          Offset(index == 3 ? width * 4 : 0, index == 3 ? width : -width * .2);
+      final point = Offset.lerp(source, target, arrival)!;
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: point, width: width, height: width * 1.5),
+        const Radius.circular(5),
+      );
+      canvas.drawRRect(
+        rect,
+        Paint()..color = const Color(0xFFFFF1D7).withValues(alpha: fade),
+      );
+      canvas.drawRRect(
+        rect,
+        Paint()
+          ..color = const Color(0xFF55E69B).withValues(alpha: fade)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+      canvas.saveLayer(
+        rect.outerRect,
+        Paint()..color = Colors.white.withValues(alpha: fade),
+      );
+      final label = _labels[index];
+      label.paint(canvas, point - Offset(label.width / 2, label.height / 2));
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProcessedFinishPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 /// Two side bursts frame the opening-turn finish without covering its text.
@@ -969,17 +1037,16 @@ class _TutorialFinishCelebrationState extends State<_TutorialFinishCelebration>
                                 : OC.okeyGold,
                             size: 52,
                           ),
-                          Text(
-                            widget.tutorial
-                                ? 'ÖĞRETİCİ TAMAMLANDI!'
-                                : 'ELDEN BİTTİN!',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.7,
+                          if (widget.tutorial)
+                            Text(
+                              'ÖĞRETİCİ TAMAMLANDI!',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.7,
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -1047,116 +1114,6 @@ class _CelebrationPainter extends CustomPainter {
       oldDelegate.progress != progress;
 }
 
-/// Çekilen, açılan veya işlenen taşları kaynak konumdan hedefe uçurur.
-class _FlyingTableTiles extends StatelessWidget {
-  final _TableTileMotion motion;
-
-  const _FlyingTableTiles({required this.motion});
-
-  Alignment get _playerSource => switch (motion.playerIndex) {
-    1 => const Alignment(0.9, 0),
-    2 => const Alignment(0, -0.92),
-    3 => const Alignment(-0.9, 0),
-    _ => const Alignment(0, 0.98),
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final isDraw =
-        motion.kind == _TableTileMotionKind.drawDeck ||
-        motion.kind == _TableTileMotionKind.drawDiscard;
-    final source = switch (motion.kind) {
-      _TableTileMotionKind.drawDeck => const Alignment(0, 0.56),
-      _TableTileMotionKind.drawDiscard => const Alignment(-0.82, 0.74),
-      _ => _playerSource,
-    };
-    final target = isDraw
-        ? (motion.playerIndex > 0 ? _playerSource : const Alignment(0, 0.98))
-        : motion.targetAlignment ?? Alignment.center;
-
-    return IgnorePointer(
-      child: LayoutBuilder(
-        builder: (context, box) {
-          final fullTravel = Offset(
-            (source.x - target.x) * box.maxWidth / 2,
-            (source.y - target.y) * box.maxHeight / 2,
-          );
-          final travel = motion.playerIndex == 0
-              ? fullTravel
-              : isDraw
-              ? switch (motion.playerIndex) {
-                  1 => const Offset(-64, 0),
-                  2 => const Offset(0, 64),
-                  _ => const Offset(64, 0),
-                }
-              : switch (motion.playerIndex) {
-                  1 => const Offset(64, 0),
-                  2 => const Offset(0, -64),
-                  _ => const Offset(-64, 0),
-                };
-          return Align(
-            alignment: target,
-            child: TweenAnimationBuilder<double>(
-              key: ValueKey('table-tile-motion-${motion.serial}'),
-              tween: Tween(begin: 0, end: 1),
-              duration: Duration(
-                milliseconds: isDraw
-                    ? (motion.playerIndex > 0 ? 120 : 220)
-                    : motion.kind == _TableTileMotionKind.process
-                    ? (motion.playerIndex > 0 ? 140 : 230)
-                    : (motion.playerIndex > 0 ? 170 : 310),
-              ),
-              curve: Curves.easeOutCubic,
-              builder: (context, value, child) => Transform.translate(
-                offset: travel * (1 - value),
-                child: child,
-              ),
-              child: RepaintBoundary(
-                child: _MotionTileFan(
-                  tiles: motion.tiles,
-                  faceDown: motion.kind == _TableTileMotionKind.drawDeck,
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _MotionTileFan extends StatelessWidget {
-  final List<Tile> tiles;
-  final bool faceDown;
-
-  const _MotionTileFan({required this.tiles, required this.faceDown});
-
-  @override
-  Widget build(BuildContext context) {
-    if (faceDown) {
-      return const _TileBack(width: 30, height: 39, showBorder: false);
-    }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var index = 0; index < tiles.length; index++)
-          Transform.translate(
-            offset: Offset(index == 0 ? 0 : -index * 5.0, 0),
-            child: _TileWidget(
-              tile: tiles[index],
-              w: 25,
-              h: 32,
-              onTap: null,
-              hideOkey: true,
-              allowOkeyFaceToggle: false,
-              showShadow: false,
-            ),
-          ),
-      ],
-    );
-  }
-}
-
 /// Yeni elde oyuncu taşlarını tek tek kapalı getirir, ardından sırayla çevirir.
 class _DealtRackTile extends StatelessWidget {
   final int dealIndex;
@@ -1175,31 +1132,33 @@ class _DealtRackTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<double>(
-    valueListenable: progress,
-    child: front,
-    builder: (context, progressValue, frontChild) {
-      const totalMs = 1650.0;
-      final elapsed = progressValue * totalMs;
-      final arrivalStart = dealIndex * 34.0;
-      final revealStart = 820.0 + arrivalStart;
-      if (elapsed < arrivalStart) {
-        return SizedBox(width: width, height: height);
-      }
-      if (elapsed < revealStart) {
-        final raw = ((elapsed - arrivalStart) / 150).clamp(0.0, 1.0);
+  Widget build(BuildContext context) {
+    final back = RepaintBoundary(
+      child: _TileBack(width: width, height: height, showBorder: false),
+    );
+    return ValueListenableBuilder<double>(
+      valueListenable: progress,
+      child: RepaintBoundary(child: front),
+      builder: (context, progressValue, frontChild) {
+        const totalMs = 1650.0;
+        final elapsed = progressValue * totalMs;
+        final arrivalStart = dealIndex * 34.0;
+        final revealStart = 820.0 + arrivalStart;
+        if (elapsed < arrivalStart) {
+          return SizedBox(width: width, height: height);
+        }
+        if (elapsed < revealStart) {
+          final raw = ((elapsed - arrivalStart) / 150).clamp(0.0, 1.0);
+          final value = Curves.easeOutCubic.transform(raw);
+          return Transform.translate(
+            offset: Offset(0, -height * 0.75 * (1 - value)),
+            child: Transform.scale(scale: 0.9 + value * 0.1, child: back),
+          );
+        }
+        final raw = ((elapsed - revealStart) / 110).clamp(0.0, 1.0);
         final value = Curves.easeOutCubic.transform(raw);
-        return Transform.translate(
-          offset: Offset(0, -height * 0.75 * (1 - value)),
-          child: Transform.scale(
-            scale: 0.9 + value * 0.1,
-            child: _TileBack(width: width, height: height, showBorder: false),
-          ),
-        );
-      }
-      final raw = ((elapsed - revealStart) / 110).clamp(0.0, 1.0);
-      final value = Curves.easeOutCubic.transform(raw);
-      return Transform.scale(scaleX: 0.92 + value * 0.08, child: frontChild);
-    },
-  );
+        return Transform.scale(scaleX: 0.92 + value * 0.08, child: frontChild);
+      },
+    );
+  }
 }

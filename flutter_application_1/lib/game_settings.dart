@@ -96,23 +96,7 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
               SizedBox(width: 300, child: _performancePanel()),
               const SizedBox(width: 10),
               Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFF123C2E), Color(0xFF071B14)],
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: OC.gold, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.48),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
+                child: AppPopupSurface(
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(18),
                     child: Column(
@@ -120,56 +104,41 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
                         Container(
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.24),
-                            border: Border(
-                              bottom: BorderSide(
-                                color: OC.gold.withValues(alpha: 0.42),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
+                          child: AppPopupHeader(
+                            leading: Image.asset(
+                              'images/ui/settings.png',
+                              width: 38,
+                              height: 38,
+                              cacheWidth: 72,
+                              cacheHeight: 72,
+                              filterQuality: FilterQuality.low,
+                            ),
+                            title: const Text(
+                              'OYUN AYARLARI',
+                              style: TextStyle(
+                                color: OC.goldLight,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                                fontFamily: 'Georgia',
+                                letterSpacing: 1.2,
                               ),
                             ),
-                          ),
-                          padding: const EdgeInsets.fromLTRB(18, 9, 8, 9),
-                          child: Row(
-                            children: [
-                              Image.asset(
-                                'images/ui/settings.png',
-                                width: 38,
-                                height: 38,
-                                cacheWidth: 72,
-                                cacheHeight: 72,
-                                filterQuality: FilterQuality.low,
+                            subtitle: const Text(
+                              'Masa deneyimini kendine göre düzenle',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 9,
                               ),
-                              const SizedBox(width: 11),
-                              const Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      'OYUN AYARLARI',
-                                      style: TextStyle(
-                                        color: OC.goldLight,
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.w900,
-                                        fontFamily: 'Georgia',
-                                        letterSpacing: 1.2,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Masa deneyimini kendine göre düzenle',
-                                      style: TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 9,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              AppCloseButton(
-                                onTap: () => Navigator.of(
-                                  context,
-                                  rootNavigator: true,
-                                ).pop(),
-                              ),
-                            ],
+                            ),
+                            onClose: () => Navigator.of(
+                              context,
+                              rootNavigator: true,
+                            ).pop(),
                           ),
                         ),
                         Expanded(
@@ -340,23 +309,7 @@ class _GameSettingsDialogState extends State<GameSettingsDialog> {
     );
   }
 
-  Widget _performancePanel() => Container(
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF123C2E), Color(0xFF071B14)],
-      ),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: OC.gold, width: 2),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.42),
-          blurRadius: 16,
-          offset: const Offset(0, 7),
-        ),
-      ],
-    ),
+  Widget _performancePanel() => AppPopupSurface(
     child: Column(
       children: [
         const Padding(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +10,63 @@ import 'package:flutter_application_1/player_progress.dart';
 import 'package:flutter_application_1/daily_league.dart';
 
 void main() {
+  testWidgets(
+    'side bot profiles retain their original size on a short phone',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 360));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump();
+      for (final seat in ['Oyuncu 2', 'Oyuncu 4']) {
+        final avatar = tester.getRect(find.byKey(ValueKey('bot-avatar-$seat')));
+        expect(avatar.width, greaterThanOrEqualTo(35));
+        expect(avatar.height, greaterThanOrEqualTo(35));
+      }
+      for (final pair in const [
+        ('Oyuncu 2', 'görseller/pp/10_kartal.png'),
+        ('Oyuncu 3', 'görseller/pp/11_timsah.png'),
+        ('Oyuncu 4', 'görseller/pp/12_kopekbaligi.png'),
+      ]) {
+        final image = tester.widget<Image>(
+          find.descendant(
+            of: find.byKey(ValueKey('bot-avatar-${pair.$1}')),
+            matching: find.byType(Image),
+          ),
+        );
+        expect(
+          ((image.image as ResizeImage).imageProvider as AssetImage).assetName,
+          pair.$2,
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('reduced motion shows the rack without a deal animation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: GameScreen(startingPlayer: 0),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_DealtRackTile',
+      ),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('game-rack-area')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   setUp(() async {
     await dailyLeague.load();
     final messenger =
@@ -36,6 +94,87 @@ void main() {
           (call) async => null,
         );
   });
+  testWidgets('rack deal advances smoothly on consecutive display frames', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    final dynamic dealt = tester.widget(
+      find
+          .byWidgetPredicate(
+            (widget) => widget.runtimeType.toString() == '_DealtRackTile',
+          )
+          .first,
+    );
+    final progress = dealt.progress as ValueListenable<double>;
+    for (var frame = 0; frame < 8; frame++) {
+      final previous = progress.value;
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(progress.value, greaterThan(previous));
+    }
+    await tester.pump(const Duration(milliseconds: 1800));
+    expect(
+      find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_DealtRackTile',
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'player turn cue follows deal, allows tile taps and does not repeat on settings resume',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      expect(find.byKey(const ValueKey('player-turn-notice')), findsNothing);
+      await tester.pump(const Duration(milliseconds: 1900));
+      expect(find.byKey(const ValueKey('player-turn-notice')), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-turn-rack-glow')), findsNothing);
+      final dynamic area = tester.widget(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_RackArea',
+        ),
+      );
+      final tile = (area.rack as List<Tile>).firstWhere(
+        (tile) => !tile.isOkey && !tile.isFakeOkey,
+      );
+      await tester.tap(find.byKey(ValueKey('rack-tile-${tile.id}')));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tile.selected, isTrue);
+      await tester.pump(const Duration(milliseconds: 1300));
+      expect(find.byKey(const ValueKey('player-turn-notice')), findsNothing);
+      expect(find.byKey(const ValueKey('player-turn-rack-glow')), findsNothing);
+      final tableFinder = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_TableArea',
+      );
+      final tableBeforeSettings = tester.widget(tableFinder);
+      await tester.tap(find.byKey(const ValueKey('game-settings-button')));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        identical(tester.widget(tableFinder), tableBeforeSettings),
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-close-button')));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const ValueKey('player-turn-notice')), findsNothing);
+      expect(
+        identical(tester.widget(tableFinder), tableBeforeSettings),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('game buttons shrink on quick press and reset on cancellation', (
     tester,
   ) async {
@@ -196,6 +335,77 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+  testWidgets('room match pays the double entry fee once after three hands', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    playerProgress.reset(coins: 10000);
+    addTearDown(playerProgress.reset);
+    expect(playerProgress.trySpendCoins(2000), isTrue);
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: GameScreen(
+          startingPlayer: 0,
+          launchConfig: GameLaunchConfig.room(
+            id: 'room-0',
+            label: 'Başlangıç',
+            entryFee: 2000,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2700));
+    var id = 96000;
+    for (var round = 1; round <= 3; round++) {
+      final dynamic area = tester.widget(
+        find.byWidgetPredicate((w) => w.runtimeType.toString() == '_RackArea'),
+      );
+      final rack = area.rack as List<Tile>;
+      final slots = area.slots as List<int?>;
+      rack.clear();
+      rack.addAll([
+        for (final number in [2, 4, 8, 10, 12])
+          for (var copy = 0; copy < 2; copy++)
+            Tile(id: id++, number: number, color: TileColor.blue),
+        Tile(id: id++, number: 13, color: TileColor.red),
+      ]);
+      slots.fillRange(0, slots.length, null);
+      for (var i = 0; i < rack.length; i++) {
+        slots[i] = rack[i].id;
+      }
+      final dynamic state = tester.state(find.byType(GameScreen));
+      state.setState(() {});
+      await tester.pump();
+      await tester.tap(find.text('ÇİFT AÇ'));
+      await tester.pump(const Duration(milliseconds: 650));
+      expect(rack, hasLength(1));
+      await tester.tap(find.byKey(ValueKey('rack-tile-${rack.single.id}')));
+      await tester.pump();
+      await tester.tap(find.text('TAŞ AT'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1800));
+      await tester.pump(const Duration(milliseconds: 400));
+      final result = tester.widget<GameEndDialog>(find.byType(GameEndDialog));
+      expect(result.elCount, round);
+      expect(result.matchComplete, round == 3);
+      expect(result.reward!.coins, round == 3 ? 4000 : 0);
+      expect(playerProgress.coins, round == 3 ? 12000 : 8000);
+      if (round < 3) {
+        result.onNewRound();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 3000));
+      } else {
+        expect(find.text('+4.000 ALTIN'), findsOneWidget);
+        state.setState(() {});
+        await tester.pump();
+        expect(playerProgress.coins, 12000);
+      }
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'button draw pulses until next touch and discard visibly travels',
     (tester) async {
@@ -235,8 +445,23 @@ void main() {
       expect(flights, findsWidgets);
       final frame = find.byKey(const ValueKey('drawn-tile-pulse-frame'));
       expect(frame, findsOneWidget);
+      expect(
+        find.descendant(of: flights, matching: frame),
+        findsOneWidget,
+        reason: 'The border belongs to the flying tile, not its rack slot.',
+      );
+      final borderStart = tester.getRect(frame);
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(tester.getRect(frame).center, isNot(borderStart.center));
+      final decoration =
+          tester.widget<DecoratedBox>(frame).decoration as BoxDecoration;
+      expect(decoration.color, isNull);
+      expect(decoration.gradient, isNull);
+      expect(decoration.boxShadow, isNull);
+      expect(decoration.border, isNotNull);
       await tester.pump(const Duration(seconds: 3));
       expect(frame, findsOneWidget);
+      expect(find.descendant(of: flights, matching: frame), findsNothing);
       final before = tester.widget<DecoratedBox>(frame).decoration;
       await tester.pump(const Duration(milliseconds: 250));
       expect(tester.widget<DecoratedBox>(frame).decoration, isNot(before));
@@ -287,63 +512,83 @@ void main() {
     },
   );
 
-  testWidgets('bot name and remaining points share one colored line', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 720));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      const MaterialApp(home: GameScreen(startingPlayer: 0)),
-    );
-    await tester.pump();
-    final label = find.byKey(const ValueKey('bot-name-Oyuncu 2'));
-    expect(find.text('Açmadı'), findsNothing);
-    expect(find.text('Açtı'), findsNothing);
-    expect(find.textContaining('Kalan:'), findsNothing);
-    expect(tester.widget<Text>(label).style!.color, OC.cream);
-    final seat = find.byKey(const ValueKey('seat-Oyuncu 2'));
-    final info = find.ancestor(
-      of: seat,
-      matching: find.byWidgetPredicate(
-        (widget) => widget.runtimeType.toString() == '_PlayerInfo',
-      ),
-    );
-    final dynamic widget = tester.widget(info);
-    final BotPlayer bot = widget.bot as BotPlayer;
-    final int fakeOkeyValue = widget.fakeOkeyValue as int;
-    final name = bot.displayName;
-    expect(tester.widget<Text>(label).data, name);
-    final expected = Rules.penaltyFor(bot.hand, fakeOkeyValue: fakeOkeyValue);
-    bot.hasOpened = true;
-    tester.element(info).markNeedsBuild();
-    await tester.pump();
-    expect(tester.widget<Text>(label).data, '$name/$expected');
-    expect(tester.widget<Text>(label).maxLines, 1);
-    expect(tester.widget<Text>(label).softWrap, isFalse);
-    expect(tester.widget<Text>(label).style!.color, OC.cream);
-    expect(
-      find.descendant(of: seat, matching: find.byType(Text)),
-      findsOneWidget,
-    );
-    for (final size in const [
-      Size(1280, 720),
-      Size(1024, 768),
-      Size(568, 320),
-    ]) {
-      await tester.binding.setSurfaceSize(size);
+  testWidgets(
+    'bot opening frame and remaining badge update independently of name',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
       await tester.pump();
-      final labelRect = tester.getRect(label);
-      final seatRect = tester.getRect(seat);
-      expect(seatRect.contains(labelRect.topLeft), isTrue);
-      expect(seatRect.contains(labelRect.bottomRight), isTrue);
-      expect(tester.takeException(), isNull);
-    }
-    bot.hand.clear();
-    tester.element(info).markNeedsBuild();
-    await tester.pump();
-    expect(tester.widget<Text>(label).data, '$name/0');
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+      final label = find.byKey(const ValueKey('bot-name-Oyuncu 2'));
+      expect(find.text('Açmadı'), findsNothing);
+      expect(find.text('Açtı'), findsNothing);
+      expect(find.textContaining('Kalan:'), findsNothing);
+      expect(tester.widget<Text>(label).style!.color, OC.cream);
+      final seat = find.byKey(const ValueKey('seat-Oyuncu 2'));
+      final info = find.ancestor(
+        of: seat,
+        matching: find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_PlayerInfo',
+        ),
+      );
+      final dynamic widget = tester.widget(info);
+      final BotPlayer bot = widget.bot as BotPlayer;
+      final int fakeOkeyValue = widget.fakeOkeyValue as int;
+      final name = bot.displayName;
+      expect(tester.widget<Text>(label).data, name);
+      final avatar = find.byKey(const ValueKey('bot-avatar-frame-Oyuncu 2'));
+      final badge = find.byKey(const ValueKey('bot-remaining-Oyuncu 2'));
+      expect(
+        (tester.widget<Container>(avatar).decoration as BoxDecoration)
+            .border!
+            .top
+            .color,
+        OC.numRed,
+      );
+      expect(badge, findsNothing);
+      final expected = Rules.penaltyFor(bot.hand, fakeOkeyValue: fakeOkeyValue);
+      bot.hasOpened = true;
+      tester.element(info).markNeedsBuild();
+      await tester.pump();
+      expect(tester.widget<Text>(label).data, name);
+      expect(tester.widget<Text>(badge).data, '$expected');
+      expect(
+        (tester.widget<Container>(avatar).decoration as BoxDecoration)
+            .border!
+            .top
+            .color,
+        const Color(0xFF83E5A0),
+      );
+      expect(tester.widget<Text>(label).maxLines, 1);
+      expect(tester.widget<Text>(label).softWrap, isFalse);
+      expect(tester.widget<Text>(label).style!.color, OC.cream);
+      expect(
+        find.descendant(of: seat, matching: find.byType(Text)),
+        findsNWidgets(2),
+      );
+      for (final size in const [
+        Size(1280, 720),
+        Size(1024, 768),
+        Size(568, 320),
+      ]) {
+        await tester.binding.setSurfaceSize(size);
+        await tester.pump();
+        final labelRect = tester.getRect(label);
+        final seatRect = tester.getRect(seat);
+        expect(seatRect.contains(labelRect.topLeft), isTrue);
+        expect(seatRect.contains(labelRect.bottomRight), isTrue);
+        expect(tester.takeException(), isNull);
+      }
+      bot.hand.clear();
+      tester.element(info).markNeedsBuild();
+      await tester.pump();
+      expect(tester.widget<Text>(label).data, name);
+      expect(tester.widget<Text>(badge).data, '0');
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
   testWidgets('game screen renders at desktop and short web sizes', (
     tester,
   ) async {
@@ -355,6 +600,7 @@ void main() {
       Size(800, 450),
       Size(1024, 768),
       Size(1280, 800),
+      Size(1920, 600),
       Size(1366, 1024),
       Size(768, 1024),
       Size(800, 1280),
@@ -405,10 +651,37 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('game-mode-caption')), findsOneWidget);
-      expect(find.text('SIRADAN'), findsOneWidget);
+      expect(find.bySemanticsLabel('SIRADAN'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('pair-area-drop-target')),
         findsOneWidget,
+      );
+      final tableBounds = tester.getRect(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_TableArea',
+        ),
+      );
+      final topAvatar = tester.getRect(
+        find.byKey(const ValueKey('bot-avatar-frame-Oyuncu 3')),
+      );
+      final dynamic tableWidget = tester.widget(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_TableArea',
+        ),
+      );
+      final gridBounds = tester.getRect(find.byKey(tableWidget.gridKey as Key));
+      expect(
+        gridBounds.top - tableBounds.top,
+        closeTo(20, .1),
+        reason: 'Top bot must not reduce the original grid height at $size',
+      );
+      expect(tableBounds.bottom - gridBounds.bottom, closeTo(8, .1));
+      expect(
+        topAvatar.top,
+        greaterThanOrEqualTo(
+          tester.getRect(find.byKey(const ValueKey('game-help-button'))).top,
+        ),
+        reason: 'Top bot avatar must not be clipped at $size',
       );
       final sideOverlapPairs = <(String, String)>[
         ('Oyuncu 4', 'Oyuncu 3'),
@@ -455,6 +728,18 @@ void main() {
       );
       final rackRect = tester.getRect(
         find.byKey(const ValueKey('rack-area-surface')),
+      );
+      final rackTileSize = tester.getSize(
+        find
+            .byWidgetPredicate(
+              (widget) => widget.runtimeType.toString() == '_RackTileDraggable',
+            )
+            .first,
+      );
+      expect(
+        rackTileSize.height / rackTileSize.width,
+        closeTo(1.58, .001),
+        reason: 'Rack tiles must keep their shape at $size',
       );
       expect(
         rackRect.height,
@@ -754,8 +1039,8 @@ void main() {
     expect(midwayFeedback.top, greaterThan(liftedFeedback.top));
     expect(
       pointer.dy - liftedFeedback.bottom,
-      greaterThanOrEqualTo(23.9),
-      reason: 'The entire tile must remain visibly above the fingertip',
+      closeTo(6, .1),
+      reason: 'The tile should stay visible just above the fingertip',
     );
     final sourceTileWhileDragging = find.descendant(
       of: sourceSlot,
@@ -803,12 +1088,21 @@ void main() {
     final targetKey = tester.widget<Draggable>(targetTile).key!;
     final targetRect = tester.getRect(targetSlot);
 
-    await tester.dragFrom(
-      tester.getCenter(sourceSlot),
-      Offset(targetRect.left + targetRect.width * 0.04, targetRect.center.dy) -
-          tester.getCenter(sourceSlot),
+    final gesture = await tester.startGesture(tester.getCenter(sourceSlot));
+    await gesture.moveTo(
+      Offset(targetRect.left + targetRect.width * 0.04, targetRect.center.dy),
     );
+    await tester.pump(const Duration(milliseconds: 120));
+    final leftTilt = find.byKey(const ValueKey('rack-insertion-tilt-6'));
+    final rightTilt = find.byKey(const ValueKey('rack-insertion-tilt-7'));
+    expect(tester.widget<AnimatedRotation>(leftTilt).turns, lessThan(0));
+    expect(tester.widget<AnimatedRotation>(rightTilt).turns, greaterThan(0));
+    expect(tester.getRect(targetSlot), targetRect);
+    await gesture.up();
     await tester.pump();
+
+    expect(tester.widget<AnimatedRotation>(leftTilt).turns, 0);
+    expect(tester.widget<AnimatedRotation>(rightTilt).turns, 0);
 
     expect(
       find.descendant(of: targetSlot, matching: find.byKey(sourceKey)),
@@ -1112,63 +1406,38 @@ void main() {
 
     final target = find.byKey(const ValueKey('progressive-opening-target'));
     expect(target, findsOneWidget);
+    final draw = find.byKey(const ValueKey('table-draw-column'));
+    expect(find.descendant(of: draw, matching: target), findsOneWidget);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('rack-area-surface')),
         matching: target,
       ),
-      findsOneWidget,
+      findsNothing,
     );
+    final targetRect = tester.getRect(target);
+    final drawRect = tester.getRect(draw);
+    expect(drawRect.contains(targetRect.center), isTrue);
     expect(
-      tester.getRect(target).right,
-      lessThanOrEqualTo(
-        tester.getRect(find.byKey(const ValueKey('rack-slot-0'))).left,
+      targetRect.overlaps(
+        tester.getRect(
+          find.byKey(const ValueKey('expanded-deck-draw-hit-area')),
+        ),
       ),
+      isFalse,
     );
     expect(
-      find.descendant(of: target, matching: find.text('101')),
-      findsOneWidget,
+      targetRect.overlaps(
+        tester.getRect(find.byKey(const ValueKey('grid-per-summary'))),
+      ),
+      isFalse,
     );
-    expect(
-      find.descendant(of: target, matching: find.text('5')),
-      findsOneWidget,
-    );
-    for (final entry in {'101': 0, '5': 23}.entries) {
-      final slot = tester.getRect(
-        find.byKey(ValueKey('rack-slot-${entry.value}')),
-      );
-      final number = find.descendant(
-        of: target,
-        matching: find.text(entry.key),
-      );
+    for (final value in ['101', '5']) {
       expect(
-        tester.getCenter(number).dy,
-        closeTo(slot.center.dy - slot.height * 0.15, 1),
+        find.descendant(of: target, matching: find.text(value)),
+        findsOneWidget,
       );
-      expect(tester.widget<Text>(number).style!.fontWeight, FontWeight.w900);
     }
-    expect(
-      find.descendant(of: target, matching: find.byType(DecoratedBox)),
-      findsNothing,
-    );
-    expect(
-      tester
-          .getCenter(find.descendant(of: target, matching: find.text('101')))
-          .dy,
-      lessThan(
-        tester
-            .getCenter(find.descendant(of: target, matching: find.text('5')))
-            .dy,
-      ),
-    );
-    expect(
-      find.descendant(of: target, matching: find.text('PER: 101')),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: target, matching: find.text('ÇİFT: 5')),
-      findsNothing,
-    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1196,12 +1465,104 @@ void main() {
       find.byKey(const ValueKey('color-bonus-round-intro')),
       findsOneWidget,
     );
-    await tester.pump(const Duration(milliseconds: 1400));
+    final rackFinder = find.byKey(const ValueKey('game-rack-area'));
+    final rackState = tester.state(rackFinder);
+    final dynamic dealtTile = tester.widget(
+      find
+          .byWidgetPredicate(
+            (widget) => widget.runtimeType.toString() == '_DealtRackTile',
+          )
+          .first,
+    );
+    final dealProgress = dealtTile.progress as ValueListenable<double>;
+    await tester.pump(const Duration(milliseconds: 700));
+    final progressBeforeIntroEnds = dealProgress.value;
+    await tester.pump(const Duration(milliseconds: 700));
     expect(find.byKey(const ValueKey('color-bonus-round-intro')), findsNothing);
+    expect(tester.state(rackFinder), same(rackState));
+    expect(dealProgress.value, greaterThanOrEqualTo(progressBeforeIntroEnds));
     expect(find.textContaining('RENKLİ •'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'processing before the last discard uses its own animation and keeps rewards unchanged',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(home: GameScreen(startingPlayer: 0)),
+      );
+      await tester.pump(const Duration(milliseconds: 2700));
+      final dynamic area = tester.widget(
+        find.byKey(const ValueKey('game-rack-area')),
+      );
+      final rack = area.rack as List<Tile>;
+      final slots = area.slots as List<int?>;
+      rack.clear();
+      var id = 9700;
+      for (final number in [2, 4, 8, 10, 12]) {
+        for (var copy = 0; copy < 2; copy++) {
+          rack.add(Tile(id: id++, number: number, color: TileColor.blue));
+        }
+      }
+      final processTile = Tile(id: id++, number: 7, color: TileColor.red);
+      rack.addAll([
+        processTile,
+        Tile(id: id++, number: 13, color: TileColor.yellow),
+      ]);
+      slots.fillRange(0, slots.length, null);
+      for (var slot = 0; slot < rack.length; slot++) {
+        slots[slot] = rack[slot].id;
+      }
+      final dynamic state = tester.state(find.byType(GameScreen));
+      state.setState(() {});
+      await tester.pump();
+      await tester.tap(find.text('ÇİFT AÇ'));
+      await tester.pump(const Duration(milliseconds: 650));
+      expect(rack, hasLength(2));
+      final dynamic table = tester.widget(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_TableArea',
+        ),
+      );
+      (table.melds as List<Meld>).add(
+        Meld(
+          type: 'seri',
+          tiles: [
+            for (final number in [4, 5, 6])
+              Tile(id: id++, number: number, color: TileColor.red),
+          ],
+        ),
+      );
+      processTile.selected = true;
+      state.setState(() {});
+      await tester.pump();
+      await tester.tap(find.text('İŞLE'));
+      await tester.pump(const Duration(milliseconds: 650));
+      expect(rack, hasLength(1));
+      rack.single.selected = true;
+      state.setState(() {});
+      await tester.pump();
+      await tester.tap(find.text('TAŞ AT'));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('processed-finish-celebration')),
+        findsOneWidget,
+      );
+      expect(find.text('İŞLEYEREK BİTTİN!'), findsNothing);
+      expect(find.byKey(const ValueKey('elden-finish-confetti')), findsNothing);
+      await tester.pump(const Duration(milliseconds: 1200));
+      final result = tester.widget<GameEndDialog>(find.byType(GameEndDialog));
+      expect(result.playerPen, -101);
+      expect(result.reward!.coins, 150);
+      expect(result.reward!.xp, 30);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 2));
+    },
+  );
   testWidgets(
     'right group grid leaves one cell between variable length melds',
     (tester) async {
@@ -1530,82 +1891,309 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
-  testWidgets('bot draws on turn entry then waits before discarding', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 720));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      const MaterialApp(home: GameScreen(startingPlayer: 0)),
+  for (final opening in [true, false]) {
+    testWidgets(
+      'bot last table move is highlighted after landing: opening=$opening',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1280, 720));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: GameScreen(
+              startingPlayer: 0,
+              launchConfig: GameLaunchConfig.gameMode(
+                mode: OkeyGameMode.standard,
+                id: 'last-move',
+                label: 'Last move',
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 2700));
+        final tableFinder = find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_TableArea',
+        );
+        dynamic table() => tester.widget(tableFinder);
+        final bot = (table().bots as List<BotPlayer>).first;
+        final List<Tile> played;
+        if (opening) {
+          played = [
+            for (final color in TileColor.values)
+              for (var number = 9; number <= 11; number++)
+                Tile(
+                  number: number,
+                  color: color,
+                  id: -800 - color.index * 10 - number,
+                ),
+          ];
+          bot.hand = [
+            ...played,
+            Tile(number: 2, color: TileColor.black, id: -950),
+          ];
+          bot.turnsPlayed = 2;
+        } else {
+          played = [Tile(number: 7, color: TileColor.red, id: -960)];
+          bot.hand = [
+            ...played,
+            Tile(number: 12, color: TileColor.blue, id: -961),
+            Tile(number: 2, color: TileColor.black, id: -962),
+          ];
+          bot.hasOpened = true;
+          bot.openType = 'seri';
+          (table().melds as List<Meld>).add(
+            Meld(
+              type: 'seri',
+              tiles: [
+                for (var number = 4; number <= 6; number++)
+                  Tile(number: number, color: TileColor.red, id: -970 - number),
+              ],
+            ),
+          );
+        }
+        bot.tileCount = bot.hand.length;
+        final dynamic rack = tester.widget(
+          find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_RackArea',
+          ),
+        );
+        final discard = (rack.rack as List<Tile>).firstWhere(
+          (t) => !t.isOkey && !t.isFakeOkey,
+        );
+        await tester.tap(find.byKey(ValueKey('rack-tile-${discard.id}')));
+        await tester.pump();
+        await tester.tap(find.text('TAŞ AT'));
+        final highlights = find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key as ValueKey<String>).value.startsWith(
+                'processed-tile-highlight-',
+              ),
+        );
+        for (
+          var attempt = 0;
+          attempt < 140 && highlights.evaluate().isEmpty;
+          attempt++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(highlights, findsWidgets);
+        final dynamic scope = tester.widget(
+          find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_TileMotionScope',
+          ),
+        );
+        final dynamic lastMove = scope.processedHighlight.value;
+        expect(
+          (lastMove.tileIds as Set<int>).intersection(
+            played.map((t) => t.id).toSet(),
+          ),
+          isNotEmpty,
+        );
+        expect(lastMove.color, OC.goldLight);
+        expect(lastMove.duration, const Duration(milliseconds: 1400));
+        await tester.pump(const Duration(milliseconds: 450));
+        expect(highlights, findsWidgets);
+        await tester.pumpWidget(const SizedBox.shrink());
+        expect(tester.takeException(), isNull);
+      },
     );
-    await tester.pump(const Duration(milliseconds: 2700));
-    final tableFinder = find.byWidgetPredicate(
-      (w) => w.runtimeType.toString() == '_TableArea',
-    );
-    dynamic table() => tester.widget(tableFinder);
-    final BotPlayer firstBot = (table().bots as List<BotPlayer>).first;
-    expect(firstBot.hand.length, 21);
-    await tester.tap(find.byKey(const ValueKey('rack-visible-tile-0')));
-    await tester.pump();
-    await tester.tap(find.text('TAŞ AT'));
-    await tester.pump(const Duration(milliseconds: 540));
-    for (
-      var attempt = 0;
-      attempt < 50 && firstBot.hand.length == 21;
-      attempt++
-    ) {
-      await tester.pump(const Duration(milliseconds: 5));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 40)),
+  }
+  testWidgets(
+    'bot waits after the previous discard then draws before playing',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: GameScreen(
+            startingPlayer: 0,
+            launchConfig: GameLaunchConfig.gameMode(
+              mode: OkeyGameMode.standard,
+              id: 'pacing',
+              label: 'Pacing',
+            ),
+          ),
+        ),
       );
+      await tester.pump(const Duration(milliseconds: 2700));
+      final tableFinder = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_TableArea',
+      );
+      dynamic table() => tester.widget(tableFinder);
+      final BotPlayer firstBot = (table().bots as List<BotPlayer>).first;
+      expect(firstBot.hand.length, 21);
+      final profileScale = find.byKey(
+        const ValueKey('profile-turn-scale-Oyuncu 2'),
+      );
+      double renderedScale() => tester
+          .widget<ScaleTransition>(
+            find.descendant(
+              of: profileScale,
+              matching: find.byType(ScaleTransition),
+            ),
+          )
+          .scale
+          .value;
+      final avatar = find.byKey(const ValueKey('bot-avatar-Oyuncu 2'));
+      final name = find.byKey(const ValueKey('bot-name-Oyuncu 2'));
+      final avatarCenter = tester.getCenter(avatar);
+      final nameCenter = tester.getCenter(name);
+      expect(renderedScale(), closeTo(.86, .001));
+      final dynamic rackArea = tester.widget(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_RackArea',
+        ),
+      );
+      final tile = (rackArea.rack as List<Tile>).firstWhere(
+        (tile) => !tile.isOkey && !tile.isFakeOkey,
+      );
+      await tester.tap(find.byKey(ValueKey('rack-tile-${tile.id}')));
       await tester.pump();
-    }
-    expect(table().activeTurn, 1);
-    expect(
-      firstBot.hand.length,
-      22,
-      reason: 'The draw must happen without the old thinking delay.',
-    );
-    await tester.pump(const Duration(milliseconds: 1900));
-    expect(table().activeTurn, 1);
-    expect(firstBot.hand.length, 22);
-    expect(
-      find.byWidgetPredicate(
-        (w) => w.runtimeType.toString() == '_FlyingBotDiscard',
-      ),
-      findsNothing,
-    );
-    await tester.pump(const Duration(milliseconds: 1150));
-    for (var attempt = 0; attempt < 50 && table().activeTurn == 1; attempt++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 40)),
+      await tester.tap(find.text('TAŞ AT'));
+      await tester.pump(const Duration(milliseconds: 540));
+      expect(table().activeTurn, 1);
+      expect(firstBot.hand.length, 21);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(renderedScale(), greaterThan(.86));
+      expect(renderedScale(), lessThan(1));
+      expect(tester.getCenter(avatar), avatarCenter);
+      expect(tester.getCenter(name), nameCenter);
+      expect(
+        firstBot.hand.length,
+        21,
+        reason: 'The previous discard must settle before the next draw.',
       );
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-    expect(
-      table().activeTurn,
-      2,
-      reason: 'Discard should finish after the 2–3 second pause.',
-    );
-    final openedTileCount = (table().melds as List<Meld>).fold<int>(
-      0,
-      (sum, meld) => sum + meld.tiles.length,
-    );
-    expect(firstBot.hand.length + openedTileCount, 21);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(const Duration(seconds: 4));
-    expect(tester.takeException(), isNull);
-  });
+      await tester.pump(const Duration(milliseconds: 121));
+      for (
+        var attempt = 0;
+        attempt < 50 && firstBot.hand.length == 21;
+        attempt++
+      ) {
+        await tester.pump(const Duration(milliseconds: 5));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 40)),
+        );
+        await tester.pump();
+      }
+      expect(table().activeTurn, 1);
+      expect(renderedScale(), closeTo(1, .001));
+      expect(
+        firstBot.hand.length,
+        22,
+        reason: 'The draw follows the short pause, before the thinking time.',
+      );
+      final flightFinder = find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_BotTableTileFlight',
+      );
+      expect(flightFinder, findsOneWidget);
+      final dynamic flight = tester.widget(flightFinder);
+      final flightOrigin = tester.getTopLeft(
+        find.byWidgetPredicate(
+          (widget) => widget.runtimeType.toString() == '_FlyingTableTiles',
+        ),
+      );
+      final seatCenter = tester.getCenter(
+        find.byKey(const ValueKey('seat-Oyuncu 2')),
+      );
+      expect(
+        ((flight.target as Rect).center + flightOrigin - seatCenter).distance,
+        lessThan(.1),
+        reason: 'The draw lands at the actual bot seat on this screen.',
+      );
+      expect(
+        ((flight.source as Rect).center - (flight.target as Rect).center)
+            .distance,
+        greaterThan(20),
+        reason: 'The draw travels from the real table source.',
+      );
+      await tester.pump(const Duration(milliseconds: 450));
+      expect(table().activeTurn, 1);
+      expect(firstBot.hand.length, 22);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_FlyingBotDiscard',
+        ),
+        findsNothing,
+      );
+      await tester.pump(const Duration(milliseconds: 1000));
+      for (
+        var attempt = 0;
+        attempt < 50 && table().activeTurn == 1;
+        attempt++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 40)),
+        );
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      expect(
+        table().activeTurn,
+        2,
+        reason: 'A simple discard should finish after a short thinking pause.',
+      );
+      final openedTileCount = (table().melds as List<Meld>).fold<int>(
+        0,
+        (sum, meld) => sum + meld.tiles.length,
+      );
+      expect(firstBot.hand.length + openedTileCount, 21);
+      final secondBot = (table().bots as List<BotPlayer>)[1];
+      expect(secondBot.hand.length, 21);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(renderedScale(), greaterThan(.86));
+      expect(renderedScale(), lessThan(1));
+      expect(tester.getCenter(avatar), avatarCenter);
+      expect(tester.getCenter(name), nameCenter);
+      expect(
+        secondBot.hand.length,
+        21,
+        reason:
+            'Consecutive bots must also leave a gap between discard and draw.',
+      );
+      await tester.pump(const Duration(milliseconds: 121));
+      for (
+        var attempt = 0;
+        attempt < 50 && secondBot.hand.length == 21;
+        attempt++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 40)),
+        );
+        await tester.pump(const Duration(milliseconds: 5));
+      }
+      expect(secondBot.hand.length, 22);
+      final botDraw = find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_FlyingTableTiles',
+      );
+      expect(botDraw, findsOneWidget);
+      final tween = tester.widget<TweenAnimationBuilder<double>>(
+        find.descendant(
+          of: botDraw,
+          matching: find.byType(TweenAnimationBuilder<double>),
+        ),
+      );
+      expect(tween.duration.inMilliseconds, greaterThanOrEqualTo(300));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 4));
+      expect(tester.takeException(), isNull);
+    },
+  );
   for (final scenario in [
     (true, 'button'),
     (true, 'side'),
+    (true, 'side-processable'),
     (true, 'center'),
     (false, 'button'),
+    (false, 'side'),
+    (false, 'side-processable'),
+    (false, 'center'),
   ]) {
     final openingTurnFinish = scenario.$1;
     final finishMethod = scenario.$2;
     testWidgets(
-      'tile finish effect distinguishes opening turn: $openingTurnFinish $finishMethod',
+      'every -101 finish shows confetti without a caption: $openingTurnFinish $finishMethod',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(1280, 720));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1681,6 +2269,26 @@ void main() {
           slots.fillRange(0, slots.length, null);
           slots[0] = rack.single.id;
         }
+        if (finishMethod == 'side-processable') {
+          final dynamic table = tester.widget(
+            find.byWidgetPredicate(
+              (w) => w.runtimeType.toString() == '_TableArea',
+            ),
+          );
+          final last = rack.single;
+          rack[0] = Tile(id: id++, number: 13, color: TileColor.red);
+          final slot = slots.indexOf(last.id);
+          slots[slot] = rack.single.id;
+          (table.melds as List<Meld>).add(
+            Meld(
+              type: 'seri',
+              tiles: [
+                for (final number in [10, 11, 12])
+                  Tile(id: id++, number: number, color: TileColor.red),
+              ],
+            ),
+          );
+        }
         await tester.runAsync(() => dailyLeague.load());
         final leagueRoundsBefore = dailyLeague.completedRounds;
         final leaguePenaltyBefore = dailyLeague.standings
@@ -1693,7 +2301,7 @@ void main() {
         if (finishMethod == 'button') {
           await tester.tap(find.text('TAŞ AT'));
         } else {
-          final target = finishMethod == 'side'
+          final target = finishMethod.startsWith('side')
               ? find.byKey(const ValueKey('discard-target-Oyuncu 1'))
               : find.byKey(const ValueKey('center-finish-drop-target'));
           await tester.dragFrom(
@@ -1708,78 +2316,33 @@ void main() {
         }
         await tester.pump();
         expect(playerProgress.gamesPlayed, completedBefore + 1);
-        if (openingTurnFinish) {
+        expect(
+          find.byKey(const ValueKey('elden-finish-confetti')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('elden-tile-celebration')),
+          findsOneWidget,
+        );
+        expect(
+          find.text(openingTurnFinish ? 'ELDEN BİTTİN!' : 'ELİ BİTİRDİN!'),
+          findsNothing,
+        );
+        expect(find.byType(GameEndDialog), findsNothing);
+        for (final frame in [180, 260, 280]) {
+          await tester.pump(Duration(milliseconds: frame));
+          expect(tester.takeException(), isNull);
+          expect(find.byType(GameEndDialog), findsNothing);
           expect(
             find.byKey(const ValueKey('elden-finish-confetti')),
             findsOneWidget,
           );
-          expect(
-            find.byKey(const ValueKey('elden-tile-celebration')),
-            findsOneWidget,
-          );
-          expect(find.byType(GameEndDialog), findsNothing);
-          for (final frame in [180, 260, 280]) {
-            await tester.pump(Duration(milliseconds: frame));
-            expect(tester.takeException(), isNull);
-          }
-          await tester.pump(const Duration(milliseconds: 450));
-          expect(
-            find.byKey(const ValueKey('elden-tile-celebration')),
-            findsNothing,
-          );
-        } else {
-          expect(
-            find.byKey(const ValueKey('elden-tile-celebration')),
-            findsNothing,
-          );
-          expect(
-            find.byKey(const ValueKey('elden-finish-confetti')),
-            findsNothing,
-          );
-          expect(find.byType(GameEndDialog), findsNothing);
-          expect(
-            find.byKey(const ValueKey('round-end-tile-accent')),
-            findsOneWidget,
-          );
-          final dynamic finishedTable = tester.widget(
-            find.byWidgetPredicate(
-              (w) => w.runtimeType.toString() == '_TableArea',
-            ),
-          );
-          final tableTiles = (finishedTable.melds as List<Meld>)
-              .expand((m) => m.tiles)
-              .toList();
-          final tableIds = tableTiles.map((t) => t.id).toSet();
-          final flights = find.byWidgetPredicate(
-            (w) => w.runtimeType.toString() == '_GridFinishTileFlight',
-          );
-          expect(flights, findsWidgets);
-          final animatedTiles = tester
-              .widgetList(flights)
-              .map((w) => (w as dynamic).tile as Tile)
-              .toList();
-          expect(animatedTiles.map((t) => t.id).toSet(), tableIds);
-          for (final tile in animatedTiles) {
-            expect(
-              tableTiles.any((original) => identical(original, tile)),
-              isTrue,
-            );
-            final face = find
-                .descendant(
-                  of: find.byKey(ValueKey('table-visible-tile-${tile.id}')),
-                  matching: find.byType(Opacity),
-                )
-                .first;
-            expect(tester.widget<Opacity>(face).opacity, 0);
-          }
-          await tester.pump(const Duration(milliseconds: 180));
-          expect(find.byType(GameEndDialog), findsNothing);
-          await tester.pump(const Duration(milliseconds: 400));
-          expect(find.byType(GameEndDialog), findsNothing);
-          await tester.pump(const Duration(milliseconds: 810));
-          expect(find.byType(GameEndDialog), findsNothing);
-          await tester.pump(const Duration(milliseconds: 20));
         }
+        await tester.pump(const Duration(milliseconds: 450));
+        expect(
+          find.byKey(const ValueKey('elden-tile-celebration')),
+          findsNothing,
+        );
         expect(find.byType(GameEndDialog), findsOneWidget);
         expect(playerProgress.gamesPlayed, completedBefore + 1);
         for (
@@ -2001,9 +2564,15 @@ void main() {
       },
     );
   }
-  for (final nearRackDrop in [true, false]) {
+  for (final dropOffset in <Offset?>[
+    Offset.zero,
+    Offset(0, -14),
+    Offset(12, 0),
+    null,
+  ]) {
+    final nearRackDrop = dropOffset != null;
     testWidgets(
-      'lifted meld drop requires a nearby upper rack edge: near=$nearRackDrop',
+      'midpoint meld drop accepts a visible lower meld and rejects a distant rack: offset=$dropOffset',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(1280, 720));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2082,7 +2651,7 @@ void main() {
             find.byKey(ValueKey('rack-tile-${replacement.id}')),
           );
           expect((drag.data as dynamic).liftedForMeld, isTrue);
-          expect(drag.feedbackOffset, const Offset(0, -56));
+          expect(drag.feedbackOffset, const Offset(0, -16));
           final dynamic grid = tester.widget(
             find.byKey(const ValueKey('run-meld-grid')),
           );
@@ -2115,7 +2684,7 @@ void main() {
           final viewer = tester.widget<InteractiveViewer>(viewerFinder);
           final viewerTop = tester.getTopLeft(viewerFinder).dy;
           final scale =
-              (upperRack.top - 14 + drag.feedbackOffset.dy - viewerTop) /
+              (upperRack.top - 14 - 52 - viewerTop) /
               (tester.getCenter(meldFinder).dy - viewerTop);
           viewer.transformationController!.value = Matrix4.diagonal3Values(
             scale,
@@ -2125,10 +2694,9 @@ void main() {
           await tester.pump();
           final nearTarget = tester.getCenter(meldFinder) - drag.feedbackOffset;
           final target = nearRackDrop
-              ? nearTarget
+              ? nearTarget + dropOffset!
               : Offset(nearTarget.dx, upperRack.bottom - 5);
-          expect(nearTarget.dy, greaterThan(upperRack.top - 22));
-          expect(nearTarget.dy, lessThan(upperRack.top + 22));
+          expect(nearTarget.dy, lessThan(upperRack.top - 22));
           final gesture = await tester.startGesture(source);
           await gesture.moveBy(const Offset(0, -20));
           await tester.pump();
@@ -2268,7 +2836,7 @@ void main() {
 
       await move(firstRect.center);
       expect(visual().target.index, 0);
-      expect(visual().snapOffset, Offset.zero);
+      expect((visual().snapOffset as Offset).distance, lessThan(cellWidth));
       await move(Offset(firstRect.left + cellWidth * .70, firstRect.center.dy));
       expect(visual().target.index, 0);
       expect((visual().snapOffset as Offset).dx, lessThan(0));
@@ -2313,6 +2881,17 @@ void main() {
               w.key is ValueKey<String> &&
               (w.key as ValueKey<String>).value.startsWith(
                 'processed-tile-highlight-${replacement.id}-',
+              ),
+        ),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key as ValueKey<String>).value.startsWith(
+                'processed-tile-highlight-',
               ),
         ),
         findsNothing,

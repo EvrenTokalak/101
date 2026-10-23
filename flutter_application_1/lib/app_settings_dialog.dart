@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_controls.dart';
 import 'app_language.dart';
+import 'performance_overlay.dart';
 
 /// Settings percentages are relative to this baseline: the former 105% is
 /// now 100%. Keep stored/displayed values nominal instead of scaling twice.
@@ -10,21 +12,36 @@ const double appBaseFontScale = 1.05;
 TextScaler appTextScaler(double relativeScale) =>
     TextScaler.linear(appBaseFontScale * relativeScale);
 
-const appSettingsPanelAsset =
-    'görseller/icon/Ornate AYARLAR Game Settings Panel.png';
+/// Pause the cached scene for settings without rebuilding the whole screen.
+class SettingsSceneActivity extends StatelessWidget {
+  final ValueListenable<bool> panelOpen;
+  final bool enabled;
+  final Widget child;
+  const SettingsSceneActivity({
+    super.key,
+    required this.panelOpen,
+    required this.child,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: panelOpen,
+    child: child,
+    builder: (context, open, scene) =>
+        TickerMode(enabled: enabled && !open, child: scene!),
+  );
+}
+
+const appSettingsPanelAsset = 'images/ui/panels/ayarlar.png';
 
 const appSettingsArtwork = ResizeImage(
   AssetImage(appSettingsPanelAsset),
-  width: 1000,
+  width: 1280,
 );
 
 Size appSettingsPanelSize(BoxConstraints bounds) {
-  final width = bounds.maxWidth.clamp(0.0, appPopupWidth);
-  final height = bounds.maxHeight.clamp(
-    0.0,
-    (width * 941 / 1671).clamp(0.0, appPopupHeight),
-  );
-  return Size(height * 1671 / 941, height);
+  return appArtworkPanelSize(bounds);
 }
 
 Widget appSettingsTransition(
@@ -55,14 +72,49 @@ class SettingsArtworkWarmup extends StatefulWidget {
 
 class _SettingsArtworkWarmupState extends State<SettingsArtworkWarmup> {
   bool _started = false;
+  final _pinnedArtwork = <(ImageStream, ImageStreamListener)>[];
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_started) {
       _started = true;
-      precacheImage(appSettingsArtwork, context, onError: (_, _) {});
+      _warmArtwork();
     }
+  }
+
+  Future<void> _warmArtwork() async {
+    for (final image in [
+      appSettingsArtwork,
+      appCloseArtwork,
+      appHomeActionArtwork,
+      appHomePlayArtwork,
+      ...appPopupArtworkProviders.values,
+    ]) {
+      // Spread decoding across frames so warming other panels does not stall
+      // the initial scene or delay an already interactive popup.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      await precacheImage(image, context, onError: (_, _) {});
+      if (!mounted) return;
+      // Keep these few shared frames alive while scene/profile photos churn
+      // through the LRU cache. precacheImage alone releases its listener.
+      final stream = image.resolve(createLocalImageConfiguration(context));
+      final listener = ImageStreamListener(
+        (image, _) => image.dispose(),
+        onError: (_, _) {},
+      );
+      stream.addListener(listener);
+      _pinnedArtwork.add((stream, listener));
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final (stream, listener) in _pinnedArtwork) {
+      stream.removeListener(listener);
+    }
+    super.dispose();
   }
 
   @override
@@ -88,10 +140,10 @@ class AppSettings {
     this.vibration = true,
     this.showOpponentPictures = true,
     this.autoArrangeRack = false,
-    bool moveHints = true,
+    this._moveHints = true,
     this.fontScale = 1,
     this.language = AppLanguage.turkish,
-  }) : _moveHints = moveHints;
+  });
 
   AppSettings copyWith({
     bool? soundEffects,
@@ -155,7 +207,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   // never covers a button, even on small screens or at maximum text size.
   static const _canvasWidth = 900.0;
   static const _metricScale = _canvasWidth / appPopupWidth;
-  static const _canvasHeight = _canvasWidth * 941 / 1671;
+  static const _canvasHeight = _canvasWidth / 1.5;
 
   @override
   Widget build(BuildContext context) => SafeArea(
@@ -174,227 +226,221 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
               key: const ValueKey('settings-dialog'),
               width: panelSize.width,
               height: panelSize.height,
-              child: FittedBox(
-                child: SizedBox(
-                  width: _canvasWidth,
-                  height: _canvasHeight,
-                  child: MediaQuery(
-                    data: MediaQuery.of(
-                      context,
-                    ).copyWith(textScaler: appTextScaler(settings.fontScale)),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: Stack(
-                        key: const ValueKey('settings-panel-ready'),
-                        children: [
-                          Positioned.fill(
-                            child: RepaintBoundary(
-                              child: ClipPath(
-                                clipper: const _SettingsArtworkClipper(),
-                                child: Image(
-                                  image: appSettingsArtwork,
-                                  key: const ValueKey('settings-panel-artwork'),
-                                  fit: BoxFit.fill,
-                                  excludeFromSemantics: true,
-                                  frameBuilder:
-                                      (_, artwork, frame, synchronous) =>
-                                          synchronous || frame != null
-                                          ? artwork
-                                          : _artworkFallback(),
-                                  errorBuilder: (_, _, _) => _artworkFallback(),
-                                ),
-                              ),
+              child: AppArtworkReady(
+                image: appSettingsArtwork,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: FittedBox(
+                        child: SizedBox(
+                          width: _canvasWidth,
+                          height: _canvasHeight,
+                          child: MediaQuery(
+                            data: MediaQuery.of(context).copyWith(
+                              textScaler: appTextScaler(settings.fontScale),
                             ),
-                          ),
-                          Positioned(
-                            left: 310,
-                            right: 310,
-                            top: 24,
-                            height: 40,
-                            child: Center(
-                              child: Text(
-                                _text(
-                                  'AYARLAR',
-                                  'SETTINGS',
-                                  de: 'EINSTELLUNGEN',
-                                ),
-                                style: TextStyle(
-                                  color:
-                                      settings.language == AppLanguage.turkish
-                                      ? Colors.transparent
-                                      : _cream,
-                                  backgroundColor:
-                                      settings.language == AppLanguage.turkish
-                                      ? Colors.transparent
-                                      : const Color(0xFF63300D),
-                                  fontSize: 19 * _metricScale,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            right: 42,
-                            top: 52,
-                            child: AppCloseButton(
-                              buttonKey: const ValueKey(
-                                'settings-close-button',
-                              ),
-                              size: 40 * _metricScale,
-                              onTap: () => Navigator.of(context).pop(),
-                            ),
-                          ),
-                          Positioned(
-                            left: 88,
-                            right: 88,
-                            top: 100,
-                            bottom: 48,
-                            child: LayoutBuilder(
-                              builder: (context, inner) {
-                                final options = <Widget>[
-                                  _toggle(
-                                    'Ses Efektleri',
-                                    'Sound Effects',
-                                    Icons.volume_up_rounded,
-                                    settings.soundEffects,
-                                    (v) => settings = settings.copyWith(
-                                      soundEffects: v,
-                                    ),
-                                  ),
-                                  if (widget.onTutorial != null)
-                                    _option(
-                                      key: const ValueKey(
-                                        'settings-tutorial-button',
+                            child: Material(
+                              color: Colors.transparent,
+                              child: Stack(
+                                key: const ValueKey('settings-panel-ready'),
+                                children: [
+                                  Positioned.fill(
+                                    child: RepaintBoundary(
+                                      child: _SettingsArtworkCrop(
+                                        child: Image(
+                                          image: appSettingsArtwork,
+                                          key: const ValueKey(
+                                            'settings-panel-artwork',
+                                          ),
+                                          fit: BoxFit.fill,
+                                          excludeFromSemantics: true,
+                                          frameBuilder:
+                                              (
+                                                _,
+                                                artwork,
+                                                frame,
+                                                synchronous,
+                                              ) => synchronous || frame != null
+                                              ? artwork
+                                              : _artworkFallback(),
+                                          errorBuilder: (_, _, _) =>
+                                              _artworkFallback(),
+                                        ),
                                       ),
-                                      label: _text(
-                                        'Öğretici',
-                                        'TUTORIAL',
-                                        de: 'ANLEITUNG',
-                                      ),
-                                      icon: Icons.menu_book_rounded,
-                                      enabled: _tutorialLaunching,
-                                      toggle: true,
-                                      onTap: _launchTutorial,
-                                    )
-                                  else
-                                    const SizedBox.shrink(),
-                                  _toggle(
-                                    'Bildirimler',
-                                    'NOTIFICATIONS',
-                                    Icons.notifications_active_rounded,
-                                    settings.notifications,
-                                    (v) => settings = settings.copyWith(
-                                      notifications: v,
                                     ),
                                   ),
-                                  _toggle(
-                                    'Hamle İpuçları',
-                                    'MOVE HINTS',
-                                    Icons.lightbulb_rounded,
-                                    settings.moveHints,
-                                    (v) => settings = settings.copyWith(
-                                      moveHints: v,
-                                    ),
-                                  ),
-                                  _toggle(
-                                    'Titreşim',
-                                    'VIBRATION',
-                                    Icons.vibration_rounded,
-                                    settings.vibration,
-                                    (v) => settings = settings.copyWith(
-                                      vibration: v,
-                                    ),
-                                  ),
-                                  _toggle(
-                                    'Otomatik Istaka Dizimi',
-                                    'AUTO ARRANGE RACK',
-                                    Icons.view_week_rounded,
-                                    settings.autoArrangeRack,
-                                    (v) => settings = settings.copyWith(
-                                      autoArrangeRack: v,
-                                    ),
-                                  ),
-                                  _toggle(
-                                    'Rakip Resimleri',
-                                    'OPPONENT PICTURES',
-                                    Icons.person_rounded,
-                                    settings.showOpponentPictures,
-                                    (v) => settings = settings.copyWith(
-                                      showOpponentPictures: v,
-                                    ),
-                                  ),
-                                  _languageCard(),
-                                ];
-                                return Column(
-                                  children: [
-                                    Expanded(
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          Expanded(
-                                            child: _settingsGroup(
-                                              _text(
-                                                'Ses ve titreşim',
-                                                'Sound and vibration',
-                                                de: 'Ton und Vibration',
-                                              ),
-                                              [
-                                                options[0],
-                                                options[4],
-                                                options[2],
-                                              ],
+                                  Positioned(
+                                    left: 88,
+                                    right: 88,
+                                    top: 142,
+                                    bottom: 78,
+                                    child: LayoutBuilder(
+                                      builder: (context, inner) {
+                                        final options = <Widget>[
+                                          _toggle(
+                                            'Ses Efektleri',
+                                            'Sound Effects',
+                                            Icons.volume_up_rounded,
+                                            settings.soundEffects,
+                                            (v) => settings = settings.copyWith(
+                                              soundEffects: v,
                                             ),
                                           ),
-                                          const SizedBox(width: 16),
-                                          Expanded(
-                                            child: _settingsGroup(
-                                              _text(
-                                                'Oynanış',
-                                                'Gameplay',
-                                                de: 'Spielablauf',
+                                          if (widget.onTutorial != null)
+                                            _option(
+                                              key: const ValueKey(
+                                                'settings-tutorial-button',
                                               ),
-                                              [
-                                                options[3],
-                                                options[5],
-                                                options[1],
-                                              ],
+                                              label: _text(
+                                                'Öğretici',
+                                                'TUTORIAL',
+                                                de: 'ANLEITUNG',
+                                              ),
+                                              icon: Icons.menu_book_rounded,
+                                              enabled: _tutorialLaunching,
+                                              toggle: true,
+                                              onTap: _launchTutorial,
+                                            )
+                                          else
+                                            const SizedBox.shrink(),
+                                          _toggle(
+                                            'Bildirimler',
+                                            'NOTIFICATIONS',
+                                            Icons.notifications_active_rounded,
+                                            settings.notifications,
+                                            (v) => settings = settings.copyWith(
+                                              notifications: v,
                                             ),
                                           ),
-                                        ],
-                                      ),
+                                          _toggle(
+                                            'Hamle İpuçları',
+                                            'MOVE HINTS',
+                                            Icons.lightbulb_rounded,
+                                            settings.moveHints,
+                                            (v) => settings = settings.copyWith(
+                                              moveHints: v,
+                                            ),
+                                          ),
+                                          _toggle(
+                                            'Titreşim',
+                                            'VIBRATION',
+                                            Icons.vibration_rounded,
+                                            settings.vibration,
+                                            (v) => settings = settings.copyWith(
+                                              vibration: v,
+                                            ),
+                                          ),
+                                          _toggle(
+                                            'Otomatik Istaka Dizimi',
+                                            'AUTO ARRANGE RACK',
+                                            Icons.view_week_rounded,
+                                            settings.autoArrangeRack,
+                                            (v) => settings = settings.copyWith(
+                                              autoArrangeRack: v,
+                                            ),
+                                          ),
+                                          _toggle(
+                                            'Rakip Resimleri',
+                                            'OPPONENT PICTURES',
+                                            Icons.person_rounded,
+                                            settings.showOpponentPictures,
+                                            (v) => settings = settings.copyWith(
+                                              showOpponentPictures: v,
+                                            ),
+                                          ),
+                                          _languageCard(),
+                                        ];
+                                        return Column(
+                                          children: [
+                                            Expanded(
+                                              child: Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.stretch,
+                                                children: [
+                                                  Expanded(
+                                                    child: _settingsGroup(
+                                                      _text(
+                                                        'Ses ve titreşim',
+                                                        'Sound and vibration',
+                                                        de: 'Ton und Vibration',
+                                                      ),
+                                                      [
+                                                        options[0],
+                                                        options[4],
+                                                        options[2],
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 16),
+                                                  Expanded(
+                                                    child: _settingsGroup(
+                                                      _text(
+                                                        'Oynanış',
+                                                        'Gameplay',
+                                                        de: 'Spielablauf',
+                                                      ),
+                                                      [
+                                                        options[3],
+                                                        options[5],
+                                                        options[1],
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            _groupHeading(
+                                              _text(
+                                                'Görünüm',
+                                                'Appearance',
+                                                de: 'Darstellung',
+                                              ),
+                                            ),
+                                            SizedBox(
+                                              height: 48,
+                                              child: Row(
+                                                children: [
+                                                  Expanded(child: options[6]),
+                                                  const SizedBox(width: 16),
+                                                  Expanded(child: options[7]),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(height: 5),
+                                            _fontScaleCard(),
+                                            const SizedBox(height: 4),
+                                            _footer(),
+                                          ],
+                                        );
+                                      },
                                     ),
-                                    const SizedBox(height: 8),
-                                    _groupHeading(
-                                      _text(
-                                        'Görünüm',
-                                        'Appearance',
-                                        de: 'Darstellung',
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      height: 48,
-                                      child: Row(
-                                        children: [
-                                          Expanded(child: options[6]),
-                                          const SizedBox(width: 16),
-                                          Expanded(child: options[7]),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(height: 5),
-                                    _fontScaleCard(),
-                                    const SizedBox(height: 4),
-                                    _footer(),
-                                  ],
-                                );
-                              },
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
+                    Positioned.fill(
+                      child: AppArtworkTitle(
+                        asset: appSettingsPanelAsset,
+                        child: Text(
+                          _text('AYARLAR', 'SETTINGS', de: 'EINSTELLUNGEN'),
+                          maxLines: 1,
+                          softWrap: false,
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: AppArtworkClose(
+                        asset: appSettingsPanelAsset,
+                        buttonKey: const ValueKey('settings-close-button'),
+                        onTap: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -431,8 +477,13 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
     children: [
       _groupHeading(title),
       for (var i = 0; i < options.length; i++) ...[
-        if (i > 0) const SizedBox(height: 6),
-        Expanded(child: options[i]),
+        if (i > 0) const SizedBox(height: 10),
+        Expanded(
+          child: Align(
+            alignment: Alignment.center,
+            child: SizedBox(height: 42, child: options[i]),
+          ),
+        ),
       ],
     ],
   );
@@ -506,9 +557,9 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
         child: Row(
           children: [
             _rowIcon(icon),
-            const SizedBox(width: 12),
+            const SizedBox(width: 9),
             Expanded(child: _rowLabel(label)),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             _switchIndicator(enabled),
           ],
         ),
@@ -518,7 +569,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
 
   Widget _rowIcon(IconData icon) => Icon(
     icon,
-    size: 34,
+    size: 26,
     color: _goldLight,
     shadows: const [
       Shadow(color: Colors.black87, offset: Offset(0, 2), blurRadius: 3),
@@ -540,7 +591,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
 
   Widget _settingCard({required Widget child}) => Container(
     key: const ValueKey('settings-option-card'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(10),
       gradient: const LinearGradient(
@@ -559,8 +610,8 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   Widget _switchIndicator(bool enabled) => AnimatedContainer(
     key: const ValueKey('settings-switch-indicator'),
     duration: const Duration(milliseconds: 160),
-    width: 62,
-    height: 29,
+    width: 50,
+    height: 24,
     padding: const EdgeInsets.all(2),
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(20),
@@ -584,8 +635,8 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
       curve: Curves.easeOut,
       alignment: enabled ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        width: 23,
-        height: 23,
+        width: 18,
+        height: 18,
         decoration: const BoxDecoration(
           shape: BoxShape.circle,
           gradient: LinearGradient(
@@ -598,7 +649,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
         child: enabled
             ? const Icon(
                 Icons.check_rounded,
-                size: 17,
+                size: 13,
                 color: Color(0xFF145037),
               )
             : null,
@@ -641,7 +692,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
           ],
           child: Container(
             width: 126,
-            height: 34,
+            height: 28,
             padding: const EdgeInsets.symmetric(horizontal: 9),
             decoration: BoxDecoration(
               color: const Color(0xFF102D21),
@@ -671,7 +722,7 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
                 const Icon(
                   Icons.expand_more_rounded,
                   color: _goldLight,
-                  size: 21,
+                  size: 17,
                 ),
               ],
             ),
@@ -702,9 +753,9 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                trackHeight: 6,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 13),
               ),
               child: Slider(
                 value: settings.fontScale,
@@ -728,107 +779,103 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(width: 130),
+          SizedBox(
+            width: 130,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: performanceOverlayEnabled,
+              builder: (context, enabled, _) => TextButton.icon(
+                key: const ValueKey('settings-performance-button'),
+                onPressed: () => performanceOverlayEnabled.value = !enabled,
+                icon: Icon(
+                  enabled ? Icons.monitor_heart : Icons.monitor_heart_outlined,
+                  size: 19,
+                ),
+                label: Text(
+                  _text('Performans', 'Performance', de: 'Leistung'),
+                  maxLines: 1,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: _goldLight,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     ),
   );
 
-  Widget _footer() => SizedBox(
-    width: double.infinity,
-    child: FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerRight,
-      child: Row(
-        key: const ValueKey('settings-footer-row'),
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (widget.onHome != null)
-            FilledButton.icon(
-              key: const ValueKey('settings-home-button'),
-              onPressed: () => _closeThen(widget.onHome!),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(
-                  160,
-                  appPopupButtonHeight * _metricScale,
-                ),
-                textStyle: const TextStyle(
-                  fontSize: appPopupBodyFontSize * _metricScale,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              icon: const Icon(Icons.home_rounded),
-              label: Text(_text('ANA SAYFA', 'HOME', de: 'STARTSEITE')),
-            ),
-          if (widget.onHome != null) const SizedBox(width: 8),
-          if (widget.onRestart != null)
-            FilledButton.icon(
-              key: const ValueKey('settings-restart-button'),
-              onPressed: () => _closeThen(widget.onRestart!),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(
-                  160,
-                  appPopupButtonHeight * _metricScale,
-                ),
-                textStyle: const TextStyle(
-                  fontSize: appPopupBodyFontSize * _metricScale,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              icon: const Icon(Icons.restart_alt_rounded),
-              label: Text(
-                _text('YENİDEN BAŞLAT', 'RESTART', de: 'NEU STARTEN'),
-              ),
-            ),
-          if (widget.onRestart != null) const SizedBox(width: 8),
-          OutlinedButton(
-            onPressed: () => setState(() => settings = const AppSettings()),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _cream,
-              backgroundColor: const Color(0xFF093B30),
-              side: const BorderSide(color: Color(0xFF6CA498), width: 2),
-              shape: const StadiumBorder(),
-              elevation: 5,
-              shadowColor: Colors.black87,
-              minimumSize: Size(
-                widget.onHome == null ? 340 : 160,
-                appPopupButtonHeight * _metricScale,
-              ),
-              textStyle: const TextStyle(
-                fontSize: appPopupBodyFontSize * _metricScale,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            child: Text(_text('VARSAYILAN', 'DEFAULT')),
-          ),
-          const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: () => Navigator.of(context).pop(settings),
-            style: FilledButton.styleFrom(
-              elevation: 4,
-              shadowColor: Colors.black87,
-              backgroundColor: _goldLight,
-              foregroundColor: const Color(0xFF5C3A1E),
-              shape: const StadiumBorder(),
-              side: const BorderSide(color: Color(0xFFFFEDAD), width: 2),
-              minimumSize: Size(
-                widget.onHome == null ? 340 : 160,
-                appPopupButtonHeight * _metricScale,
-              ),
-            ),
-            icon: const Icon(Icons.check_rounded),
-            label: Text(
-              _text('KAYDET', 'SAVE', de: 'SPEICHERN'),
-              style: const TextStyle(
-                fontSize: appPopupBodyFontSize * _metricScale,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ],
+  Widget _footer() {
+    final navigationCount =
+        (widget.onHome != null ? 1 : 0) + (widget.onRestart != null ? 1 : 0);
+    // Widen in-game actions within the existing panel, keeping equal heights.
+    final actionWidth = navigationCount == 0
+        ? AppButtonMetrics.menuWidth
+        : AppButtonMetrics.gameWidth;
+    Widget action({
+      required String key,
+      required String label,
+      required VoidCallback onPressed,
+      String? artworkAsset,
+      bool yellow = false,
+    }) => AppArtworkButton(
+      key: ValueKey(key),
+      width: actionWidth,
+      height: AppButtonMetrics.height,
+      fontSize: appPopupBodyFontSize * _metricScale,
+      label: label,
+      artworkAsset: artworkAsset,
+      yellow: yellow,
+      onPressed: onPressed,
+    );
+
+    final actions = [
+      if (widget.onHome != null)
+        action(
+          key: 'settings-home-button',
+          label: _text('ANA SAYFA', 'HOME', de: 'STARTSEITE'),
+          artworkAsset: AppButtonAssets.home,
+          onPressed: () => _closeThen(widget.onHome!),
+        ),
+      if (widget.onRestart != null)
+        action(
+          key: 'settings-restart-button',
+          label: _text('YENİDEN BAŞLAT', 'RESTART', de: 'NEU STARTEN'),
+          artworkAsset: AppButtonAssets.restart,
+          onPressed: () => _closeThen(widget.onRestart!),
+        ),
+      action(
+        key: 'settings-default-button',
+        label: _text('VARSAYILAN', 'DEFAULT'),
+        yellow: true,
+        onPressed: () => setState(() => settings = const AppSettings()),
       ),
-    ),
-  );
+      action(
+        key: 'settings-save-button',
+        label: _text('KAYDET', 'SAVE', de: 'SPEICHERN'),
+        onPressed: () => Navigator.of(context).pop(settings),
+      ),
+    ];
+    return SizedBox(
+      width: double.infinity,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.center,
+        child: Row(
+          key: const ValueKey('settings-footer-row'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < actions.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              actions[i],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 
   void _closeThen(VoidCallback action) {
     Navigator.of(context).pop();
@@ -836,67 +883,11 @@ class _AppSettingsDialogState extends State<AppSettingsDialog> {
   }
 }
 
-/// The supplied RGB image has a baked-in checkerboard outside the frame.
-/// Mask that area in the UI, without modifying the original artwork.
-class _SettingsArtworkClipper extends CustomClipper<Path> {
-  const _SettingsArtworkClipper();
+/// Display only the frame area, preserving the supplied asset unchanged.
+class _SettingsArtworkCrop extends StatelessWidget {
+  final Widget child;
+  const _SettingsArtworkCrop({required this.child});
 
   @override
-  Path getClip(Size size) {
-    final path = Path()
-      ..moveTo(174, 95)
-      ..lineTo(187, 83)
-      ..lineTo(243, 61)
-      ..lineTo(244, 48)
-      ..quadraticBezierTo(241, 35, 254, 32)
-      ..lineTo(322, 18)
-      ..quadraticBezierTo(334, 17, 340, 31)
-      ..lineTo(350, 76)
-      ..lineTo(350, 28)
-      ..quadraticBezierTo(348, 15, 361, 12)
-      ..lineTo(427, 1)
-      ..quadraticBezierTo(442, 0, 446, 16)
-      ..lineTo(453, 57)
-      ..lineTo(486, 57)
-      ..lineTo(487, 52)
-      ..lineTo(523, 64)
-      ..lineTo(545, 44)
-      ..quadraticBezierTo(556, 9, 598, 9)
-      ..lineTo(1077, 9)
-      ..quadraticBezierTo(1115, 9, 1129, 44)
-      ..lineTo(1152, 65)
-      ..lineTo(1183, 53)
-      ..lineTo(1184, 57)
-      ..lineTo(1210, 57)
-      ..lineTo(1220, 16)
-      ..quadraticBezierTo(1224, 0, 1240, 2)
-      ..lineTo(1305, 15)
-      ..quadraticBezierTo(1318, 17, 1315, 31)
-      ..lineTo(1307, 68)
-      ..lineTo(1318, 38)
-      ..quadraticBezierTo(1322, 23, 1336, 25)
-      ..lineTo(1402, 42)
-      ..quadraticBezierTo(1416, 45, 1411, 59)
-      ..lineTo(1427, 65)
-      ..quadraticBezierTo(1464, 70, 1491, 94)
-      ..lineTo(1513, 95)
-      ..quadraticBezierTo(1550, 95, 1563, 143)
-      ..quadraticBezierTo(1590, 158, 1590, 189)
-      ..lineTo(1590, 783)
-      ..quadraticBezierTo(1590, 818, 1559, 839)
-      ..quadraticBezierTo(1551, 899, 1492, 899)
-      ..lineTo(175, 899)
-      ..quadraticBezierTo(125, 899, 112, 841)
-      ..quadraticBezierTo(81, 820, 81, 783)
-      ..lineTo(81, 189)
-      ..quadraticBezierTo(81, 159, 107, 144)
-      ..quadraticBezierTo(116, 96, 151, 95)
-      ..close();
-    return path.transform(
-      Matrix4.diagonal3Values(size.width / 1671, size.height / 941, 1).storage,
-    );
-  }
-
-  @override
-  bool shouldReclip(_SettingsArtworkClipper oldClipper) => false;
+  Widget build(BuildContext context) => child;
 }

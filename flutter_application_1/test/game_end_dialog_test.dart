@@ -5,7 +5,12 @@ import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/daily_league.dart';
 import 'package:flutter_application_1/player_progress.dart';
 
+import 'panel_artwork_test_support.dart';
+
+import 'package:flutter_application_1/app_controls.dart';
+
 void main() {
+  preparePanelArtwork();
   testWidgets('oyun sonu butonlari dar ekranda gorunur ve calisir', (
     tester,
   ) async {
@@ -65,8 +70,14 @@ void main() {
     expect(find.text('DEVAM ET'), findsOneWidget);
     expect(find.text('TUR BİTTİ'), findsNothing);
     expect(
+      tester
+          .widget<Image>(find.byKey(const ValueKey('popup-panel-artwork')))
+          .image,
+      appPopupArtwork(appGameEndPanelAsset),
+    );
+    expect(
       find.byKey(const ValueKey('end-screen-header-artwork-slot')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.byKey(const ValueKey('end-screen-winner-card')), findsNothing);
     expect(find.text('KAZANAN'), findsNothing);
@@ -78,7 +89,7 @@ void main() {
     final playerNameText = tester.widget<Text>(find.text('Gökde').last);
     expect(playerNameText.style?.color, OC.gold);
     expect(playerNameText.style?.fontWeight, FontWeight.w900);
-    expect(playerNameText.style?.fontSize, 18);
+    expect(playerNameText.style?.fontSize, 22);
     expect(find.byIcon(Icons.push_pin_rounded), findsOneWidget);
     final rankOne = tester.widget<Text>(
       find.descendant(

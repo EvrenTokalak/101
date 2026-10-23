@@ -8,113 +8,120 @@ class TutorialPromptDialog extends StatelessWidget {
   const TutorialPromptDialog({super.key});
 
   @override
-  Widget build(BuildContext context) => Dialog(
-    key: const ValueKey('tutorial-question'),
-    backgroundColor: Colors.transparent,
-    insetPadding: const EdgeInsets.all(22),
-    child: Container(
-      width: appPopupSize(context, horizontalInset: 44).width,
-      height: appPopupSize(context, verticalInset: 44).height,
-      padding: const EdgeInsets.fromLTRB(30, 24, 30, 26),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF174C35), Color(0xFF071B14)],
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFD4A017), width: 2),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black87,
-            blurRadius: 30,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: SizedBox(
-          width: appPopupSize(context, horizontalInset: 44).width - 60,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 70,
-                height: 70,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFD4A017).withValues(alpha: 0.16),
-                  border: Border.all(color: const Color(0xFFF0CC5A), width: 2),
-                ),
-                child: const Icon(
-                  Icons.school_rounded,
-                  color: Color(0xFFF0CC5A),
-                  size: 38,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  'ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFFF5EDD6),
-                    fontSize: 23,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 22),
-              LayoutBuilder(
-                builder: (context, bounds) {
-                  final width = bounds.maxWidth < 360
-                      ? bounds.maxWidth
-                      : (bounds.maxWidth - 14) / 2;
-                  return Wrap(
-                    spacing: 14,
-                    runSpacing: 8,
-                    children: [
-                      SizedBox(
-                        width: width,
-                        child: OutlinedButton(
-                          key: const ValueKey('tutorial-skip-button'),
-                          onPressed: () => Navigator.of(context).pop(false),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white70,
-                            side: const BorderSide(color: Colors.white38),
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                          ),
-                          child: const Text('ŞİMDİLİK GEÇ'),
-                        ),
-                      ),
-                      SizedBox(
-                        width: width,
-                        child: FilledButton.icon(
-                          key: const ValueKey('tutorial-start-button'),
-                          onPressed: () => Navigator.of(context).pop(true),
-                          style: FilledButton.styleFrom(
-                            foregroundColor: const Color(0xFF2D1C08),
-                            backgroundColor: const Color(0xFFF0CC5A),
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                          ),
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text(
-                            'EVET, GÖSTER',
-                            style: TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Dialog(
+        key: const ValueKey('tutorial-question'),
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, bounds) =>
+              _panel(context, appArtworkPanelSize(bounds)),
         ),
       ),
+    );
+  }
+
+  Widget _panel(BuildContext context, Size size) => AppPopupSurface(
+    width: size.width,
+    height: size.height,
+    artworkAsset: appTutorialPanelAsset,
+    artworkTitle: const Text(
+      'ÖĞRETİCİ',
+      key: ValueKey('tutorial-panel-title'),
+      maxLines: 1,
+      softWrap: false,
+    ),
+    onOutsideClose: () => Navigator.of(context).pop(false),
+    closeOnFrame: true,
+    padding: EdgeInsets.fromLTRB(
+      size.width * .05,
+      size.height * .25,
+      size.width * .05,
+      size.height * .09,
+    ),
+    child: Column(
+      children: [
+        Expanded(
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: SizedBox(
+                width: size.width * .84,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Color(0xFFFFEFBD),
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .8,
+                        shadows: [Shadow(color: Colors.black54, blurRadius: 3)],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    LayoutBuilder(
+                      builder: (context, bounds) {
+                        final width = bounds.maxWidth < 360
+                            ? bounds.maxWidth
+                            : (bounds.maxWidth - 14) / 2;
+                        return Wrap(
+                          spacing: 14,
+                          runSpacing: 10,
+                          children: [
+                            SizedBox(
+                              width: width,
+                              child: OutlinedButton(
+                                key: const ValueKey('tutorial-skip-button'),
+                                onPressed: () =>
+                                    Navigator.of(context).pop(false),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFFFFEFBD),
+                                  side: const BorderSide(
+                                    color: Color(0xFFD4A017),
+                                  ),
+                                  backgroundColor: const Color(0x88032922),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
+                                ),
+                                child: const Text('ŞİMDİLİK GEÇ'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: width,
+                              child: FilledButton.icon(
+                                key: const ValueKey('tutorial-start-button'),
+                                onPressed: () =>
+                                    Navigator.of(context).pop(true),
+                                style: FilledButton.styleFrom(
+                                  foregroundColor: const Color(0xFF2D1C08),
+                                  backgroundColor: const Color(0xFFF0CC5A),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
+                                ),
+                                icon: const Icon(Icons.play_arrow_rounded),
+                                label: const Text(
+                                  'EVET, GÖSTER',
+                                  style: TextStyle(fontWeight: FontWeight.w900),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -182,21 +189,12 @@ class InGameTutorialOverlay extends StatelessWidget {
             460.0,
             max(230.0, box.maxWidth * 0.42),
           ).clamp(0.0, box.maxWidth - 20);
-          final cardLeft = switch (current.target) {
-            _TutorialTarget.deck ||
-            _TutorialTarget.discardButton => box.maxWidth * 0.015,
-            _TutorialTarget.rackArrange ||
-            _TutorialTarget.openButtons ||
-            _TutorialTarget.processDrag => box.maxWidth * 0.29,
-          };
+          final cardLeft = step.isEven ? 10.0 : box.maxWidth - cardWidth - 10;
           return Stack(
             children: [
               IgnorePointer(
                 child: Stack(
                   children: [
-                    const Positioned.fill(
-                      child: ColoredBox(color: Color(0x33000000)),
-                    ),
                     _TutorialFingerGuide(
                       key: ValueKey('tutorial-finger-${current.target.name}'),
                       target: current.target,
@@ -207,6 +205,7 @@ class InGameTutorialOverlay extends StatelessWidget {
                       color: current.accent,
                     ),
                     Positioned(
+                      key: const ValueKey('tutorial-instruction-position'),
                       top: 6,
                       left: cardLeft.clamp(
                         10.0,
@@ -223,7 +222,8 @@ class InGameTutorialOverlay extends StatelessWidget {
                 ),
               ),
               Positioned(
-                right: 12,
+                right: step.isEven ? 12 : null,
+                left: step.isOdd ? 12 : null,
                 top: 10,
                 child: TextButton.icon(
                   key: const ValueKey('tutorial-close-button'),
@@ -396,12 +396,13 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
       builder: (context, _) {
         final opening = widget.target == _TutorialTarget.openButtons;
         final phase = _controller.value;
-        // Pause at the total first, travel to the button, then pause there.
+        // Hold before dragging, pause at the destination, then fade to reset.
         final progress = Curves.easeInOutCubic.transform(
-          opening ? ((phase - 0.32) / 0.34).clamp(0.0, 1.0) : phase,
+          ((phase - 0.16) / 0.56).clamp(0.0, 1.0),
         );
-        final position = Offset.lerp(begin, end, progress)!;
+        final position = opening ? end : Offset.lerp(begin, end, progress)!;
         final pulse = sin(phase * pi);
+        final opacity = opening ? 1.0 : (phase < .88 ? 1.0 : (1 - phase) / .12);
         final finger = Positioned(
           key: const ValueKey('tutorial-finger'),
           left: position.dx - 8,
@@ -425,18 +426,22 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
                   ),
                 ),
                 Positioned(
-                  left: 5,
-                  top: 5,
-                  child: Transform.scale(
-                    alignment: Alignment.topLeft,
-                    scale: 1 + pulse * 0.06,
-                    child: Image.asset(
-                      'görseller/icon/hand.png',
-                      key: const ValueKey('tutorial-hand-image'),
-                      width: 64,
-                      height: 64,
-                      cacheWidth: 128,
-                      fit: BoxFit.contain,
+                  // The fingertip is at (23%, 15%) in the supplied artwork.
+                  left: 8 - 96 * .23,
+                  top: 8 - 64 * .15,
+                  child: Opacity(
+                    opacity: opacity,
+                    child: Transform.scale(
+                      alignment: const Alignment(-.54, -.7),
+                      scale: opening ? 1 - pulse * .12 : 1 + pulse * .04,
+                      child: Image.asset(
+                        'görseller/icon/t_hand',
+                        key: const ValueKey('tutorial-hand-image'),
+                        width: 96,
+                        height: 64,
+                        cacheWidth: 288,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                 ),
@@ -448,32 +453,14 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
           return Positioned.fill(
             child: Stack(
               children: [
-                if (widget.target == _TutorialTarget.rackArrange ||
-                    widget.target == _TutorialTarget.processDrag)
+                if (widget.target == _TutorialTarget.processDrag)
                   Positioned.fromRect(
-                    rect:
-                        (widget.target == _TutorialTarget.rackArrange
-                                ? _resolvedStartRect!
-                                : _resolvedEndRect!)
-                            .inflate(4),
+                    rect: _resolvedEndRect!.inflate(4),
                     child: DecoratedBox(
-                      key: ValueKey(
-                        widget.target == _TutorialTarget.rackArrange
-                            ? 'tutorial-arrange-highlight'
-                            : 'tutorial-process-target-highlight',
-                      ),
+                      key: const ValueKey('tutorial-process-target-highlight'),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(5),
                         border: Border.all(color: widget.color, width: 2),
-                        boxShadow: [
-                          BoxShadow(
-                            color: widget.color.withValues(
-                              alpha: .25 + pulse * .2,
-                            ),
-                            blurRadius: 12,
-                            spreadRadius: 2,
-                          ),
-                        ],
                       ),
                     ),
                   ),
@@ -491,12 +478,7 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
                   key: const ValueKey('tutorial-total-highlight'),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: widget.color.withValues(
-                        alpha: 1 - progress * 0.65,
-                      ),
-                      width: 3,
-                    ),
+                    border: Border.all(color: widget.color, width: 3),
                   ),
                 ),
               ),
@@ -506,10 +488,42 @@ class _TutorialFingerGuideState extends State<_TutorialFingerGuide>
                   key: const ValueKey('tutorial-open-highlight'),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: widget.color.withValues(alpha: progress),
-                      width: 3,
-                    ),
+                    border: Border.all(color: widget.color, width: 3),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: _resolvedStartRect!.center.dx - 43,
+                top: _resolvedStartRect!.top - 23,
+                child: Container(
+                  key: const ValueKey('tutorial-opening-ready-label'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF173C29),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: widget.color),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.check_circle_rounded,
+                        color: widget.color,
+                        size: 12,
+                      ),
+                      const SizedBox(width: 3),
+                      const Text(
+                        '101+ HAZIR',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -536,16 +550,10 @@ class _InstructionCard extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => AppPopupSurface(
     width: maxWidth,
     constraints: const BoxConstraints(maxWidth: 720),
     padding: const EdgeInsets.fromLTRB(11, 8, 10, 8),
-    decoration: BoxDecoration(
-      color: const Color(0xF20A2119),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: data.accent, width: 2),
-      boxShadow: const [BoxShadow(color: Colors.black87, blurRadius: 18)],
-    ),
     child: Row(
       children: [
         Icon(data.icon, color: data.accent, size: 29),
@@ -745,17 +753,11 @@ class _HomeFeatureTourDialogState extends State<_AnchoredHomeFeatureTour> {
                   alignment: daily
                       ? const Alignment(0.18, 0.20)
                       : const Alignment(0, 0.42),
-                  child: Container(
+                  child: AppGenericPanel(
                     width: 520,
-                    padding: const EdgeInsets.all(22),
-                    decoration: BoxDecoration(
-                      color: const Color(0xF20A2119),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: accent, width: 2),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black87, blurRadius: 26),
-                      ],
-                    ),
+                    height: 300,
+                    title: Text(daily ? 'GÜNLÜK ÖDÜL' : 'GÖREVLER'),
+
                     child: SingleChildScrollView(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -768,15 +770,6 @@ class _HomeFeatureTourDialogState extends State<_AnchoredHomeFeatureTour> {
                             size: 48,
                           ),
                           const SizedBox(height: 7),
-                          Text(
-                            daily ? 'GÜNLÜK ÖDÜL' : 'GÖREVLER',
-                            style: TextStyle(
-                              color: accent,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
                           Text(
                             daily
                                 ? 'Okla gösterilen hediye düğmesi günlük ödül alanıdır. Şimdi paneli açıp ilk ödülünü birlikte alalım.'

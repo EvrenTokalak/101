@@ -22,11 +22,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
     }
 
-    expect(find.text('ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?'), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('tutorial-skip-button')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(const ValueKey('tutorial-question')), findsNothing);
 
     expect(find.text('HEMEN OYNA'), findsOneWidget);
 
@@ -44,7 +40,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 180));
 
-    expect(find.text('MAĞAZA'), findsOneWidget);
+    expect(find.byKey(const ValueKey('store-screen')), findsOneWidget);
     expect(find.byKey(const ValueKey('store-racks-tab')), findsOneWidget);
     expect(find.byKey(const ValueKey('store-tiles-tab')), findsOneWidget);
     expect(find.byKey(const ValueKey('store-backgrounds-tab')), findsOneWidget);

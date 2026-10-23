@@ -1,3 +1,5 @@
+import 'panel_artwork_test_support.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +9,7 @@ import 'package:flutter_application_1/player_progress.dart';
 import 'package:flutter_application_1/progress_notifications.dart';
 
 void main() {
+  preparePanelArtwork();
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() => progressNotifications.load());
   setUp(() async => SharedPreferencesAsync().clear());
@@ -19,6 +22,35 @@ void main() {
       finishedHand: won,
     );
   }
+
+  test('mark all read persists without consuming mission rewards or future notices', () async {
+    final player = PlayerProgressController();
+    final notices = ProgressNotifications(player);
+    addTearDown(notices.dispose);
+    await notices.load();
+    completeGame(player, won: true);
+    expect(notices.unread, isNotEmpty);
+    final coins = player.coins;
+    final noticeTitles = notices.notices.map((entry) => entry.title).toList();
+    await notices.markAllRead();
+    expect(notices.unread, isEmpty);
+    expect(notices.notices.map((entry) => entry.title), noticeTitles);
+    expect(notices.takeToasts(), isEmpty);
+    expect(player.coins, coins);
+    expect(notices.missions.last.complete, isTrue);
+    expect(notices.missions.last.claimed, isFalse);
+    final reopened = ProgressNotifications(player);
+    addTearDown(reopened.dispose);
+    await reopened.load();
+    expect(reopened.unread, isEmpty);
+    expect(reopened.notices.map((entry) => entry.title), noticeTitles);
+    completeGame(player);
+    completeGame(player);
+    expect(
+      reopened.unread.any((entry) => entry.title.contains('3 oyun oyna')),
+      isTrue,
+    );
+  });
 
   test(
     'completed missions emit one notice each using actual game progress',
@@ -40,6 +72,33 @@ void main() {
       expect(notices.unread.where((n) => n.title == title), isEmpty);
     },
   );
+
+  test('deleting inbox notices persists without resetting completion or consuming rewards', () async {
+    final player = PlayerProgressController();
+    final notices = ProgressNotifications(player);
+    addTearDown(notices.dispose);
+    await notices.load();
+    completeGame(player, won: true);
+    final id = notices.notices.single.id;
+    final coins = player.coins;
+    await notices.dismissNotice(id);
+    expect(notices.notices, isEmpty);
+    expect(notices.unread, isEmpty);
+    notices.refresh();
+    expect(notices.notices, isEmpty);
+    completeGame(player);
+    completeGame(player);
+    expect(notices.notices, isNotEmpty);
+    await notices.clearNotices();
+    final reopened = ProgressNotifications(player);
+    addTearDown(reopened.dispose);
+    await reopened.load();
+    expect(reopened.notices, isEmpty);
+    expect(reopened.unread, isEmpty);
+    expect(reopened.missions.last.complete, isTrue);
+    expect(reopened.missions.last.claimed, isFalse);
+    expect(player.coins, greaterThanOrEqualTo(coins));
+  });
 
   test(
     'new table notice follows actual level unlock and is not repeated',
@@ -114,16 +173,23 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
     await tester.pump(const Duration(milliseconds: 750));
+    expect(find.byKey(const ValueKey('home-missions-badge')), findsNothing);
     completeGame(playerProgress, won: true);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Görev tamamlandı: Bir oyun kazan'), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-missions-badge')), findsOneWidget);
     await tester.tap(find.byIcon(Icons.mail_outlined));
     await tester.pump(const Duration(milliseconds: 350));
     final entry = find.byKey(
       const ValueKey('feature-entry-Görev tamamlandı: Bir oyun kazan'),
     );
     expect(entry, findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    final inboxBounds = tester.getRect(
+      find.byKey(const ValueKey('feature-content-viewport-GELEN KUTUSU')),
+    );
+    final inboxCardWidth = tester.getSize(entry).width;
     await tester.tap(entry);
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 350));
@@ -134,8 +200,29 @@ void main() {
       isEmpty,
     );
     expect(find.text('GÖREVLER'), findsWidgets);
+    expect(find.textContaining('YENİLENME'), findsNothing);
     final claim = find.byKey(const ValueKey('mission-claim-Bir oyun kazan'));
     expect(claim, findsOneWidget);
+    expect(
+      tester.getRect(
+        find.byKey(const ValueKey('feature-content-viewport-GÖREVLER')),
+      ),
+      inboxBounds,
+    );
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('mission-progress-Bir oyun kazan')),
+          )
+          .width,
+      closeTo(inboxCardWidth, .1),
+    );
+    final reward = find.byKey(const ValueKey('mission-reward-Bir oyun kazan'));
+    final bar = find.byKey(
+      const ValueKey('mission-progress-bar-Bir oyun kazan'),
+    );
+    expect(tester.getCenter(reward).dx, lessThan(tester.getCenter(bar).dx));
+    expect(tester.getCenter(reward).dy, closeTo(tester.getCenter(bar).dy, .1));
     expect(
       tester.getCenter(claim).dx,
       greaterThan(tester.getCenter(find.text('Bir oyun kazan')).dx),
@@ -157,6 +244,7 @@ void main() {
     await tester.tap(claim);
     await tester.pump(const Duration(milliseconds: 300));
     expect(playerProgress.coins, balance + 750);
+    expect(find.byKey(const ValueKey('home-missions-badge')), findsNothing);
     final claimedButton = tester.widget<FilledButton>(claim);
     const disabled = {WidgetState.disabled};
     expect(

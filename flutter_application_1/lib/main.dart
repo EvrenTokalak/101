@@ -6,10 +6,18 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_language.dart';
+import 'app_colors.dart';
+import 'store_screen.dart';
+
 import 'avatar_picker.dart';
+import 'profile_name_dialog.dart';
 import 'app_controls.dart';
 import 'app_settings_dialog.dart';
 import 'daily_login_rewards.dart';
+import 'daily_reward_card.dart';
+import 'daily_challenge.dart';
+import 'daily_challenge_card.dart';
+import 'saved_game.dart';
 import 'game_launch.dart';
 import 'game.dart'
     show
@@ -38,29 +46,83 @@ import 'startup_tutorial.dart';
 import 'daily_league.dart';
 import 'league_screen.dart';
 
+export 'app_colors.dart' show OkeyColors;
+
 final _dailyTaskClock = _DailyTaskClock();
 final _inboxNotifications = _InboxNotifications();
+final _walletRewardTargetKey = GlobalKey();
+final _xpRewardTargetKey = GlobalKey();
 
 class _InboxNotifications extends ChangeNotifier {
   static const _tournamentReadKey = 'inbox.tournament_read_v1';
   static const _welcomeReadKey = 'inbox.welcome_read_v1';
+  static const _dailyRewardReadKey = 'inbox.daily_reward_read_v1';
 
   bool _tournamentUnread = true;
   bool _welcomeUnread = true;
+  String? _dailyRewardReadToken;
+  bool tournamentDismissed = false;
+  bool welcomeDismissed = false;
+  String? _dailyRewardDismissedToken;
+  bool get dailyRewardDismissed =>
+      _dailyRewardDismissedToken == _dailyRewardToken;
 
   bool get tournamentUnread => _tournamentUnread;
   bool get welcomeUnread => _welcomeUnread;
   int get unreadCount => (_tournamentUnread ? 1 : 0) + (_welcomeUnread ? 1 : 0);
+  String get _dailyRewardToken {
+    final now = DateTime.now();
+    return '${now.year}-${now.month}-${now.day}:${dailyLogin.streak}';
+  }
+
+  bool get dailyRewardUnread =>
+      dailyLogin.canClaimToday && _dailyRewardReadToken != _dailyRewardToken;
 
   Future<void> load() async {
     try {
       final preferences = SharedPreferencesAsync();
       _tournamentUnread = await preferences.getBool(_tournamentReadKey) != true;
       _welcomeUnread = await preferences.getBool(_welcomeReadKey) != true;
+      _dailyRewardReadToken = await preferences.getString(_dailyRewardReadKey);
+      tournamentDismissed =
+          await preferences.getBool('inbox.tournament_dismissed_v1') == true;
+      welcomeDismissed =
+          await preferences.getBool('inbox.welcome_dismissed_v1') == true;
+      _dailyRewardDismissedToken = await preferences.getString(
+        'inbox.daily_reward_dismissed_v1',
+      );
     } catch (_) {
       // Depolama kullanılamazsa mevcut oturumdaki okunma durumu korunur.
     }
     notifyListeners();
+  }
+
+  Future<void> markDailyRewardRead() async {
+    await load();
+    _dailyRewardReadToken = _dailyRewardToken;
+    notifyListeners();
+    try {
+      await SharedPreferencesAsync().setString(
+        _dailyRewardReadKey,
+        _dailyRewardReadToken!,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> markAllRead() async {
+    await load();
+    _tournamentUnread = false;
+    _welcomeUnread = false;
+    _dailyRewardReadToken = _dailyRewardToken;
+    notifyListeners();
+    try {
+      final preferences = SharedPreferencesAsync();
+      await Future.wait([
+        preferences.setBool(_tournamentReadKey, true),
+        preferences.setBool(_welcomeReadKey, true),
+        preferences.setString(_dailyRewardReadKey, _dailyRewardReadToken!),
+      ]);
+    } catch (_) {}
   }
 
   Future<void> markTournamentRead() async {
@@ -70,6 +132,55 @@ class _InboxNotifications extends ChangeNotifier {
     try {
       await SharedPreferencesAsync().setBool(_tournamentReadKey, true);
     } catch (_) {}
+  }
+
+  Future<void> dismiss(String id) async {
+    final preferences = SharedPreferencesAsync();
+    if (id == 'inbox-daily') {
+      _dailyRewardDismissedToken = _dailyRewardToken;
+      _dailyRewardReadToken = _dailyRewardToken;
+      notifyListeners();
+      try {
+        await Future.wait([
+          preferences.setString(
+            'inbox.daily_reward_dismissed_v1',
+            _dailyRewardToken,
+          ),
+          preferences.setString(_dailyRewardReadKey, _dailyRewardToken),
+        ]);
+      } catch (_) {}
+    } else if (id == 'inbox-league') {
+      tournamentDismissed = true;
+      _tournamentUnread = false;
+      notifyListeners();
+      try {
+        await Future.wait([
+          preferences.setBool('inbox.tournament_dismissed_v1', true),
+          preferences.setBool(_tournamentReadKey, true),
+        ]);
+      } catch (_) {}
+    } else if (id == 'inbox-welcome') {
+      welcomeDismissed = true;
+      _welcomeUnread = false;
+      notifyListeners();
+      try {
+        await Future.wait([
+          preferences.setBool('inbox.welcome_dismissed_v1', true),
+          preferences.setBool(_welcomeReadKey, true),
+        ]);
+      } catch (_) {}
+    } else {
+      await progressNotifications.dismissNotice(id);
+    }
+    notifyListeners();
+  }
+
+  Future<void> clearAll() async {
+    // Sequential writes keep read-state reloads from restoring dismissed entries.
+    await dismiss('inbox-daily');
+    await dismiss('inbox-league');
+    await dismiss('inbox-welcome');
+    await progressNotifications.clearNotices();
   }
 
   Future<void> markWelcomeRead() async {
@@ -172,12 +283,12 @@ class _DailyTaskClock extends ChangeNotifier {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Büyük arka planlar ve masa görselleri arasında dolaşırken Flutter'ın resim
-  // önbelleğinin oturum boyunca büyümesini sınırla. Sık kullanılan oyun
-  // görselleri için 6 MB alan bırakırken RAM kullanımını sabit tutar.
+  // Keep the settings frame, background and rack cached together. The former
+  // 6 MB limit evicted these textures between routes and forced fresh decoding.
+  // Bound decoded image memory to 32 MB instead of Flutter's larger default.
   PaintingBinding.instance.imageCache
-    ..maximumSize = 12
-    ..maximumSizeBytes = 6 * 1024 * 1024;
+    ..maximumSize = 64
+    ..maximumSizeBytes = 32 * 1024 * 1024;
   await Future.wait([
     playerProgress.load(),
     storeCosmetics.load(),
@@ -185,8 +296,10 @@ Future<void> main() async {
     appLanguage.load(),
     dailyLogin.load(),
     _inboxNotifications.load(),
+    savedGame.load(),
   ]);
   await progressNotifications.load();
+  await dailyChallenge.load();
   await dailyLeague.load();
   await dailyLeague.setNotificationsEnabled(appSettings.value.notifications);
   appSettings.value = appSettings.value.copyWith(language: appLanguage.value);
@@ -205,23 +318,6 @@ Future<void> main() async {
 }
 
 // ─── Renk Paleti ───────────────────────────────────────────────────────────────
-class OkeyColors {
-  static const Color tableMid = Color(0xFF1A3A2A);
-  static const Color tableDark = Color(0xFF0F2219);
-  static const Color tableLight = Color(0xFF245235);
-  static const Color gold = Color(0xFFD4A017);
-  static const Color goldLight = Color(0xFFF0CC5A);
-  static const Color goldDark = Color(0xFF9A7010);
-  static const Color cream = Color(0xFFF5EDD6);
-  static const Color creamDark = Color(0xFFD9C9A0);
-  static const Color buttonBrown = Color(0xFF5C3A1E);
-  static const Color buttonBorder = Color(0xFF8B5E2A);
-  static const Color redTile = Color(0xFFCC2222);
-  static const Color blueTile = Color(0xFF1A3A8A);
-  static const Color blackTile = Color(0xFF1A1A1A);
-  static const Color yellowTile = Color(0xFFCC8800);
-}
-
 // ─── Ana Uygulama ─────────────────────────────────────────────────────────────
 class OkeyApp extends StatelessWidget {
   final Widget? home;
@@ -236,6 +332,15 @@ class OkeyApp extends StatelessWidget {
       theme: ThemeData(
         fontFamily: 'Georgia',
         scaffoldBackgroundColor: OkeyColors.tableDark,
+        snackBarTheme: SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          width: 300,
+          backgroundColor: const Color(0xFF123C2E),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: OkeyColors.gold, width: 1.5),
+          ),
+        ),
       ),
       builder: (context, child) {
         return ValueListenableBuilder<AppSettings>(
@@ -254,9 +359,8 @@ class OkeyApp extends StatelessWidget {
             return ValueListenableBuilder<bool>(
               valueListenable: performanceOverlayEnabled,
               child: content,
-              builder: (_, enabled, overlayChild) => enabled
-                  ? AppPerformanceOverlay(child: overlayChild!)
-                  : overlayChild!,
+              builder: (_, enabled, overlayChild) =>
+                  AppPerformanceOverlay(enabled: enabled, child: overlayChild!),
             );
           },
         );
@@ -330,9 +434,8 @@ class _SplashScreenState extends State<SplashScreen>
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(
-          pageBuilder: (_, _, _) => const ActiveRouteScene(
-            child: MainMenuScreen(showTutorialPrompt: true),
-          ),
+          pageBuilder: (_, _, _) =>
+              const ActiveRouteScene(child: MainMenuScreen()),
           transitionDuration: const Duration(milliseconds: 200),
           transitionsBuilder: (_, anim, _, child) =>
               FadeTransition(opacity: anim, child: child),
@@ -735,7 +838,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   int _walletAnimationTo = 0;
   int _walletRewardGain = 0;
   bool _navigating = false;
-  bool? _settingsPanelOpen;
+  final ValueNotifier<bool> _panelOpen = ValueNotifier(false);
   bool _visualsPrewarmed = false;
   bool _tutorialPromptScheduled = false;
 
@@ -761,6 +864,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     unawaited(_inboxNotifications.load());
     progressNotifications.addListener(_onProgressNotice);
     unawaited(progressNotifications.load());
+    unawaited(dailyChallenge.load());
+    unawaited(savedGame.load());
     prewarmGameAudio();
   }
 
@@ -772,23 +877,19 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 350));
         if (!mounted || _navigating) return;
-        final showTutorial = await showGeneralDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          barrierLabel: 'Öğretici sorusu',
-          barrierColor: Colors.black.withValues(alpha: 0.68),
-          transitionDuration: const Duration(milliseconds: 240),
-          pageBuilder: (_, _, _) => const TutorialPromptDialog(),
-          transitionBuilder: (_, animation, _, child) => FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.94, end: 1).animate(
-                CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
-              ),
-              child: child,
-            ),
-          ),
-        );
+        _panelOpen.value = true;
+        final showTutorial =
+            await showGeneralDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              barrierLabel: 'Öğretici sorusu',
+              barrierColor: Colors.black.withValues(alpha: 0.68),
+              transitionDuration: const Duration(milliseconds: 200),
+              pageBuilder: (_, _, _) => const TutorialPromptDialog(),
+              transitionBuilder: appSettingsTransition,
+            ).whenComplete(() {
+              if (mounted) _panelOpen.value = false;
+            });
         if (showTutorial == true && mounted) {
           await _launchTutorialGame();
           if (mounted) {
@@ -802,7 +903,9 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     _visualsPrewarmed = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future<void>.delayed(const Duration(milliseconds: 800), () {
-        if (mounted && !_navigating) prewarmGameVisuals(context);
+        if (mounted && !_navigating && !_panelOpen.value) {
+          prewarmGameVisuals(context);
+        }
       });
     });
   }
@@ -813,19 +916,11 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       if (!mounted) return;
       completed =
           await Navigator.of(context).push<bool>(
-            PageRouteBuilder<bool>(
-              pageBuilder: (_, _, _) => const ActiveRouteScene(
-                child: GameScreen(launchConfig: GameLaunchConfig.tutorial()),
-              ),
-              transitionDuration: const Duration(milliseconds: 120),
-              reverseTransitionDuration: const Duration(milliseconds: 100),
-              transitionsBuilder: (_, animation, _, child) => SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0.035, 0),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
-              ),
+            AppSceneRoute<bool>(
+              builder: (_) =>
+                  const GameScreen(launchConfig: GameLaunchConfig.tutorial()),
+              curve: Curves.linear,
+              reverseDuration: const Duration(milliseconds: 100),
             ),
           ) ==
           true;
@@ -838,19 +933,11 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     if (!mounted) return;
     final completed =
         await Navigator.of(context).push<bool>(
-          PageRouteBuilder<bool>(
-            pageBuilder: (_, _, _) => const ActiveRouteScene(
-              child: GameScreen(launchConfig: GameLaunchConfig.tutorial()),
-            ),
-            transitionDuration: const Duration(milliseconds: 120),
-            reverseTransitionDuration: const Duration(milliseconds: 100),
-            transitionsBuilder: (_, animation, _, child) => SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.035, 0),
-                end: Offset.zero,
-              ).animate(animation),
-              child: child,
-            ),
+          AppSceneRoute<bool>(
+            builder: (_) =>
+                const GameScreen(launchConfig: GameLaunchConfig.tutorial()),
+            curve: Curves.linear,
+            reverseDuration: const Duration(milliseconds: 100),
           ),
         ) ==
         true;
@@ -861,6 +948,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   @override
   void dispose() {
     progressNotifications.removeListener(_onProgressNotice);
+    _panelOpen.dispose();
     _enterCtrl.dispose();
     _walletRewardCtrl.dispose();
     super.dispose();
@@ -895,6 +983,21 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     }
   }
 
+  Future<void> _resumeGame() async {
+    final state = savedGame.snapshot;
+    final config = savedGame.config;
+    if (state == null || config == null) return;
+    await _withPausedScene(() async {
+      await Future.wait<void>([
+        prewarmGameAudio(),
+        prewarmGameVisuals(context),
+      ]);
+      if (!mounted) return;
+      await openGameScreen<void>(context, config: config, savedState: state);
+      opponentNameSession.reset();
+    });
+  }
+
   void _onProgressNotice() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
@@ -907,6 +1010,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       for (final notice in notices) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
+            dismissDirection: DismissDirection.horizontal,
             behavior: SnackBarBehavior.floating,
             backgroundColor: const Color(0xFF174C36),
             duration: const Duration(seconds: 4),
@@ -930,78 +1034,27 @@ class _MainMenuScreenState extends State<MainMenuScreen>
 
   Future<void> _navigateToRoomSelect() async {
     await _withPausedScene(
-      () => Navigator.of(context).push(
-        PageRouteBuilder<void>(
-          pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: oda.RoomSelectScreen()),
-          transitionDuration: const Duration(milliseconds: 120),
-          transitionsBuilder: (_, animation, _, child) {
-            final curved = CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            );
-            return SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.035, 0),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            );
-          },
-        ),
-      ),
+      () => Navigator.of(
+        context,
+      ).push(AppSceneRoute<void>(builder: (_) => const oda.RoomSelectScreen())),
     );
     opponentNameSession.reset();
   }
 
   Future<void> _navigateToGameModeSelect() async {
     await _withPausedScene(
-      () => Navigator.of(context).push(
-        PageRouteBuilder<void>(
-          pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: GameModeSelectScreen()),
-          transitionDuration: const Duration(milliseconds: 120),
-          transitionsBuilder: (_, animation, _, child) {
-            final curved = CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            );
-            return SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.035, 0),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            );
-          },
-        ),
-      ),
+      () => Navigator.of(
+        context,
+      ).push(AppSceneRoute<void>(builder: (_) => const GameModeSelectScreen())),
     );
     opponentNameSession.reset();
   }
 
   Future<void> _navigateToTournament() async {
     await _withPausedScene(
-      () => Navigator.of(context).push(
-        PageRouteBuilder<void>(
-          pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: LeagueScreen()),
-          transitionDuration: const Duration(milliseconds: 120),
-          transitionsBuilder: (_, animation, _, child) {
-            final curved = CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            );
-            return SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.035, 0),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            );
-          },
-        ),
-      ),
+      () =>
+          Navigator.of(context)
+              .push(AppSceneRoute<void>(builder: (_) => const LeagueScreen())),
     );
     opponentNameSession.reset();
   }
@@ -1013,7 +1066,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       await Navigator.of(context).push(
         PageRouteBuilder<void>(
           pageBuilder: (_, _, _) =>
-              const ActiveRouteScene(child: _StoreScreen()),
+              const ActiveRouteScene(child: StoreScreen()),
           transitionDuration: const Duration(milliseconds: 120),
           transitionsBuilder: (_, animation, _, child) => FadeTransition(
             opacity: CurvedAnimation(
@@ -1036,36 +1089,36 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     ValueChanged<String>? onEntryTap,
     bool requestProfileName = false,
   }) async {
+    if (!mounted || _panelOpen.value) return;
+    _panelOpen.value = true;
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: '$title penceresini kapat',
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      transitionDuration: const Duration(milliseconds: 250),
+      transitionDuration: const Duration(milliseconds: 200),
       pageBuilder: (dialogContext, _, _) => AnimatedBuilder(
-        animation: progressNotifications,
-        builder: (_, _) => _FeatureDialog(
-          icon: icon,
-          title: title,
-          description: description,
-          onEntryTap: onEntryTap,
-          requestProfileName: requestProfileName,
-          onMissionReward: _animateMissionReward,
+        animation: Listenable.merge([
+          progressNotifications,
+          _inboxNotifications,
+          dailyLogin,
+        ]),
+        builder: (_, _) => SafeArea(
+          maintainBottomViewPadding: title == 'PROFİLİM',
+          child: _FeatureDialog(
+            icon: icon,
+            title: title,
+            description: description,
+            onEntryTap: onEntryTap,
+            requestProfileName: requestProfileName,
+            onMissionReward: _animateMissionReward,
+          ),
         ),
       ),
-      transitionBuilder: (_, animation, _, child) {
-        final scale = animation.drive(
-          Tween<double>(
-            begin: 0.94,
-            end: 1,
-          ).chain(CurveTween(curve: Curves.easeOutCubic)),
-        );
-        return FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(scale: scale, child: child),
-        );
-      },
-    );
+      transitionBuilder: appSettingsTransition,
+    ).whenComplete(() {
+      if (mounted) _panelOpen.value = false;
+    });
   }
 
   Future<void> _openDailyReward() async {
@@ -1073,8 +1126,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     await _openFeaturePopup(
       icon: Icons.card_giftcard_rounded,
       title: 'GÜNLÜK GİRİŞ ÖDÜLÜ',
-      description:
-          'Her gün giriş yaparak jeton ve özel ödüller kazanabilirsin.',
+      description: '',
     );
     _onProgressNotice();
     if (!mounted) return;
@@ -1148,12 +1200,14 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   );
 
   Future<void> _openInbox() async {
+    await dailyChallenge.load();
+    dailyChallenge.refresh();
+    if (!mounted) return;
     String? selectedEntry;
     await _openFeaturePopup(
       icon: Icons.mail_rounded,
       title: 'GELEN KUTUSU',
-      description:
-          'Sistem mesajların ve ödül bildirimlerin burada gösterilecek.',
+      description: '',
       onEntryTap: (entry) {
         selectedEntry = entry;
         progressNotifications.markRead(entry);
@@ -1161,6 +1215,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
           unawaited(_inboxNotifications.markTournamentRead());
         } else if (entry.startsWith('Hoş geldin')) {
           unawaited(_inboxNotifications.markWelcomeRead());
+        } else if (entry.startsWith('Günlük')) {
+          unawaited(_inboxNotifications.markDailyRewardRead());
         }
         Navigator.of(context).pop();
       },
@@ -1187,6 +1243,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          dismissDirection: DismissDirection.horizontal,
           duration: const Duration(seconds: 2),
           behavior: SnackBarBehavior.floating,
           backgroundColor: const Color(0xFF123C2E),
@@ -1206,8 +1263,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
   }
 
   Future<void> _openSettings() async {
-    if (_settingsPanelOpen == true || !mounted) return;
-    setState(() => _settingsPanelOpen = true);
+    if (_panelOpen.value || !mounted) return;
+    _panelOpen.value = true;
     final updatedSettings =
         await showGeneralDialog<AppSettings>(
           context: context,
@@ -1226,7 +1283,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
           ),
           transitionBuilder: appSettingsTransition,
         ).whenComplete(() {
-          if (mounted) setState(() => _settingsPanelOpen = false);
+          if (mounted) _panelOpen.value = false;
         });
 
     if (updatedSettings != null && mounted) {
@@ -1243,28 +1300,38 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     }
   }
 
-  Future<void> _openHelp() => showGeneralDialog<void>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: 'Yardımı kapat',
-    barrierColor: Colors.black.withValues(alpha: 0.78),
-    transitionDuration: const Duration(milliseconds: 240),
-    pageBuilder: (_, _, _) => const GameHelpDialog(),
-    transitionBuilder: (_, animation, _, child) => FadeTransition(
-      opacity: animation,
-      child: ScaleTransition(
-        scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
-        child: child,
-      ),
-    ),
-  );
+  Future<void> _openHelp() async {
+    if (!mounted || _panelOpen.value) return;
+    _panelOpen.value = true;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Yardımı kapat',
+      barrierColor: Colors.black.withValues(alpha: 0.78),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (_, _, _) => const GameHelpDialog(),
+      transitionBuilder: appSettingsTransition,
+    ).whenComplete(() {
+      if (mounted) _panelOpen.value = false;
+    });
+  }
 
   Widget _portraitHome() => SingleChildScrollView(
     key: const ValueKey('responsive-home-scroll'),
     padding: const EdgeInsets.all(16),
     child: Column(
       children: [
-        _ProfileChip(onTap: _openProfile),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ProfileChip(onTap: _openProfile),
+            const SizedBox(height: 14),
+            _DailyRewardButton(
+              onTap: _openDailyReward,
+              showNotifications: _settings.notifications,
+            ),
+          ],
+        ),
         const SizedBox(height: 12),
         Wrap(
           spacing: 12,
@@ -1273,6 +1340,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
           children: [
             _IconBtn(
               key: const ValueKey('main-wallet-button'),
+              destinationKey: _walletRewardTargetKey,
               icon: Icons.account_balance_wallet_rounded,
               onTap: _showWalletComingSoon,
             ),
@@ -1292,7 +1360,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                 badgeCount: _settings.notifications
                     ? _inboxNotifications.unreadCount +
                           progressNotifications.unread.length +
-                          (dailyLogin.canClaimToday ? 1 : 0)
+                          (_inboxNotifications.dailyRewardUnread ? 1 : 0)
                     : 0,
                 onTap: _openInbox,
               ),
@@ -1325,13 +1393,8 @@ class _MainMenuScreenState extends State<MainMenuScreen>
           ),
         ),
         const SizedBox(height: 18),
-        _HemenOynaButton(onTap: () => _navigateToGame()),
+        _HomePlayActions(onNew: () => _navigateToGame(), onResume: _resumeGame),
         HomeLeagueSummary(onTap: _navigateToTournament),
-        const SizedBox(height: 16),
-        _DailyRewardButton(
-          onTap: _openDailyReward,
-          showNotifications: _settings.notifications,
-        ),
       ],
     ),
   );
@@ -1361,18 +1424,17 @@ class _MainMenuScreenState extends State<MainMenuScreen>
         ),
         child: Scaffold(
           backgroundColor: OkeyColors.tableDark,
-          body: TickerMode(
-            enabled: !_navigating && _settingsPanelOpen != true,
+          // The separate name editor handles the keyboard. Keep the scene
+          // behind it at its normal size instead of fitting it above the IME.
+          resizeToAvoidBottomInset: false,
+          body: SettingsSceneActivity(
+            panelOpen: _panelOpen,
+            enabled: !_navigating,
             child: Stack(
               children: [
                 Positioned.fill(
                   child: RepaintBoundary(
-                    child: Image.asset(
-                      'images/anamenu/menubg.png',
-                      fit: BoxFit.cover,
-                      cacheWidth: 1440,
-                      filterQuality: FilterQuality.medium,
-                    ),
+                    child: StoreBackground(cacheWidth: 1440),
                   ),
                 ),
                 Positioned.fill(
@@ -1391,6 +1453,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                 ),
                 const Positioned.fill(child: _HomeTableFrame()),
                 SafeArea(
+                  maintainBottomViewPadding: true,
                   child: FadeTransition(
                     opacity: _fadeIn,
                     child: LayoutBuilder(
@@ -1401,6 +1464,10 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                           500.0,
                           900.0,
                         );
+                        final headerCenterY =
+                            72 +
+                            (MediaQuery.textScalerOf(context).scale(64) - 64) /
+                                2;
                         return aspectRatio < 1.2
                             ? _portraitHome()
                             : SizedBox.expand(
@@ -1420,14 +1487,14 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                           ),
                                         ),
                                         Positioned(
-                                          top: 16,
+                                          top: 18,
                                           left: 20,
                                           child: _ProfileChip(
                                             onTap: _openProfile,
                                           ),
                                         ),
                                         Positioned(
-                                          top: 18,
+                                          top: headerCenterY - 28,
                                           right: 20,
                                           child: AnimatedBuilder(
                                             animation: _walletRewardCtrl,
@@ -1445,6 +1512,9 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                                       .round();
                                               return _TopRightBar(
                                                 coinBalance: animatedBalance,
+                                                animateBalance:
+                                                    _walletRewardCtrl
+                                                        .isAnimating,
                                                 notificationsEnabled:
                                                     _settings.notifications,
                                                 onSettings: _openSettings,
@@ -1458,7 +1528,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                         ),
                                         if (_walletRewardGain > 0)
                                           Positioned(
-                                            top: 69,
+                                            top: headerCenterY + 31,
                                             right: 304,
                                             child: AnimatedBuilder(
                                               animation: _walletRewardCtrl,
@@ -1522,8 +1592,12 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                             ),
                                           ),
                                         Positioned(
-                                          left: 20,
-                                          top: 116,
+                                          left: 24,
+                                          top:
+                                              142 +
+                                              (MediaQuery.textScalerOf(context)
+                                                      .scale(64) -
+                                                  64),
                                           child: _DailyRewardButton(
                                             onTap: _openDailyReward,
                                             showNotifications:
@@ -1532,7 +1606,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                         ),
                                         Positioned(
                                           left: 145,
-                                          top: designHeight / 2 - 132,
+                                          top: designHeight / 2 - 120,
                                           child: const _HomeLogoArtwork(),
                                         ),
                                         Positioned(
@@ -1560,8 +1634,9 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                                                     ),
                                               ),
                                               const SizedBox(height: 22),
-                                              _HemenOynaButton(
-                                                onTap: () => _navigateToGame(),
+                                              _HomePlayActions(
+                                                onNew: () => _navigateToGame(),
+                                                onResume: _resumeGame,
                                               ),
                                               HomeLeagueSummary(
                                                 onTap: _navigateToTournament,
@@ -1676,10 +1751,9 @@ class _DailyRewardButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: dailyLogin,
-    builder: (context, _) => GestureDetector(
+    builder: (context, _) => AppPressable(
       key: const ValueKey('daily-reward-button'),
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
       child: SizedBox(
         width: 90,
         height: 90,
@@ -1687,30 +1761,12 @@ class _DailyRewardButton extends StatelessWidget {
           alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: [
-            Container(
-              width: 78,
-              height: 78,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF17351F).withValues(alpha: 0.9),
-                border: Border.all(color: OkeyColors.goldLight, width: 1.8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    blurRadius: 7,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: Image.asset(
-                'images/ui/icons/gunluk_odul_opt.png',
-                width: 48,
-                height: 58,
-                cacheWidth: 96,
-                cacheHeight: 96,
-                filterQuality: FilterQuality.medium,
-              ),
+            Image.asset(
+              'images/ui/home/daily_reward.png',
+              width: 90,
+              height: 90,
+              cacheWidth: 256,
+              filterQuality: FilterQuality.medium,
             ),
             if (showNotifications && dailyLogin.canClaimToday)
               Positioned(
@@ -1718,11 +1774,32 @@ class _DailyRewardButton extends StatelessWidget {
                 right: 3,
                 child: Container(
                   key: const ValueKey('daily-reward-badge'),
-                  width: 19,
-                  height: 19,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFF2A2A),
-                    shape: BoxShape.circle,
+                  constraints: const BoxConstraints(
+                    minWidth: 23,
+                    minHeight: 23,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE62424),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white, width: 1.2),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black54, blurRadius: 4),
+                    ],
+                  ),
+                  child: const Text(
+                    '1',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontFamily: 'Baloo 2',
+                      fontSize: 12,
+                      height: 1,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
               ),
@@ -1733,606 +1810,6 @@ class _DailyRewardButton extends StatelessWidget {
   );
 }
 
-class _StoreItem {
-  final String id;
-  final String name;
-  final String subtitle;
-  final String asset;
-  final Color? color;
-  final int price;
-
-  const _StoreItem({
-    required this.id,
-    required this.name,
-    required this.subtitle,
-    this.asset = '',
-    this.color,
-    required this.price,
-  });
-}
-
-const _storeRacks = [
-  _StoreItem(
-    id: 'rack0',
-    name: 'KLASİK AHŞAP',
-    subtitle: 'Sıcak ceviz dokusu',
-    asset: 'images/store/racks/rack0.png',
-    price: 0,
-  ),
-  _StoreItem(
-    id: 'rack1',
-    name: 'KOYU CEVİZ',
-    subtitle: 'Koyu ve sade görünüm',
-    asset: 'images/store/racks/rack1.png',
-    price: 2500,
-  ),
-  _StoreItem(
-    id: 'rack2',
-    name: 'BAL RENGİ',
-    subtitle: 'Parlak ahşap yüzey',
-    asset: 'images/store/racks/rack2.png',
-    price: 3500,
-  ),
-  _StoreItem(
-    id: 'rack3',
-    name: 'GECE',
-    subtitle: 'Derin siyah kaplama',
-    asset: 'images/store/racks/rack3.png',
-    price: 5000,
-  ),
-  _StoreItem(
-    id: 'rack4',
-    name: 'USTA SERİSİ',
-    subtitle: 'Özel masa koleksiyonu',
-    asset: 'images/store/racks/rack4.png',
-    price: 7500,
-  ),
-];
-
-const _storeTiles = [
-  _StoreItem(
-    id: 'tile0',
-    name: 'KLASİK TAŞ',
-    subtitle: 'Geleneksel 101 görünümü',
-    asset: 'images/store/tiles/tile0.png',
-    price: 0,
-  ),
-  _StoreItem(
-    id: 'tile1',
-    name: 'YUMUŞAK KÖŞE',
-    subtitle: 'Pastel ve yuvarlak hatlar',
-    asset: 'images/store/tiles/tile1.png',
-    price: 2000,
-  ),
-  _StoreItem(
-    id: 'tile2',
-    name: 'MODERN',
-    subtitle: 'Net sayı ve güçlü renk',
-    asset: 'images/store/tiles/tile2.png',
-    price: 3000,
-  ),
-  _StoreItem(
-    id: 'tile3',
-    name: 'GECE TAŞI',
-    subtitle: 'Koyu masa için özel set',
-    asset: 'images/store/tiles/tile3.png',
-    price: 4500,
-  ),
-  _StoreItem(
-    id: 'tile4',
-    name: 'ALTIN SERİ',
-    subtitle: 'Premium turnuva seti',
-    asset: 'images/store/tiles/tile4.png',
-    price: 6500,
-  ),
-];
-
-const _storeBackgrounds = [
-  _StoreItem(
-    id: 'bg_menu',
-    name: 'ANA MENÜ',
-    subtitle: 'Ana sayfanın özel masa deseni',
-    asset: 'images/anamenu/menubg.png',
-    price: 4500,
-  ),
-  _StoreItem(
-    id: 'bg24',
-    name: 'GECE MAVİSİ',
-    subtitle: 'Sakin ve koyu masa',
-    asset: 'images/store/backgrounds/bg24.jpg',
-    price: 0,
-  ),
-  _StoreItem(
-    id: 'bg25',
-    name: 'MOR SALON',
-    subtitle: 'Yumuşak mor desen',
-    asset: 'images/store/backgrounds/bg25.jpg',
-    price: 1800,
-  ),
-  _StoreItem(
-    id: 'bg26',
-    name: 'BORDO KLASİK',
-    subtitle: 'Klasik oyun salonu',
-    asset: 'images/store/backgrounds/bg26.jpg',
-    price: 2400,
-  ),
-  _StoreItem(
-    id: 'bg27',
-    name: 'TURKUAZ',
-    subtitle: 'Canlı keçe dokusu',
-    asset: 'images/store/backgrounds/bg27.jpg',
-    price: 3200,
-  ),
-  _StoreItem(
-    id: 'bg28',
-    name: 'BUZ MAVİSİ',
-    subtitle: 'Modern geometrik desen',
-    asset: 'images/store/backgrounds/bg28.jpg',
-    price: 4000,
-  ),
-  _StoreItem(
-    id: 'bg29',
-    name: 'KIZIL GECE',
-    subtitle: 'Koyu kırmızı salon',
-    asset: 'images/store/backgrounds/bg29.jpg',
-    price: 5200,
-  ),
-  _StoreItem(
-    id: 'bg30',
-    name: 'ALTIN SARAY',
-    subtitle: 'Premium işlemeli yüzey',
-    asset: 'images/store/backgrounds/bg30.jpg',
-    price: 7000,
-  ),
-  _StoreItem(
-    id: 'solid_green',
-    name: 'DÜZ YEŞİL',
-    subtitle: 'Sade koyu yeşil masa',
-    color: Color(0xFF075733),
-    price: 1200,
-  ),
-  _StoreItem(
-    id: 'solid_blue',
-    name: 'DÜZ LACİVERT',
-    subtitle: 'Sade lacivert masa',
-    color: Color(0xFF123D5A),
-    price: 1200,
-  ),
-  _StoreItem(
-    id: 'solid_burgundy',
-    name: 'DÜZ BORDO',
-    subtitle: 'Sade bordo masa',
-    color: Color(0xFF54252B),
-    price: 1200,
-  ),
-  _StoreItem(
-    id: 'solid_black',
-    name: 'DÜZ SİYAH',
-    subtitle: 'Sade antrasit masa',
-    color: Color(0xFF151917),
-    price: 1200,
-  ),
-];
-
-class _StoreScreen extends StatefulWidget {
-  const _StoreScreen();
-
-  @override
-  State<_StoreScreen> createState() => _StoreScreenState();
-}
-
-class _StoreScreenState extends State<_StoreScreen> {
-  int _selectedTab = 0;
-
-  List<_StoreItem> _itemsForTab(int index) => switch (index) {
-    0 => _storeRacks,
-    1 => _storeTiles,
-    _ => _storeBackgrounds,
-  };
-
-  void _evictPreviews(Iterable<_StoreItem> items) {
-    for (final item in items) {
-      if (item.asset.isEmpty) continue;
-      PaintingBinding.instance.imageCache.evict(
-        ResizeImage(AssetImage(item.asset), width: 220),
-      );
-    }
-  }
-
-  void _changeTab(int index) {
-    if (index == _selectedTab) return;
-    _evictPreviews(_itemsForTab(_selectedTab));
-    setState(() => _selectedTab = index);
-  }
-
-  @override
-  void dispose() {
-    // Mağaza kartları yalnız bu sahnede kullanılır. Oyun sahnesine geçerken
-    // küçük önizleme bitmaplerini önbellekte tutmayarak RAM ve GPU texture
-    // belleğini seçilen gerçek oyun görsellerine bırak.
-    _evictPreviews([..._storeRacks, ..._storeTiles, ..._storeBackgrounds]);
-    unawaited(requestMemoryTrim());
-    super.dispose();
-  }
-
-  void _selectOrBuy(_StoreItem item, CosmeticKind kind) {
-    if (!storeCosmetics.owns(kind, item.id) &&
-        !playerProgress.trySpendCoins(item.price)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bu ürün için yeterli altının yok.')),
-      );
-      return;
-    }
-    storeCosmetics.unlockAndSelect(kind, item.id);
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) => DefaultTabController(
-    length: 3,
-    child: Scaffold(
-      key: const ValueKey('store-screen'),
-      backgroundColor: OkeyColors.tableDark,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Image.asset(
-              'images/anamenu/menubg.png',
-              fit: BoxFit.cover,
-              cacheWidth: 960,
-              filterQuality: FilterQuality.low,
-            ),
-          ),
-          Positioned.fill(
-            child: ColoredBox(color: Colors.black.withValues(alpha: 0.30)),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      AppBackButton(onTap: () => Navigator.of(context).pop()),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'MAĞAZA',
-                        style: TextStyle(
-                          color: OkeyColors.goldLight,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w900,
-                          fontFamily: 'Georgia',
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                      const Spacer(),
-                      AnimatedBuilder(
-                        animation: playerProgress,
-                        builder: (context, _) => Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.55),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: OkeyColors.gold),
-                          ),
-                          child: Row(
-                            children: [
-                              Image.asset(
-                                'images/ui/coin.png',
-                                width: 19,
-                                height: 19,
-                                cacheWidth: 38,
-                                cacheHeight: 38,
-                                filterQuality: FilterQuality.low,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                formatGameNumber(playerProgress.coins),
-                                style: const TextStyle(
-                                  color: OkeyColors.cream,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: 540,
-                    height: 42,
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.42),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: OkeyColors.gold.withValues(alpha: 0.65),
-                      ),
-                    ),
-                    child: TabBar(
-                      onTap: _changeTab,
-                      indicatorSize: TabBarIndicatorSize.tab,
-                      dividerColor: Colors.transparent,
-                      indicator: BoxDecoration(
-                        color: OkeyColors.goldDark,
-                        borderRadius: BorderRadius.all(Radius.circular(10)),
-                      ),
-                      labelColor: Colors.white,
-                      unselectedLabelColor: Colors.white60,
-                      labelStyle: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                      ),
-                      tabs: const [
-                        Tab(
-                          key: ValueKey('store-racks-tab'),
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [Text('ISTAKALAR')],
-                            ),
-                          ),
-                        ),
-                        Tab(
-                          key: ValueKey('store-tiles-tab'),
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [Text('TAŞLAR')],
-                            ),
-                          ),
-                        ),
-                        Tab(
-                          key: ValueKey('store-backgrounds-tab'),
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [Text('ARKA PLAN')],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: switch (_selectedTab) {
-                      0 => _StoreItemList(
-                        key: const ValueKey('store-racks-list'),
-                        items: _storeRacks,
-                        ownedIds: storeCosmetics.owned(CosmeticKind.rack),
-                        selectedId: storeCosmetics.selected(CosmeticKind.rack),
-                        onPressed: (item) =>
-                            _selectOrBuy(item, CosmeticKind.rack),
-                      ),
-                      1 => _StoreItemList(
-                        key: const ValueKey('store-tiles-list'),
-                        items: _storeTiles,
-                        ownedIds: storeCosmetics.owned(CosmeticKind.tile),
-                        selectedId: storeCosmetics.selected(CosmeticKind.tile),
-                        onPressed: (item) =>
-                            _selectOrBuy(item, CosmeticKind.tile),
-                      ),
-                      _ => _StoreItemList(
-                        key: const ValueKey('store-backgrounds-list'),
-                        items: _storeBackgrounds,
-                        ownedIds: storeCosmetics.owned(CosmeticKind.background),
-                        selectedId: storeCosmetics.selected(
-                          CosmeticKind.background,
-                        ),
-                        onPressed: (item) =>
-                            _selectOrBuy(item, CosmeticKind.background),
-                      ),
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _StoreItemList extends StatelessWidget {
-  final List<_StoreItem> items;
-  final Set<String> ownedIds;
-  final String selectedId;
-  final ValueChanged<_StoreItem> onPressed;
-
-  const _StoreItemList({
-    super.key,
-    required this.items,
-    required this.ownedIds,
-    required this.selectedId,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, box) {
-      final cardWidth = box.maxWidth >= 1100
-          ? (box.maxWidth - 48) / 5
-          : box.maxWidth >= 760
-          ? (box.maxWidth - 30) / 3.4
-          : (box.maxWidth - 16) / 2.25;
-      return ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-        scrollDirection: Axis.horizontal,
-        physics: const ClampingScrollPhysics(),
-        itemCount: items.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 12),
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return SizedBox(
-            width: cardWidth.clamp(175.0, 250.0),
-            child: _StoreItemCard(
-              item: item,
-              owned: ownedIds.contains(item.id),
-              selected: selectedId == item.id,
-              onPressed: () => onPressed(item),
-            ),
-          );
-        },
-      );
-    },
-  );
-}
-
-class _StoreItemCard extends StatelessWidget {
-  final _StoreItem item;
-  final bool owned;
-  final bool selected;
-  final VoidCallback onPressed;
-
-  const _StoreItemCard({
-    required this.item,
-    required this.owned,
-    required this.selected,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) => RepaintBoundary(
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
-      decoration: BoxDecoration(
-        color: const Color(0xEE102C22),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: selected ? OkeyColors.goldLight : const Color(0xFF466652),
-          width: selected ? 2 : 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          Expanded(
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: item.color != null
-                        ? DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: item.color,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          )
-                        : Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Image.asset(
-                              item.asset,
-                              fit: BoxFit.contain,
-                              cacheWidth: 220,
-                              filterQuality: FilterQuality.low,
-                            ),
-                          ),
-                  ),
-                ),
-                if (selected)
-                  const Positioned(
-                    top: 6,
-                    right: 6,
-                    child: _SelectedStoreBadge(),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            item.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          Text(
-            item.subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white60, fontSize: 10),
-          ),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            height: 32,
-            child: FilledButton(
-              key: ValueKey('store-action-${item.id}'),
-              onPressed: selected ? null : onPressed,
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                backgroundColor: owned
-                    ? const Color(0xFF3F7C43)
-                    : OkeyColors.buttonBrown,
-                disabledBackgroundColor: OkeyColors.goldDark,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(9),
-                  side: const BorderSide(color: OkeyColors.gold),
-                ),
-              ),
-              child: owned
-                  ? Text(selected ? 'SEÇİLİ' : 'KULLAN')
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Image.asset(
-                          'images/ui/coin.png',
-                          width: 15,
-                          height: 15,
-                          cacheWidth: 30,
-                          cacheHeight: 30,
-                        ),
-                        const SizedBox(width: 5),
-                        Text(formatGameNumber(item.price)),
-                      ],
-                    ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _SelectedStoreBadge extends StatelessWidget {
-  const _SelectedStoreBadge();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-    decoration: BoxDecoration(
-      color: OkeyColors.goldDark,
-      borderRadius: BorderRadius.circular(9),
-      border: Border.all(color: OkeyColors.goldLight),
-    ),
-    child: const Text(
-      'AKTİF',
-      style: TextStyle(
-        color: Colors.white,
-        fontSize: 9,
-        fontWeight: FontWeight.w900,
-      ),
-    ),
-  );
-}
-
-// ─── Sol Üst Profil Chip ──────────────────────────────────────────────────────
 class _ProfileChip extends StatelessWidget {
   final VoidCallback onTap;
   const _ProfileChip({required this.onTap});
@@ -2341,162 +1818,140 @@ class _ProfileChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: Listenable.merge([playerProgress, appLanguage]),
-      builder: (context, _) => GestureDetector(
-        key: const ValueKey('main-xp-chip'),
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          width: 286,
-          height: 96 + (MediaQuery.textScalerOf(context).scale(64) - 64),
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              Positioned(
-                left: 48,
-                top: 5,
-                right: 0,
-                bottom: 5,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(48, 5, 14, 5),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.black.withValues(alpha: 0.84),
-                        const Color(0xFF043A20).withValues(alpha: 0.82),
-                      ],
-                    ),
-                    borderRadius: const BorderRadius.horizontal(
-                      right: Radius.circular(34),
-                    ),
-                    border: Border.all(
-                      color: OkeyColors.gold.withValues(alpha: 0.24),
+      builder: (context, _) => LayoutBuilder(
+        builder: (context, constraints) {
+          final panelWidth = min(326.0, constraints.maxWidth);
+          final panelHeight =
+              108.0 + (MediaQuery.textScalerOf(context).scale(64) - 64);
+          return AppPressable(
+            key: const ValueKey('main-xp-chip'),
+            onTap: onTap,
+            child: SizedBox(
+              width: panelWidth,
+              height: panelHeight,
+              child: Stack(
+                alignment: Alignment.centerLeft,
+                children: [
+                  Positioned(
+                    left: panelWidth * .07,
+                    top: panelHeight * .17,
+                    width: panelWidth * .215,
+                    height: panelHeight * .66,
+                    child: ClipOval(
+                      child: Image.asset(
+                        playerProgress.playerAvatarAsset,
+                        fit: BoxFit.cover,
+                        cacheWidth: 144,
+                        cacheHeight: 144,
+                        filterQuality: FilterQuality.medium,
+                      ),
                     ),
                   ),
-                  child: MediaQuery.withClampedTextScaling(
-                    maxScaleFactor: 1.25,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 168,
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              playerProgress.playerName,
-                              maxLines: 1,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 23,
-                                height: 1,
-                                fontWeight: FontWeight.w900,
+                  Positioned.fill(
+                    child: Image.asset(
+                      'images/ui/home/profile_panel.png',
+                      fit: BoxFit.fill,
+                      filterQuality: FilterQuality.medium,
+                    ),
+                  ),
+                  Positioned(
+                    left: panelWidth * .35,
+                    top: panelHeight * .22,
+                    right: panelWidth * .115,
+                    bottom: panelHeight * .23,
+                    child: Container(
+                      key: const ValueKey('home-profile-content'),
+                      child: MediaQuery.withClampedTextScaling(
+                        maxScaleFactor: 1.25,
+                        child: LayoutBuilder(
+                          builder: (context, area) => ClipRect(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: SizedBox(
+                                width: area.maxWidth,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          playerProgress.playerName,
+                                          maxLines: 1,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 20,
+                                            height: 1,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Image.asset(
+                                          'images/ui/home/level_icon.png',
+                                          width: 15,
+                                          height: 15,
+                                          cacheWidth: 32,
+                                          cacheHeight: 32,
+                                          filterQuality: FilterQuality.low,
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Expanded(
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            alignment: Alignment.centerLeft,
+                                            child: Text(
+                                              '${playerProgress.levelBand.localizedTitle(appLanguage.value)} · ${appText('Seviye', 'Level', german: 'Stufe')} ${playerProgress.level}',
+                                              maxLines: 1,
+                                              style: const TextStyle(
+                                                color: OkeyColors.goldLight,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 5),
+                                    ClipRRect(
+                                      key: _xpRewardTargetKey,
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: LinearProgressIndicator(
+                                        key: const ValueKey('home-xp-progress'),
+                                        value: playerProgress.isMaxLevel
+                                            ? 1
+                                            : playerProgress.levelProgress
+                                                  .clamp(0.0, 1.0),
+                                        minHeight: 7,
+                                        color: OkeyColors.goldLight,
+                                        backgroundColor: const Color(
+                                          0xFF28352B,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Image.asset(
-                              'images/ui/home/level_icon.png',
-                              width: 17,
-                              height: 17,
-                              cacheWidth: 32,
-                              cacheHeight: 32,
-                              filterQuality: FilterQuality.low,
-                            ),
-                            const SizedBox(width: 5),
-                            Expanded(
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  '${playerProgress.levelBand.localizedTitle(appLanguage.value)} · ${appText('Seviye', 'Level', german: 'Stufe')} ${playerProgress.level}',
-                                  maxLines: 1,
-                                  style: const TextStyle(
-                                    color: OkeyColors.goldLight,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(6),
-                                child: LinearProgressIndicator(
-                                  value: playerProgress.isMaxLevel
-                                      ? 1
-                                      : playerProgress.levelProgress,
-                                  minHeight: 9,
-                                  color: OkeyColors.goldLight,
-                                  backgroundColor: const Color(0xFF28352B),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 7),
-                            Text(
-                              playerProgress.isMaxLevel
-                                  ? 'MAKS.'
-                                  : '${playerProgress.levelXp} / ${playerProgress.xpForNextLevel} XP',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
-              SizedBox(
-                width: 96,
-                height: 96,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Image.asset(
-                      'images/ui/home/avatar_frame.png',
-                      width: 94,
-                      height: 94,
-                      cacheWidth: 144,
-                      cacheHeight: 148,
-                      filterQuality: FilterQuality.low,
-                    ),
-                    Container(
-                      width: 72,
-                      height: 72,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: OkeyColors.goldLight,
-                          width: 2,
-                        ),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Image.asset(
-                        playerProgress.playerAvatarAsset,
-                        fit: BoxFit.cover,
-                        cacheWidth: 96,
-                        cacheHeight: 96,
-                        filterQuality: FilterQuality.low,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -2504,6 +1959,7 @@ class _ProfileChip extends StatelessWidget {
 
 class _TopRightBar extends StatelessWidget {
   final int coinBalance;
+  final bool animateBalance;
   final bool notificationsEnabled;
   final VoidCallback onSettings;
   final VoidCallback onHelp;
@@ -2512,6 +1968,7 @@ class _TopRightBar extends StatelessWidget {
   final VoidCallback onMessages;
   const _TopRightBar({
     required this.coinBalance,
+    this.animateBalance = false,
     required this.notificationsEnabled,
     required this.onSettings,
     required this.onHelp,
@@ -2532,11 +1989,11 @@ class _TopRightBar extends StatelessWidget {
       builder: (context, _) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          GestureDetector(
+          AppPressable(
             key: const ValueKey('main-wallet-button'),
             onTap: onWallet,
-            behavior: HitTestBehavior.opaque,
             child: SizedBox(
+              key: _walletRewardTargetKey,
               width: 190,
               height: 54,
               child: Stack(
@@ -2582,7 +2039,10 @@ class _TopRightBar extends StatelessWidget {
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        formatGameNumber(coinBalance),
+                        formatGameNumber(
+                          animateBalance ? coinBalance : playerProgress.coins,
+                        ),
+                        key: const ValueKey('home-coin-balance'),
                         maxLines: 1,
                         style: const TextStyle(
                           color: Colors.white,
@@ -2631,7 +2091,7 @@ class _TopRightBar extends StatelessWidget {
             badgeCount: notificationsEnabled
                 ? _inboxNotifications.unreadCount +
                       progressNotifications.unread.length +
-                      (dailyLogin.canClaimToday ? 1 : 0)
+                      (_inboxNotifications.dailyRewardUnread ? 1 : 0)
                 : 0,
             onTap: onMessages,
           ),
@@ -2654,12 +2114,14 @@ class _TopRightBar extends StatelessWidget {
 }
 
 class _IconBtn extends StatelessWidget {
+  final Key? destinationKey;
   final IconData icon;
   final IconData? displayIcon;
   final int badgeCount;
   final VoidCallback onTap;
   const _IconBtn({
     super.key,
+    this.destinationKey,
     required this.icon,
     this.displayIcon,
     this.badgeCount = 0,
@@ -2668,31 +2130,42 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final asset = switch (icon) {
+      Icons.shopping_cart_rounded => 'images/ui/home/store.png',
+      Icons.mail_outlined => 'images/ui/home/inbox.png',
+      Icons.help_rounded => 'images/ui/home/help.png',
+      Icons.settings_outlined => 'images/ui/home/settings.png',
+      _ => null,
+    };
+    return AppPressable(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+      pressedScale: .92,
       child: SizedBox(
+        key: destinationKey,
         width: 56,
         height: 56,
         child: Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: const Color(0xFF061D12).withValues(alpha: 0.92),
-                shape: BoxShape.circle,
-                border: Border.all(color: OkeyColors.goldLight, width: 1.4),
+            if (asset != null)
+              Image.asset(asset, width: 54, height: 54, fit: BoxFit.contain)
+            else
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF061D12).withValues(alpha: 0.92),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: OkeyColors.goldLight, width: 1.4),
+                ),
+                child: Icon(
+                  displayIcon ?? icon,
+                  color: OkeyColors.goldLight,
+                  size: 29,
+                ),
               ),
-              child: Icon(
-                displayIcon ?? icon,
-                color: OkeyColors.goldLight,
-                size: 29,
-              ),
-            ),
-            if (displayIcon != null)
+            if (displayIcon != null || asset != null)
               Opacity(opacity: 0.001, child: Icon(icon, size: 28)),
             if (badgeCount > 0)
               Positioned(
@@ -2733,159 +2206,7 @@ class _IconBtn extends StatelessWidget {
   }
 }
 
-class _ProfileNameEditor extends StatefulWidget {
-  final bool requestName;
-
-  const _ProfileNameEditor({this.requestName = false});
-
-  @override
-  State<_ProfileNameEditor> createState() => _ProfileNameEditorState();
-}
-
-class _ProfileNameEditorState extends State<_ProfileNameEditor> {
-  late final TextEditingController _controller;
-  String? _errorText;
-  bool _saved = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(
-      text:
-          widget.requestName &&
-              playerProgress.playerName == defaultPlayerProfileName
-          ? ''
-          : playerProgress.playerName,
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final saved = playerProgress.updatePlayerName(_controller.text);
-    setState(() {
-      _errorText = saved ? null : 'İsim 1-18 karakter arasında olmalı.';
-      _saved = saved;
-    });
-    if (saved) {
-      _controller.text = playerProgress.playerName;
-      _controller.selection = TextSelection.collapsed(
-        offset: _controller.text.length,
-      );
-      FocusScope.of(context).unfocus();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    key: const ValueKey('profile-name-editor'),
-    builder: (context, bounds) {
-      final field = TextField(
-        key: const ValueKey('profile-name-field'),
-        controller: _controller,
-        autofocus: widget.requestName,
-        maxLength: 18,
-        textInputAction: TextInputAction.done,
-        scrollPadding: const EdgeInsets.only(bottom: 120),
-        onChanged: (value) => setState(() {
-          _saved = false;
-          _errorText = value.characters.length >= 18
-              ? '18 karakter sınırına ulaştın.'
-              : null;
-        }),
-        onSubmitted: (_) => _save(),
-        style: const TextStyle(
-          color: OkeyColors.cream,
-          fontSize: 22,
-          fontWeight: FontWeight.w900,
-        ),
-        decoration: InputDecoration(
-          hintText: widget.requestName ? 'İsmini yaz' : 'Oyuncu adı',
-          hintStyle: const TextStyle(color: Colors.white54, fontSize: 16),
-          errorText: _errorText,
-          errorMaxLines: 2,
-          counterText: '',
-          isDense: true,
-          filled: true,
-          fillColor: const Color(0xFF07382C),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 14,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFF478775), width: 1.5),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: OkeyColors.goldLight, width: 2),
-          ),
-          errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFFDB836D)),
-          ),
-          focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: OkeyColors.goldLight, width: 2),
-          ),
-        ),
-      );
-      final save = SizedBox(
-        height: 49,
-        child: FilledButton.icon(
-          key: const ValueKey('profile-name-save'),
-          onPressed: _save,
-          style: FilledButton.styleFrom(
-            backgroundColor: _saved
-                ? const Color(0xFF2E9E51)
-                : OkeyColors.goldLight,
-            foregroundColor: _saved ? Colors.white : OkeyColors.buttonBrown,
-            elevation: 5,
-            shadowColor: Colors.black87,
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            side: BorderSide(
-              color: _saved ? const Color(0xFF82DEA0) : const Color(0xFFFFEBA2),
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-          icon: _saved
-              ? const Icon(Icons.check_rounded, size: 18)
-              : const SizedBox.shrink(),
-          label: Text(
-            appText('KAYDET', 'SAVE', german: 'SPEICHERN'),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-          ),
-        ),
-      );
-      if (bounds.maxWidth < 270) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            field,
-            const SizedBox(height: 6),
-            Align(alignment: Alignment.centerRight, child: save),
-          ],
-        );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(child: field),
-          const SizedBox(width: 14),
-          save,
-        ],
-      );
-    },
-  );
-}
-
-class _ProfileSplitPanel extends StatelessWidget {
+class _ProfileSplitPanel extends StatefulWidget {
   final List<_FeatureEntry> careerEntries;
   final bool requestName;
 
@@ -2894,19 +2215,61 @@ class _ProfileSplitPanel extends StatelessWidget {
     this.requestName = false,
   });
 
-  Future<void> _showAvatarPicker(BuildContext context) => showDialog<void>(
-    context: context,
-    builder: (_) => const AvatarPickerDialog(),
-  );
+  @override
+  State<_ProfileSplitPanel> createState() => _ProfileSplitPanelState();
+}
+
+class _ProfileSplitPanelState extends State<_ProfileSplitPanel> {
+  late String _draftName = playerProgress.playerName;
+  bool _editingName = false;
+  late int _selectedAvatar = playerProgress.playerAvatarIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.requestName) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _editName(requestName: true);
+      });
+    }
+  }
+
+  Future<void> _editName({bool requestName = false}) async {
+    if (_editingName) return;
+    _editingName = true;
+    final selected = await showDialog<String>(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (_) => ProfileNameDialog(
+        initialName: requestName && _draftName == defaultPlayerProfileName
+            ? ''
+            : _draftName,
+      ),
+    );
+    _editingName = false;
+    if (mounted && selected != null) setState(() => _draftName = selected);
+  }
+
+  void _saveProfile() {
+    if (!playerProgress.updatePlayerName(_draftName)) return;
+    playerProgress.updatePlayerAvatar(_selectedAvatar);
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _showAvatarPicker(BuildContext context) async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (_) => AvatarPickerDialog(selectedIndex: _selectedAvatar),
+    );
+    if (mounted && selected != null) setState(() => _selectedAvatar = selected);
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: playerProgress,
     builder: (context, _) => LayoutBuilder(
       builder: (context, bounds) {
-        const columns = 3;
-        final compact = bounds.maxHeight < 260;
-        final avatarSize = compact ? 96.0 : 106.0;
+        final avatarSize = (bounds.maxHeight * .43).clamp(90.0, 158.0);
         final stats = [
           (
             'games',
@@ -2921,10 +2284,14 @@ class _ProfileSplitPanel extends StatelessWidget {
             Icons.emoji_events_rounded,
           ),
           (
-            'rate',
-            appText('Kazanma Oranı', 'Win Rate'),
-            '%${(playerProgress.winRate * 100).round()}',
-            Icons.percent_rounded,
+            'opening',
+            appText(
+              'En Yüksek Açılış',
+              'Highest Opening',
+              german: 'Höchste Eröffnung',
+            ),
+            formatGameNumber(playerProgress.highestOpening),
+            Icons.local_fire_department_rounded,
           ),
           (
             'xp',
@@ -2945,111 +2312,144 @@ class _ProfileSplitPanel extends StatelessWidget {
             Icons.done_all_rounded,
           ),
         ];
-        return Column(
-          children: [
-            Row(
-              key: const ValueKey('profile-overview-card'),
-              children: [
-                SizedBox(
-                  width: avatarSize + 4,
-                  height: avatarSize + 4,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Container(
-                        width: avatarSize,
-                        height: avatarSize,
-                        padding: const EdgeInsets.all(3),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFFFFE492), Color(0xFFC18B26)],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black54,
-                              blurRadius: 7,
-                              offset: Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: ClipOval(
-                          child: Image.asset(
-                            playerProgress.playerAvatarAsset,
-                            fit: BoxFit.cover,
-                            cacheWidth: 220,
-                            cacheHeight: 220,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: GestureDetector(
-                          key: const ValueKey('profile-avatar-edit'),
-                          onTap: () {
-                            FocusScope.of(context).unfocus();
-                            _showAvatarPicker(context);
-                          },
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0xFF074435),
-                              border: Border.all(
-                                color: OkeyColors.goldLight,
-                                width: 2,
-                              ),
-                              boxShadow: const [
-                                BoxShadow(color: Colors.black54, blurRadius: 4),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.edit_rounded,
-                              size: 21,
-                              color: OkeyColors.cream,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+        final avatar = SizedBox(
+          width: avatarSize,
+          height: avatarSize,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: OkeyColors.goldLight, width: 3),
+                ),
+                child: ClipOval(
+                  child: Image.asset(
+                    playerAvatarAssets[_selectedAvatar],
+                    key: const ValueKey('profile-draft-avatar'),
+                    width: avatarSize,
+                    height: avatarSize,
+                    fit: BoxFit.cover,
+                    cacheWidth: 320,
                   ),
                 ),
-                const SizedBox(width: 18),
-                Expanded(child: _ProfileNameEditor(requestName: requestName)),
-              ],
-            ),
-            const SizedBox(height: 10),
-            const Divider(height: 1, color: Color(0xFF397765)),
-            const SizedBox(height: 12),
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: IconButton.filled(
+                  key: const ValueKey('profile-avatar-edit'),
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF074435),
+                    foregroundColor: OkeyColors.cream,
+                    side: const BorderSide(
+                      color: OkeyColors.goldLight,
+                      width: 2,
+                    ),
+                  ),
+                  onPressed: () {
+                    FocusScope.of(context).unfocus();
+                    _showAvatarPicker(context);
+                  },
+                  icon: const Icon(Icons.edit_rounded),
+                ),
+              ),
+            ],
+          ),
+        );
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             Expanded(
-              child: LayoutBuilder(
+              flex: 3,
+              child: Column(
+                key: const ValueKey('profile-overview-card'),
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  avatar,
+                  const SizedBox(height: 12),
+                  InkWell(
+                    key: const ValueKey('profile-name-edit'),
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: _editName,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                _draftName,
+                                style: const TextStyle(
+                                  color: OkeyColors.cream,
+                                  fontFamily: 'Baloo 2',
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.1,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Icon(
+                            Icons.edit_rounded,
+                            size: 22,
+                            color: OkeyColors.goldLight,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AppArtworkButton(
+                    key: const ValueKey('profile-name-save'),
+                    width: double.infinity,
+                    height: 49,
+                    fontSize: 18,
+                    label: appText('KAYDET', 'SAVE', german: 'SPEICHERN'),
+                    onPressed: _saveProfile,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            const VerticalDivider(
+              width: 2,
+              thickness: 2,
+              color: Color(0xFF397765),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              flex: 7,
+              child: Column(
                 key: const ValueKey('profile-career-panel'),
-                builder: (context, grid) {
-                  final cardWidth =
-                      (grid.maxWidth - (columns - 1) * 10) / columns;
-                  final cardHeight = (grid.maxHeight - 10) / 2;
-                  return Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (final entry in stats)
-                        SizedBox(
-                          width: cardWidth,
-                          height: cardHeight,
-                          child: _ProfileStatCard(
-                            id: entry.$1,
-                            label: entry.$2,
-                            value: entry.$3,
-                            icon: entry.$4,
+                children: [
+                  for (final (index, entry) in stats.indexed)
+                    Expanded(
+                      child: Container(
+                        key: ValueKey('profile-stat-separator-$index'),
+                        decoration: BoxDecoration(
+                          color: index.isEven
+                              ? Colors.white.withValues(alpha: .045)
+                              : Colors.transparent,
+                          border: const Border(
+                            top: BorderSide(color: Color(0xFF397765), width: 2),
                           ),
                         ),
-                    ],
-                  );
-                },
+                        child: _ProfileStatCard(
+                          id: entry.$1,
+                          label: entry.$2,
+                          value: entry.$3,
+                          icon: entry.$4,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
@@ -3070,167 +2470,73 @@ class _ProfileStatCard extends StatelessWidget {
   });
 
   Widget _statVisual() {
-    if (id == 'results') {
-      return Image.asset('images/ui/icons/turnuva.png', fit: BoxFit.contain);
-    }
-    if (id == 'xp') {
-      return const Stack(
-        alignment: Alignment.center,
-        children: [
-          Icon(
-            Icons.star_rounded,
-            size: 54,
-            color: OkeyColors.goldLight,
-            shadows: [
-              Shadow(
-                color: Colors.black54,
-                blurRadius: 3,
-                offset: Offset(0, 3),
-              ),
-            ],
-          ),
-          Text(
-            'XP',
-            style: TextStyle(
-              color: OkeyColors.buttonBrown,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
+    final index = switch (id) {
+      'games' => 0,
+      'results' => 1,
+      'opening' => 2,
+      'xp' => 3,
+      'opened' => 4,
+      _ => 5,
+    };
+    return Center(
+      child: SizedBox.square(
+        dimension: 50,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(9),
+          child: OverflowBox(
+            alignment: Alignment((index % 3) - 1.0, index < 3 ? -1 : 1),
+            minWidth: 150,
+            maxWidth: 150,
+            minHeight: 100,
+            maxHeight: 100,
+            child: Image.asset(
+              'images/ui/icons/profile_stats.png',
+              fit: BoxFit.fill,
             ),
           ),
-        ],
-      );
-    }
-    if (id == 'games' || id == 'opened' || id == 'finished') {
-      final numbers = id == 'games'
-          ? ['1', '0', '1']
-          : id == 'opened'
-          ? ['3', '7', '11']
-          : ['13', '13', '13'];
-      return FittedBox(
-        child: SizedBox(
-          width: 58,
-          height: 46,
-          child: Stack(
-            children: [
-              for (var i = 0; i < 3; i++)
-                Positioned(
-                  left: i * 16.0,
-                  top: i == 1 ? 2 : 8,
-                  child: Transform.rotate(
-                    angle: (i - 1) * 0.12,
-                    child: Container(
-                      width: 25,
-                      height: 35,
-                      alignment: Alignment.topCenter,
-                      padding: const EdgeInsets.only(top: 4),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFFFFF5D9), Color(0xFFD3BE8D)],
-                        ),
-                        border: Border.all(color: const Color(0xFFE8D6A3)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black54,
-                            blurRadius: 2,
-                            offset: Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        numbers[i],
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                          color: [
-                            Colors.black87,
-                            Color(0xFFB32922),
-                            Color(0xFF194A91),
-                          ][i],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
         ),
-      );
-    }
-    return Icon(
-      icon,
-      color: OkeyColors.goldLight,
-      size: 44,
-      shadows: const [
-        Shadow(color: Colors.black54, blurRadius: 3, offset: Offset(0, 3)),
-      ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) => Container(
     key: ValueKey('profile-stat-$id'),
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF104A3A), Color(0xFF063A2C)],
-      ),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: const Color(0xFF3C7B68), width: 1.2),
-      boxShadow: const [
-        BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
-      ],
-    ),
+    padding: const EdgeInsets.fromLTRB(10, 5, 26, 5),
     child: Row(
       children: [
-        SizedBox(
-          width: 48,
-          height: 58,
+        SizedBox(width: 58, height: 52, child: _statVisual()),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 7,
           child: FittedBox(
-            child: SizedBox(width: 54, height: 52, child: _statVisual()),
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: OkeyColors.cream,
+                fontSize: 26,
+                height: 1.1,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 12),
         Expanded(
-          child: LayoutBuilder(
-            builder: (context, bounds) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                        color: OkeyColors.cream,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        height: 1.15,
-                      ),
-                    ),
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: bounds.maxHeight),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      value,
-                      style: const TextStyle(
-                        color: OkeyColors.cream,
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
-                        height: 1.05,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+          flex: 3,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: OkeyColors.goldLight,
+                fontSize: 46,
+                height: 1,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
         ),
@@ -3244,162 +2550,85 @@ class _ProfileDialog extends StatelessWidget {
   const _ProfileDialog({this.requestName = false});
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-    child: AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      padding: EdgeInsets.fromLTRB(
-        12,
-        12,
-        12,
-        12 + MediaQuery.viewInsetsOf(context).bottom,
-      ),
-      child: LayoutBuilder(
-        builder: (context, bounds) {
-          final panelSize = appSettingsPanelSize(bounds);
-          return Center(
-            child: SizedBox(
-              key: const ValueKey('feature-dialog-PROFİLİM'),
-              width: panelSize.width,
-              height: panelSize.height,
-              child: FittedBox(
-                child: SizedBox(
-                  width: 900,
-                  height: 900 * 941 / 1671,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: Container(
-                      width: 900,
-                      height: 900 * 941 / 1671,
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(24),
-                        gradient: const LinearGradient(
-                          colors: [
-                            Color(0xFFFFEBA2),
-                            Color(0xFFC39132),
-                            Color(0xFFE7BD59),
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black87,
-                            blurRadius: 28,
-                            offset: Offset(0, 12),
-                          ),
-                        ],
-                      ),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(19),
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFF0B5140), Color(0xFF032B20)],
-                          ),
-                          border: Border.all(color: const Color(0xFF41856D)),
-                        ),
-                        child: Column(
-                          children: [
-                            SizedBox(
-                              height: 56,
-                              child: Stack(
-                                children: [
-                                  Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 70,
-                                      ),
-                                      child: FittedBox(
-                                        fit: BoxFit.scaleDown,
-                                        child: Text(
-                                          appText('PROFİLİM', 'MY PROFILE'),
-                                          style: const TextStyle(
-                                            color: Color(0xFFFFEFBD),
-                                            fontSize: 38,
-                                            fontWeight: FontWeight.w900,
-                                            shadows: [
-                                              Shadow(
-                                                color: Colors.black87,
-                                                blurRadius: 3,
-                                                offset: Offset(0, 3),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
+  Widget build(BuildContext context) => MediaQuery.removeViewInsets(
+    context: context,
+    removeBottom: true,
+    child: SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, bounds) {
+            final panelSize = appSettingsPanelSize(bounds);
+            return Center(
+              child: SizedBox(
+                key: const ValueKey('feature-dialog-PROFİLİM'),
+                width: panelSize.width,
+                height: panelSize.height,
+                child: AppArtworkReady(
+                  image: appPopupArtwork('images/ui/panels/profilim.png'),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: FittedBox(
+                          child: SizedBox(
+                            width: 900,
+                            height: 600,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: AppPopupSurface(
+                                width: 900,
+                                height: 600,
+                                frameWidth: 5,
+                                artworkAsset: 'images/ui/panels/profilim.png',
+
+                                child: Container(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    42,
+                                    38,
+                                    42,
+                                    72,
                                   ),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: AppCloseButton(
-                                      buttonKey: const ValueKey(
-                                        'profile-close-button',
-                                      ),
-                                      onTap: () => Navigator.of(context).pop(),
-                                      size: 54,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Expanded(
-                              child: MediaQuery.viewInsetsOf(context).bottom > 0
-                                  ? SingleChildScrollView(
-                                      child: SizedBox(
-                                        height: 420,
+                                  child: Column(
+                                    children: [
+                                      const SizedBox(height: 92),
+                                      Expanded(
                                         child: _ProfileSplitPanel(
                                           careerEntries: const [],
                                           requestName: requestName,
                                         ),
                                       ),
-                                    )
-                                  : _ProfileSplitPanel(
-                                      careerEntries: const [],
-                                      requestName: requestName,
-                                    ),
-                            ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: 220,
-                              height: 40,
-                              child: FilledButton(
-                                onPressed: () => Navigator.of(context).pop(),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: OkeyColors.goldLight,
-                                  foregroundColor: OkeyColors.buttonBrown,
-                                  elevation: 5,
-                                  shadowColor: Colors.black87,
-                                  side: const BorderSide(
-                                    color: Color(0xFFFFEBA2),
-                                    width: 1.5,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text(
-                                  'TAMAM',
-                                  style: TextStyle(
-                                    fontSize: 26,
-                                    fontWeight: FontWeight.w900,
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
+                      Positioned.fill(
+                        child: AppArtworkTitle(
+                          asset: 'images/ui/panels/profilim.png',
+                          child: Text(
+                            appText('PROFİLİM', 'MY PROFILE'),
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: AppArtworkClose(
+                          asset: 'images/ui/panels/profilim.png',
+                          buttonKey: const ValueKey('profile-close-button'),
+                          onTap: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     ),
   );
@@ -3427,12 +2656,42 @@ class _FeatureDialog extends StatelessWidget {
     'CÜZDAN' => appText('CÜZDAN', 'WALLET'),
     'GELEN KUTUSU' => appText('GELEN KUTUSU', 'INBOX'),
     'GÖREVLER' => appText('GÖREVLER', 'MISSIONS'),
-    'GÜNLÜK GİRİŞ ÖDÜLÜ' => appText(
-      '7 GÜNLÜK GİRİŞ ÖDÜLÜ',
-      '7-DAY LOGIN REWARD',
-    ),
+    'GÜNLÜK GİRİŞ ÖDÜLÜ' => appText('GÜNLÜK ÖDÜL', 'DAILY REWARD'),
     _ => title,
   };
+
+  Widget _entryCard(_FeatureEntry entry, {required bool inbox}) {
+    final card = _FeatureEntryCard(
+      entry: entry,
+      compact: inbox,
+      onTap: onEntryTap == null ? null : () => onEntryTap!(entry.title),
+    );
+    if (!inbox) return card;
+    return Dismissible(
+      key: ValueKey('inbox-dismiss-${entry.id}'),
+      direction: DismissDirection.horizontal,
+      onDismissed: (_) => unawaited(_inboxNotifications.dismiss(entry.id!)),
+      background: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 14),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+        ),
+      ),
+      secondaryBackground: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 14),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+        ),
+      ),
+      child: Opacity(
+        key: ValueKey('inbox-opacity-${entry.id}'),
+        opacity: entry.badge == 'YENİ' ? 1 : .5,
+        child: card,
+      ),
+    );
+  }
 
   List<_FeatureEntry> get _entries => switch (title) {
     'GÜNLÜK GİRİŞ ÖDÜLÜ' => const [],
@@ -3477,33 +2736,39 @@ class _FeatureDialog extends StatelessWidget {
       ),
     ],
     'GELEN KUTUSU' => [
-      for (final notice in progressNotifications.unread.reversed)
+      for (final notice in progressNotifications.notices.reversed)
         _FeatureEntry(
           notice.room ? Icons.table_restaurant_rounded : Icons.task_alt_rounded,
           notice.title,
           '',
-          'YENİ',
+          progressNotifications.unread.any((entry) => entry.id == notice.id)
+              ? 'YENİ'
+              : null,
+          id: notice.id,
         ),
-      if (dailyLogin.canClaimToday)
-        const _FeatureEntry(
+      if (dailyLogin.canClaimToday && !_inboxNotifications.dailyRewardDismissed)
+        _FeatureEntry(
           Icons.card_giftcard_rounded,
           'Günlük ödülün hazır',
           '',
-          'YENİ',
+          _inboxNotifications.dailyRewardUnread ? 'YENİ' : null,
+          id: 'inbox-daily',
         ),
-      if (_inboxNotifications.tournamentUnread)
-        const _FeatureEntry(
+      if (!_inboxNotifications.tournamentDismissed)
+        _FeatureEntry(
           Icons.emoji_events_rounded,
           'Lig sıralamanı kontrol et',
           '',
-          'YENİ',
+          _inboxNotifications.tournamentUnread ? 'YENİ' : null,
+          id: 'inbox-league',
         ),
-      if (_inboxNotifications.welcomeUnread)
-        const _FeatureEntry(
+      if (!_inboxNotifications.welcomeDismissed)
+        _FeatureEntry(
           Icons.waving_hand_rounded,
           'Hoş geldin!',
           '',
-          'YENİ',
+          _inboxNotifications.welcomeUnread ? 'YENİ' : null,
+          id: 'inbox-welcome',
         ),
     ],
     'OYUN MODLARI' => const [
@@ -3552,320 +2817,225 @@ class _FeatureDialog extends StatelessWidget {
   };
 
   @override
-  Widget build(BuildContext context) {
-    final screenSize = MediaQuery.sizeOf(context);
-    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    final isDailyReward = title == 'GÜNLÜK GİRİŞ ÖDÜLÜ';
-    final isProfile = title == 'PROFİLİM';
-    if (isProfile) return _ProfileDialog(requestName: requestProfileName);
-    final popupSize = appPopupSize(context);
-    final dialogWidth = isDailyReward
-        ? min(640.0, screenSize.width - 24)
-        : popupSize.width;
-    final dailyRewardHeight = min(360.0, screenSize.height - 16);
-    final standardDialogContent = Column(
-      children: [
-        if (title != 'GÖREVLER') ...[
-          Text(
-            description,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white60,
-              fontSize: 13,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 14),
-        ],
-        if (title == 'GÖREVLER') ...[
-          const _DailyTaskCountdown(),
-          const SizedBox(height: 12),
-        ],
-        if (isDailyReward) ...[
-          const _DailyLoginRewardPanel(),
-          const SizedBox(height: 4),
-        ],
-        if (title == 'GÖREVLER') _MissionPanel(onReward: onMissionReward),
-        if (!isProfile && title != 'GÖREVLER')
-          ..._entries.map(
-            (entry) => _FeatureEntryCard(
-              entry: entry,
-              onTap: onEntryTap == null ? null : () => onEntryTap!(entry.title),
-            ),
-          ),
-        if (title == 'GELEN KUTUSU' && _entries.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 28),
-            child: Text(
-              appText('Yeni bildirimin yok.', 'No new notifications.'),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-      ],
-    );
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.only(bottom: isProfile ? keyboardInset : 0),
-      child: Center(
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, viewport) {
+      if (title == 'PROFİLİM') {
+        return _ProfileDialog(requestName: requestProfileName);
+      }
+      final isDailyReward = title == 'GÜNLÜK GİRİŞ ÖDÜLÜ';
+      final isMissions = title == 'GÖREVLER';
+      final isInbox = title == 'GELEN KUTUSU';
+      final asset = switch (title) {
+        'GÖREVLER' => 'images/ui/panels/gorevler.png',
+        'GELEN KUTUSU' => 'images/ui/panels/gelen-kutusu.png',
+        'GÜNLÜK GİRİŞ ÖDÜLÜ' => 'images/ui/panels/gunluk-odul.png',
+        _ => appGenericPanelAsset,
+      };
+      final size = appArtworkPanelSize(
+        BoxConstraints(
+          maxWidth: max(0, viewport.maxWidth - 24),
+          maxHeight: max(0, viewport.maxHeight - 24),
+        ),
+      );
+      return Center(
         child: Material(
           color: Colors.transparent,
-          child: Container(
+          child: AppPopupSurface(
             key: ValueKey('feature-dialog-$title'),
-            width: dialogWidth,
-            height: isDailyReward
-                ? null
-                : isProfile && keyboardInset > 0
-                ? min(popupSize.height, screenSize.height - keyboardInset - 12)
-                : popupSize.height,
-            constraints: isDailyReward
-                ? BoxConstraints(maxHeight: dailyRewardHeight)
-                : null,
-            margin: isDailyReward
-                ? const EdgeInsets.symmetric(horizontal: 8)
-                : null,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: isProfile
-                    ? const [Color(0xFF123C2E), Color(0xFF071B14)]
-                    : const [Color(0xFF0E3528), Color(0xFF061B14)],
-              ),
-              borderRadius: BorderRadius.circular(isProfile ? 24 : 20),
-              border: Border.all(
-                color: OkeyColors.gold,
-                width: isProfile ? 3 : 2,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha: isProfile ? 0.74 : 0.68,
-                  ),
-                  blurRadius: isProfile ? 34 : 30,
-                  spreadRadius: isProfile ? 4 : 3,
-                  offset: Offset(0, isProfile ? 14 : 0),
-                ),
-                BoxShadow(
-                  color: OkeyColors.gold.withValues(alpha: 0.14),
-                  blurRadius: 20,
-                ),
-              ],
+            width: size.width,
+            height: size.height,
+            artworkAsset: asset,
+            artworkTitle: Text(_displayTitle, maxLines: 1, softWrap: false),
+            closeOnFrame: true,
+            onOutsideClose: () => Navigator.of(context).pop(),
+            padding: EdgeInsets.fromLTRB(
+              size.width * (isInbox || isMissions ? .075 : .035),
+              size.height *
+                  (isDailyReward
+                      ? .27
+                      : isInbox || isMissions
+                      ? .235
+                      : .24),
+              size.width * (isInbox || isMissions ? .075 : .035),
+              size.height *
+                  (isInbox || isMissions
+                      ? .18
+                      : isDailyReward
+                      ? .16
+                      : .12),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                Container(
-                  height: isProfile ? 62 : 72,
-                  padding: EdgeInsets.fromLTRB(isProfile ? 14 : 18, 8, 10, 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.18),
-                    border: Border(
-                      bottom: BorderSide(
-                        color: OkeyColors.gold.withValues(alpha: 0.35),
-                      ),
+            child: isDailyReward
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: isProfile ? 46 : 54,
-                        height: isProfile ? 46 : 54,
-                        decoration: BoxDecoration(
-                          gradient: const RadialGradient(
-                            colors: [Color(0xFF0A593B), Color(0xFF032A1D)],
-                          ),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: OkeyColors.goldLight.withValues(alpha: 0.7),
-                          ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black54,
-                              blurRadius: 6,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          icon,
-                          color: OkeyColors.goldLight,
-                          size: isProfile ? 25 : 29,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _displayTitle,
-                          style: TextStyle(
-                            color: OkeyColors.cream,
-                            fontSize: isProfile ? 19 : 23,
-                            fontWeight: FontWeight.w900,
-                            fontFamily: 'Georgia',
-                            letterSpacing: 1.1,
-                          ),
-                        ),
-                      ),
-                      AppCloseButton(
-                        onTap: () => Navigator.of(context).pop(),
-                        size: isDailyReward ? 42 : 40,
-                      ),
-                    ],
-                  ),
-                ),
-                Divider(
-                  height: 1,
-                  color: OkeyColors.gold.withValues(alpha: 0.25),
-                ),
-                Flexible(
-                  fit: isDailyReward ? FlexFit.loose : FlexFit.tight,
-                  child: isProfile
-                      ? keyboardInset > 0
-                            ? SingleChildScrollView(
-                                padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
-                                child: SizedBox(
-                                  width: max(1.0, dialogWidth - 16),
-                                  child: _ProfileSplitPanel(
-                                    careerEntries: _entries,
-                                    requestName: requestProfileName,
+                    child: _DailyLoginRewardPanel(
+                      compact: viewport.maxHeight < 500,
+                    ),
+                  )
+                : ClipRRect(
+                    key: ValueKey('feature-content-viewport-$title'),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: AppPanelScrollView(
+                            showScrollbar: false,
+                            padding: const EdgeInsets.fromLTRB(18, 6, 18, 12),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (!isMissions && description.isNotEmpty) ...[
+                                  Text(
+                                    description,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white60,
+                                      fontSize: 13,
+                                      height: 1.4,
+                                    ),
                                   ),
-                                ),
-                              )
-                            : LayoutBuilder(
-                                builder: (context, _) => Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    8,
-                                    8,
-                                    8,
-                                    6,
+                                  const SizedBox(height: 14),
+                                ],
+                                if (isMissions)
+                                  _MissionPanel(onReward: onMissionReward)
+                                else
+                                  ..._entries.map(
+                                    (entry) =>
+                                        _entryCard(entry, inbox: isInbox),
                                   ),
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    alignment: Alignment.topCenter,
-                                    child: SizedBox(
-                                      width: max(1.0, dialogWidth - 16),
-                                      child: _ProfileSplitPanel(
-                                        careerEntries: _entries,
-                                        requestName: requestProfileName,
+                                if (title == 'GELEN KUTUSU' && _entries.isEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 28,
+                                    ),
+                                    child: Text(
+                                      appText(
+                                        'Yeni bildirimin yok.',
+                                        'No new notifications.',
+                                      ),
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
                                   ),
-                                ),
-                              )
-                      : isDailyReward
-                      ? Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                          child: LayoutBuilder(
-                            builder: (context, bounds) => FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: SizedBox(
-                                width: bounds.maxWidth,
-                                child: standardDialogContent,
-                              ),
+                              ],
                             ),
                           ),
-                        )
-                      : SingleChildScrollView(
-                          padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-                          child: standardDialogContent,
                         ),
-                ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    isProfile ? 10 : 14,
-                    isProfile ? 8 : 10,
-                    isProfile ? 10 : 14,
-                    isProfile ? 10 : 14,
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: isProfile ? 42 : 48,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: OkeyColors.goldLight,
-                        foregroundColor: OkeyColors.buttonBrown,
-                        elevation: isProfile ? 7 : 0,
-                        shadowColor: Colors.black87,
-                        shape: RoundedRectangleBorder(
-                          side: isProfile
-                              ? BorderSide(
-                                  color: OkeyColors.gold.withValues(
-                                    alpha: 0.95,
+                        if (isInbox)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(18, 5, 18, 2),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Flexible(
+                                  child: AppArtworkButton(
+                                    key: const ValueKey('inbox-mark-all-read'),
+                                    yellow: true,
+                                    width: 196,
+                                    height: 34,
+                                    fontSize: 11,
+                                    label: appText(
+                                      'Tümünü okundu işaretle',
+                                      'Mark all as read',
+                                    ),
+                                    onPressed: () async {
+                                      await Future.wait([
+                                        progressNotifications.markAllRead(),
+                                        _inboxNotifications.markAllRead(),
+                                      ]);
+                                    },
                                   ),
-                                  width: 1.4,
-                                )
-                              : BorderSide.none,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      child: Text(
-                        appText('TAMAM', 'DONE'),
-                        style: TextStyle(
-                          fontSize: isProfile ? 14 : 17,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
+                                ),
+                                const SizedBox(width: 8),
+                                AppArtworkButton(
+                                  key: const ValueKey('inbox-clear-all'),
+                                  yellow: true,
+                                  width: 92,
+                                  height: 34,
+                                  fontSize: 11,
+                                  label: appText('Temizle', 'Clear'),
+                                  onPressed: _inboxNotifications.clearAll,
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-            ),
           ),
         ),
-      ),
-    );
-  }
+      );
+    },
+  );
 }
 
 Future<void> _playRewardCoinFlight(
   BuildContext context,
   AnimationController controller,
-  Offset start,
-) async {
+  Offset start, {
+  bool withXp = false,
+}) async {
   final overlay = Overlay.of(context);
-  final screen = MediaQuery.sizeOf(context);
   final overlayBox = overlay.context.findRenderObject() as RenderBox;
   final origin = overlayBox.globalToLocal(start);
-  final end = overlayBox.globalToLocal(
-    Offset(screen.width < 600 ? screen.width / 2 : screen.width - 205, 42),
-  );
-  final entry = OverlayEntry(
-    builder: (_) => AnimatedBuilder(
-      animation: controller,
-      child: RepaintBoundary(
-        key: const ValueKey('reward-coin-flight'),
-        child: Image.asset(
-          'images/ui/coin.png',
-          width: 34,
-          height: 34,
-          cacheWidth: 68,
-          cacheHeight: 68,
-        ),
-      ),
-      builder: (_, child) {
-        final progress = Curves.easeInOutCubic.transform(controller.value);
-        final position = Offset.lerp(origin, end, progress)!;
-        return Positioned(
-          left: position.dx - 17,
-          top: position.dy - 17 - sin(progress * pi) * 48,
-          child: IgnorePointer(
-            child: Opacity(
-              opacity: (1 - progress * 0.55).clamp(0.0, 1.0),
-              child: Transform.scale(
-                scale: 1 + sin(progress * pi) * 0.28,
-                child: child,
-              ),
+  Offset? destination(GlobalKey key) {
+    final box = key.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize || !box.attached) return null;
+    return overlayBox.globalToLocal(
+      box.localToGlobal(box.size.center(Offset.zero)),
+    );
+  }
+
+  final wallet = destination(_walletRewardTargetKey);
+  final xp = withXp ? destination(_xpRewardTargetKey) : null;
+  if (wallet == null && xp == null) return;
+  Widget flight(Offset end, bool isXp) => AnimatedBuilder(
+    animation: controller,
+    child: RepaintBoundary(
+      key: ValueKey(isXp ? 'reward-xp-flight' : 'reward-coin-flight'),
+      child: isXp
+          ? CustomPaint(
+              size: const Size(34, 34),
+              painter: _XpRewardParticlesPainter(controller),
+            )
+          : Image.asset(
+              'images/ui/coin.png',
+              width: 34,
+              height: 34,
+              cacheWidth: 68,
+              cacheHeight: 68,
+            ),
+    ),
+    builder: (_, child) {
+      final progress = Curves.easeInOutCubic.transform(controller.value);
+      final position = Offset.lerp(origin, end, progress)!;
+      return Positioned(
+        left: position.dx - 17,
+        top: position.dy - 17 - sin(progress * pi) * 48,
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: (1 - progress * 0.55).clamp(0.0, 1.0),
+            child: Transform.scale(
+              scale: 1 + sin(progress * pi) * 0.28,
+              child: child,
             ),
           ),
-        );
-      },
+        ),
+      );
+    },
+  );
+  final entry = OverlayEntry(
+    builder: (_) => Stack(
+      children: [
+        if (wallet != null) flight(wallet, false),
+        if (xp != null) flight(xp, true),
+      ],
     ),
   );
   overlay.insert(entry);
@@ -3877,8 +3047,56 @@ Future<void> _playRewardCoinFlight(
   }
 }
 
+class _XpRewardParticlesPainter extends CustomPainter {
+  final Animation<double> animation;
+  _XpRewardParticlesPainter(this.animation) : super(repaint: animation);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    for (var i = 0; i < 11; i++) {
+      final phase = (animation.value * 1.7 + i * .13) % 1;
+      final angle = i * 2.4 + animation.value * 2;
+      final radius = 3 + phase * 11;
+      final point = center + Offset(cos(angle), sin(angle)) * radius;
+      final color =
+          (i.isEven ? const Color(0xFF63C7FF) : const Color(0xFFE0FAFF))
+              .withValues(alpha: .95 - phase * .55);
+      final extent = 1 + (1 - phase) * 1.6;
+      canvas.drawCircle(
+        point,
+        extent + 1,
+        Paint()
+          ..color = color.withValues(alpha: .4)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+      );
+      canvas.drawCircle(point, extent, Paint()..color = color);
+      if (i % 3 == 0) {
+        final paint = Paint()
+          ..color = color
+          ..strokeWidth = 1;
+        canvas.drawLine(
+          point - Offset(extent + 1.5, 0),
+          point + Offset(extent + 1.5, 0),
+          paint,
+        );
+        canvas.drawLine(
+          point - Offset(0, extent + 1.5),
+          point + Offset(0, extent + 1.5),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_XpRewardParticlesPainter oldDelegate) =>
+      animation != oldDelegate.animation;
+}
+
 class _DailyLoginRewardPanel extends StatefulWidget {
-  const _DailyLoginRewardPanel();
+  final bool compact;
+  const _DailyLoginRewardPanel({this.compact = false});
 
   @override
   State<_DailyLoginRewardPanel> createState() => _DailyLoginRewardPanelState();
@@ -3899,9 +3117,14 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
     return source.localToGlobal(source.size.center(Offset.zero));
   }
 
-  Future<void> _playCoinFlight(Offset start) async {
+  Future<void> _playCoinFlight(Offset start, {required bool withXp}) async {
     try {
-      await _playRewardCoinFlight(context, _coinFlightController, start);
+      await _playRewardCoinFlight(
+        context,
+        _coinFlightController,
+        start,
+        withXp: withXp,
+      );
     } on TickerCanceled {
       // The popup was closed while its reward animation was running.
     }
@@ -3919,12 +3142,14 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
     setState(() => _claiming = true);
     final reward = await dailyLogin.claim();
     if (!mounted) return;
-    setState(() => _claiming = false);
     if (reward != null) {
-      if (flightStart != null) await _playCoinFlight(flightStart);
+      if (flightStart != null) {
+        await _playCoinFlight(flightStart, withXp: reward.xp > 0);
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          dismissDirection: DismissDirection.horizontal,
           content: Text(
             reward.xp == 0
                 ? '+${reward.coins} Altın kazandın'
@@ -3935,6 +3160,7 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
         ),
       );
     }
+    if (mounted) setState(() => _claiming = false);
   }
 
   @override
@@ -3942,226 +3168,82 @@ class _DailyLoginRewardPanelState extends State<_DailyLoginRewardPanel>
     animation: dailyLogin,
     builder: (context, _) {
       final currentDay = dailyLogin.displayDay;
-      return Column(
-        children: [
-          Wrap(
+      return LayoutBuilder(
+        builder: (context, bounds) {
+          final columns = bounds.maxWidth >= 360 ? 7 : 2;
+          final rows = (dailyLoginRewards.length / columns).ceil();
+          const finalRewardScale = 1.5;
+          final cardWidth =
+              (bounds.maxWidth - (columns - 1) * 5) /
+              (columns - 1 + finalRewardScale);
+          final cardHeight = max(136.0, min(cardWidth * 2.3, bounds.maxHeight));
+          final contentHeight = rows * cardHeight + (rows - 1) * 8;
+          final cards = Wrap(
             alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 5,
             runSpacing: 8,
             children: List.generate(dailyLoginRewards.length, (index) {
               final day = index + 1;
               final reward = dailyLoginRewards[index];
               final active = day == currentDay;
-              final completed = !dailyLogin.canClaimToday && day == currentDay;
+              final completed = dailyLogin.isDayClaimed(day);
               return GestureDetector(
                 key: ValueKey('daily-login-day-$day'),
                 onTap: active && dailyLogin.canClaimToday && !_claiming
                     ? _claim
                     : null,
                 behavior: HitTestBehavior.opaque,
-                child: Container(
+                child: DailyLoginRewardCard(
                   key: active ? _activeRewardKey : null,
-                  width: 82,
-                  height: 130,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: active
-                        ? OkeyColors.gold.withValues(alpha: 0.2)
-                        : Colors.black.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: active ? OkeyColors.goldLight : Colors.white12,
-                      width: active ? 2 : 1,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          appText('$day. GÜN', 'DAY $day'),
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: active
-                                ? OkeyColors.goldLight
-                                : Colors.white60,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                      Image.asset(
-                        'images/ui/coin.png',
-                        width: 30,
-                        height: 30,
-                        cacheWidth: 60,
-                        cacheHeight: 60,
-                      ),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          '+${reward.coins}',
-                          maxLines: 1,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          reward.xp == 0 ? 'ALTIN' : '+${reward.xp} XP',
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: reward.xp == 0
-                                ? Colors.white54
-                                : const Color(0xFF8FEAFF),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        key: ValueKey('daily-login-collect-$day'),
-                        height: 24,
-                        width: double.infinity,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: active && dailyLogin.canClaimToday
-                              ? OkeyColors.gold
-                              : Colors.white10,
-                          borderRadius: BorderRadius.circular(7),
-                          border: Border.all(
-                            color: active && dailyLogin.canClaimToday
-                                ? OkeyColors.goldLight
-                                : Colors.white12,
-                          ),
-                        ),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (completed) ...[
-                                const Icon(
-                                  Icons.check_rounded,
-                                  color: Color(0xFF66DB75),
-                                  size: 13,
-                                ),
-                                const SizedBox(width: 2),
-                              ],
-                              Text(
-                                appText('TOPLA', 'CLAIM'),
-                                style: TextStyle(
-                                  color: active && dailyLogin.canClaimToday
-                                      ? OkeyColors.buttonBrown
-                                      : Colors.white38,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  day: day,
+                  reward: reward,
+                  active: active,
+                  completed: completed,
+                  tomorrow: !dailyLogin.canClaimToday && day == currentDay + 1,
+                  width:
+                      cardWidth *
+                      (day == dailyLoginRewards.length ? finalRewardScale : 1),
+                  height: cardHeight,
                 ),
               );
             }),
-          ),
-        ],
+          );
+          return contentHeight > bounds.maxHeight + .1
+              ? SingleChildScrollView(child: cards)
+              : Center(child: cards);
+        },
       );
     },
   );
 }
 
-class _DailyTaskCountdown extends StatefulWidget {
-  const _DailyTaskCountdown();
-
-  @override
-  State<_DailyTaskCountdown> createState() => _DailyTaskCountdownState();
-}
-
-class _DailyTaskCountdownState extends State<_DailyTaskCountdown> {
-  Timer? _displayTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _dailyTaskClock.initialize();
-    _displayTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && TickerMode.valuesOf(context).enabled) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _displayTimer?.cancel();
-    _dailyTaskClock.pause();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _dailyTaskClock,
-    builder: (context, _) => Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: OkeyColors.gold.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.45)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(
-            Icons.timer_outlined,
-            color: OkeyColors.goldLight,
-            size: 19,
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                'YENİLENME  ${_dailyTaskClock.remainingText}',
-                style: const TextStyle(
-                  color: OkeyColors.goldLight,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.7,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
 class _FeatureEntry {
+  final String? id;
   final IconData icon;
   final String title;
   final String subtitle;
   final String? badge;
 
-  const _FeatureEntry(this.icon, this.title, this.subtitle, this.badge);
+  const _FeatureEntry(
+    this.icon,
+    this.title,
+    this.subtitle,
+    this.badge, {
+    this.id,
+  });
 }
 
 class _FeatureEntryCard extends StatelessWidget {
   final _FeatureEntry entry;
   final VoidCallback? onTap;
+  final bool compact;
 
-  const _FeatureEntryCard({required this.entry, this.onTap});
+  const _FeatureEntryCard({
+    required this.entry,
+    this.onTap,
+    this.compact = false,
+  });
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -4169,8 +3251,12 @@ class _FeatureEntryCard extends StatelessWidget {
     behavior: HitTestBehavior.opaque,
     onTap: onTap,
     child: Container(
-      margin: const EdgeInsets.only(bottom: 9),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+      constraints: compact ? const BoxConstraints(minHeight: 40) : null,
+      margin: EdgeInsets.only(bottom: compact ? 7 : 9),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 13,
+        vertical: compact ? 8 : 12,
+      ),
       decoration: BoxDecoration(
         color: Colors.white.withValues(
           alpha: entry.badge == 'YENİ'
@@ -4186,17 +3272,23 @@ class _FeatureEntryCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(entry.icon, color: OkeyColors.goldLight, size: 25),
-          const SizedBox(width: 11),
+          Icon(
+            entry.icon,
+            color: OkeyColors.goldLight,
+            size: compact ? 20 : 25,
+          ),
+          SizedBox(width: compact ? 8 : 11),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   entry.title,
-                  style: const TextStyle(
+                  maxLines: compact ? 2 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null,
+                  style: TextStyle(
                     color: OkeyColors.cream,
-                    fontSize: 15,
+                    fontSize: compact ? 13 : 15,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -4204,9 +3296,11 @@ class _FeatureEntryCard extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     entry.subtitle,
-                    style: const TextStyle(
+                    maxLines: compact ? 2 : null,
+                    overflow: compact ? TextOverflow.ellipsis : null,
+                    style: TextStyle(
                       color: Colors.white54,
-                      fontSize: 11.5,
+                      fontSize: compact ? 10.5 : 11.5,
                       height: 1.3,
                     ),
                   ),
@@ -4214,18 +3308,7 @@ class _FeatureEntryCard extends StatelessWidget {
               ],
             ),
           ),
-          if (entry.badge == 'YENİ') ...[
-            const SizedBox(width: 12),
-            Container(
-              key: ValueKey('inbox-unread-dot-${entry.title}'),
-              width: 7,
-              height: 7,
-              decoration: const BoxDecoration(
-                color: OkeyColors.goldLight,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ] else if (entry.badge != null) ...[
+          if (entry.badge != null && entry.badge != 'YENİ') ...[
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
@@ -4295,18 +3378,19 @@ class _MissionPanelState extends State<_MissionPanel>
       if (start != null) await _playRewardCoinFlight(context, flight, start);
       if (!mounted) return;
       if (widget.onReward != null) {
-        await widget.onReward!(reward.reward);
+        unawaited(widget.onReward!(reward.reward));
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          dismissDirection: DismissDirection.horizontal,
           content: Text('+${reward.reward} Altın kazandın'),
           backgroundColor: OkeyColors.tableMid,
           behavior: SnackBarBehavior.floating,
         ),
       );
       setState(() => _removing.add(mission.id));
-      await Future<void>.delayed(const Duration(milliseconds: 280));
+      await Future<void>.delayed(const Duration(milliseconds: 180));
     } on TickerCanceled {
       // Coins were credited once; finalize the replacement on dismissal.
     } finally {
@@ -4333,53 +3417,58 @@ class _MissionPanelState extends State<_MissionPanel>
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: progressNotifications,
-    builder: (_, _) => Column(
-      children: [
-        for (final mission in progressNotifications.missions)
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 350),
-            reverseDuration: Duration.zero,
-            transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0.12, 0),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
+    builder: (context, _) => Padding(
+      key: const ValueKey('mission-card-inset'),
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          const DailyChallengeCard(),
+          for (final mission in progressNotifications.missions)
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 240),
+              reverseDuration: Duration.zero,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.12, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                ),
               ),
-            ),
-            child: AnimatedOpacity(
-              key: ValueKey('mission-generation-${mission.id}'),
-              opacity: _removing.contains(mission.id) ? 0 : 1,
-              duration: const Duration(milliseconds: 280),
-              child: AnimatedSlide(
-                offset: _removing.contains(mission.id)
-                    ? const Offset(-0.12, 0)
-                    : Offset.zero,
-                duration: const Duration(milliseconds: 280),
-                child: _MissionEntryCard(
-                  entry: _FeatureEntry(
-                    mission.complete
-                        ? Icons.task_alt_rounded
-                        : Icons.casino_rounded,
-                    mission.title,
-                    'Ödül: ${mission.reward} jeton',
-                    '${mission.current}/${mission.target}',
+              child: AnimatedOpacity(
+                key: ValueKey('mission-generation-${mission.id}'),
+                opacity: _removing.contains(mission.id) ? 0 : 1,
+                duration: const Duration(milliseconds: 180),
+                child: AnimatedSlide(
+                  offset: _removing.contains(mission.id)
+                      ? const Offset(-0.12, 0)
+                      : Offset.zero,
+                  duration: const Duration(milliseconds: 180),
+                  child: _MissionEntryCard(
+                    entry: _FeatureEntry(
+                      mission.complete
+                          ? Icons.task_alt_rounded
+                          : Icons.casino_rounded,
+                      mission.title,
+                      'Ödül: ${mission.reward} jeton',
+                      '${mission.current}/${mission.target}',
+                    ),
+                    claimKey: _claimKeys[mission.slot],
+                    claimed: mission.claimed,
+                    onClaim:
+                        mission.complete &&
+                            !mission.claimed &&
+                            !_claiming.contains(mission.id)
+                        ? () => _claim(mission)
+                        : null,
                   ),
-                  claimKey: _claimKeys[mission.slot],
-                  claimed: mission.claimed,
-                  onClaim:
-                      mission.complete &&
-                          !mission.claimed &&
-                          !_claiming.contains(mission.id)
-                      ? () => _claim(mission)
-                      : null,
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     ),
   );
 }
@@ -4404,844 +3493,116 @@ class _MissionEntryCard extends StatelessWidget {
     final target = values.length > 1 ? int.tryParse(values[1]) ?? 1 : 1;
     final progress = (current / max(1, target)).clamp(0.0, 1.0);
     final rewardText = entry.subtitle.replaceFirst('Ödül:', '').trim();
-    return Container(
-      key: ValueKey('mission-progress-${entry.title}'),
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(10, 11, 10, 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B2D22),
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: OkeyColors.gold.withValues(alpha: 0.34)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: OkeyColors.gold.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Icon(entry.icon, color: OkeyColors.goldLight, size: 25),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  entry.title,
-                  style: const TextStyle(
-                    color: OkeyColors.cream,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.card_giftcard_rounded,
-                      color: OkeyColors.goldLight,
-                      size: 15,
+    return LayoutBuilder(
+      builder: (context, bounds) => Container(
+        key: ValueKey('mission-progress-${entry.title}'),
+        constraints: const BoxConstraints(minHeight: 40),
+        margin: const EdgeInsets.only(bottom: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B2D22),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: OkeyColors.gold.withValues(alpha: .34)),
+        ),
+        child: Row(
+          children: [
+            Icon(entry.icon, color: OkeyColors.goldLight, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: OkeyColors.cream,
+                      fontSize: 13,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
                     ),
-                    const SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                        rewardText,
-                        style: const TextStyle(
-                          color: OkeyColors.goldLight,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w800,
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          rewardText,
+                          key: ValueKey('mission-reward-${entry.title}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: OkeyColors.goldLight,
+                            fontSize: 10,
+                            height: 1,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: LinearProgressIndicator(
-                    key: ValueKey('mission-progress-bar-${entry.title}'),
-                    value: progress,
-                    minHeight: 9,
-                    backgroundColor: Colors.black38,
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      OkeyColors.gold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (current >= target) ...[
-            const SizedBox(width: 8),
-            SizedBox(
-              key: claimKey,
-              width: 88,
-              child: FilledButton(
-                key: ValueKey('mission-claim-${entry.title}'),
-                onPressed: onClaim,
-                style: FilledButton.styleFrom(
-                  backgroundColor: claimed
-                      ? const Color(0xFF2E7D32)
-                      : OkeyColors.goldLight,
-                  foregroundColor: claimed
-                      ? Colors.white
-                      : OkeyColors.buttonBrown,
-                  disabledBackgroundColor: claimed
-                      ? const Color(0xFF2E7D32)
-                      : null,
-                  disabledForegroundColor: claimed ? Colors.white : null,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 10,
-                  ),
-                  elevation: 4,
-                  shadowColor: Colors.black87,
-                ),
-                child: Text(
-                  claimed ? 'ALINDI ✓' : 'ÖDÜLÜ AL',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _MenuSettings {
-  final bool soundEffects;
-  final bool notifications;
-  final bool vibration;
-  final bool showOpponentPictures;
-  final bool autoArrangeRack;
-  final double fontScale;
-  final AppLanguage language;
-
-  const _MenuSettings({
-    this.soundEffects = true,
-    this.notifications = true,
-    this.vibration = true,
-    this.showOpponentPictures = true,
-    this.autoArrangeRack = false,
-    this.fontScale = 1,
-    this.language = AppLanguage.turkish,
-  });
-
-  _MenuSettings copyWith({
-    bool? soundEffects,
-    bool? notifications,
-    bool? vibration,
-    bool? showOpponentPictures,
-    bool? autoArrangeRack,
-    double? fontScale,
-    AppLanguage? language,
-  }) {
-    return _MenuSettings(
-      soundEffects: soundEffects ?? this.soundEffects,
-      notifications: notifications ?? this.notifications,
-      vibration: vibration ?? this.vibration,
-      showOpponentPictures: showOpponentPictures ?? this.showOpponentPictures,
-      autoArrangeRack: autoArrangeRack ?? this.autoArrangeRack,
-      fontScale: (fontScale ?? this.fontScale).clamp(0.85, 1.25),
-      language: language ?? this.language,
-    );
-  }
-}
-
-class _SettingsDialog extends StatefulWidget {
-  final _MenuSettings initial;
-  const _SettingsDialog({required this.initial});
-
-  @override
-  State<_SettingsDialog> createState() => _SettingsDialogState();
-}
-
-class _SettingsDialogState extends State<_SettingsDialog> {
-  late _MenuSettings _settings;
-
-  String _st(String tr, String en, {String? de}) =>
-      localizedText(_settings.language, tr, en, german: de);
-
-  @override
-  void initState() {
-    super.initState();
-    _settings = widget.initial;
-  }
-
-  String get _fontScaleLabel {
-    if (_settings.fontScale < 0.95) return _st('Küçük', 'Small');
-    if (_settings.fontScale > 1.05) return _st('Büyük', 'Large');
-    return _st('Normal', 'Normal');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screen = MediaQuery.sizeOf(context);
-    final compact = screen.height < 520;
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: SizedBox(
-          key: const ValueKey('settings-dialog'),
-          width: compact ? screen.width - 8 : min(1140, screen.width - 48),
-          height: compact
-              ? max(300, screen.height - 8)
-              : max(300, min(610, screen.height - 24)),
-          child: Transform.scale(
-            scale: compact ? 0.82 : 0.86,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF123C2E), Color(0xFF071B14)],
-                ),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: OkeyColors.gold, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.72),
-                    blurRadius: 32,
-                    spreadRadius: 4,
-                    offset: const Offset(0, 14),
-                  ),
-                  BoxShadow(
-                    color: OkeyColors.gold.withValues(alpha: 0.18),
-                    blurRadius: 12,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: Column(
-                  children: [
-                    _buildHeader(),
-                    Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.all(compact ? 4 : 8),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) => FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.topCenter,
-                            child: SizedBox(
-                              width: compact
-                                  ? constraints.maxWidth
-                                  : min(800, constraints.maxWidth),
-                              height: compact ? 248 : 472,
-                              child: Column(
-                                children: [
-                                  _settingsGridRow(
-                                    _toggleCard(
-                                      title: _st(
-                                        'Ses Efektleri',
-                                        'Sound Effects',
-                                      ),
-                                      value: _settings.soundEffects,
-                                      icon: Icons.volume_up_rounded,
-                                      onChanged: (value) => setState(() {
-                                        _settings = _settings.copyWith(
-                                          soundEffects: value,
-                                        );
-                                      }),
-                                    ),
-                                    _toggleCard(
-                                      title: _st(
-                                        'BİLDİRİMLER',
-                                        'NOTIFICATIONS',
-                                      ),
-                                      value: _settings.notifications,
-                                      icon: Icons.notifications_active_rounded,
-                                      onChanged: (value) => setState(() {
-                                        _settings = _settings.copyWith(
-                                          notifications: value,
-                                        );
-                                      }),
-                                    ),
-                                    _toggleCard(
-                                      title: _st('TİTREŞİM', 'VIBRATION'),
-                                      value: _settings.vibration,
-                                      icon: Icons.vibration_rounded,
-                                      onChanged: (value) => setState(() {
-                                        _settings = _settings.copyWith(
-                                          vibration: value,
-                                        );
-                                      }),
-                                    ),
-                                  ),
-                                  SizedBox(height: compact ? 4 : 10),
-                                  _settingsGridRow(
-                                    _toggleCard(
-                                      title: _st(
-                                        'RAKİP RESİMLERİ',
-                                        'OPPONENT PICTURES',
-                                      ),
-                                      value: _settings.showOpponentPictures,
-                                      icon: Icons.account_circle_rounded,
-                                      onChanged: (value) => setState(() {
-                                        _settings = _settings.copyWith(
-                                          showOpponentPictures: value,
-                                        );
-                                      }),
-                                    ),
-                                    _toggleCard(
-                                      title: _st(
-                                        'OTOMATİK ISTAKA DİZİMİ',
-                                        'AUTO ARRANGE RACK',
-                                      ),
-                                      value: _settings.autoArrangeRack,
-                                      icon: Icons.auto_fix_high_rounded,
-                                      onChanged: (value) => setState(() {
-                                        _settings = _settings.copyWith(
-                                          autoArrangeRack: value,
-                                        );
-                                      }),
-                                    ),
-                                    _buildLanguageGridCard(),
-                                  ),
-                                  SizedBox(height: compact ? 4 : 10),
-                                  SizedBox(
-                                    height: compact ? 88 : 156,
-                                    child: _buildFontScaleSetting(),
-                                  ),
-                                ],
-                              ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: LinearProgressIndicator(
+                            key: ValueKey(
+                              'mission-progress-bar-${entry.title}',
+                            ),
+                            value: progress,
+                            minHeight: 5,
+                            backgroundColor: Colors.black38,
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              OkeyColors.gold,
                             ),
                           ),
                         ),
                       ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (current >= target) ...[
+              const SizedBox(width: 8),
+              SizedBox(
+                key: claimKey,
+                width: bounds.maxWidth < 300 ? 64 : 80,
+                child: FilledButton(
+                  key: ValueKey('mission-claim-${entry.title}'),
+                  onPressed: onClaim,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: claimed
+                        ? const Color(0xFF2E7D32)
+                        : OkeyColors.goldLight,
+                    foregroundColor: claimed
+                        ? Colors.white
+                        : OkeyColors.buttonBrown,
+                    disabledBackgroundColor: claimed
+                        ? const Color(0xFF2E7D32)
+                        : null,
+                    disabledForegroundColor: claimed ? Colors.white : null,
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 5,
                     ),
-                    _buildFooter(),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  bool get _compactLayout => MediaQuery.sizeOf(context).height < 520;
-
-  Widget _buildHeader() => Container(
-    height: _compactLayout ? 46 : 64,
-    padding: EdgeInsets.fromLTRB(18, _compactLayout ? 3 : 5, 10, 3),
-    decoration: BoxDecoration(
-      color: Colors.black.withValues(alpha: 0.24),
-      border: Border(
-        bottom: BorderSide(color: OkeyColors.gold.withValues(alpha: 0.42)),
-      ),
-    ),
-    child: Row(
-      children: [
-        Image.asset(
-          'images/ui/settings.png',
-          width: _compactLayout ? 38 : 44,
-          height: _compactLayout ? 38 : 44,
-          cacheWidth: 72,
-          cacheHeight: 72,
-          filterQuality: FilterQuality.low,
-        ),
-        SizedBox(width: _compactLayout ? 9 : 12),
-        Expanded(
-          child: MediaQuery.withClampedTextScaling(
-            maxScaleFactor: 1.25,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _st('AYARLAR', 'SETTINGS'),
-                  style: TextStyle(
-                    color: OkeyColors.goldLight,
-                    fontSize: _compactLayout ? 17 : 20,
-                    fontWeight: FontWeight.w900,
-                    fontFamily: 'Georgia',
-                    letterSpacing: 1.6,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        AppCloseButton(onTap: () => Navigator.of(context).pop()),
-      ],
-    ),
-  );
-
-  Widget _settingsGridRow(Widget left, Widget middle, Widget right) => SizedBox(
-    height: _compactLayout ? 76 : 148,
-    child: Row(
-      children: [
-        Expanded(child: left),
-        const SizedBox(width: 8),
-        Expanded(child: middle),
-        const SizedBox(width: 8),
-        Expanded(child: right),
-      ],
-    ),
-  );
-
-  Widget _buildLanguageGridCard() => Container(
-    key: const ValueKey('language-setting'),
-    height: _compactLayout ? 76 : 148,
-    padding: EdgeInsets.fromLTRB(
-      _compactLayout ? 7 : 12,
-      _compactLayout ? 5 : 10,
-      _compactLayout ? 7 : 12,
-      _compactLayout ? 5 : 10,
-    ),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF1E6847), Color(0xFF0E432F)],
-      ),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(
-        color: OkeyColors.gold.withValues(alpha: 0.52),
-        width: 1.4,
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.55),
-          blurRadius: 8,
-          offset: const Offset(0, 5),
-        ),
-        BoxShadow(
-          color: OkeyColors.goldLight.withValues(alpha: 0.12),
-          blurRadius: 3,
-          offset: const Offset(0, -1),
-        ),
-      ],
-    ),
-    child: Column(
-      children: [
-        SizedBox(
-          width: _compactLayout ? 42 : 78,
-          height: _compactLayout ? 42 : 78,
-          child: _settingsIconCircle(icon: Icons.public_rounded, enabled: true),
-        ),
-        const Spacer(),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _st('DİL', 'LANGUAGE'),
-              style: TextStyle(
-                color: OkeyColors.cream,
-                fontSize: _compactLayout ? 12 : 16,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.3,
-              ),
-            ),
-            SizedBox(width: _compactLayout ? 6 : 10),
-            _LanguageChoice(
-              label: 'TR',
-              selected: _settings.language == AppLanguage.turkish,
-              onTap: () => setState(() {
-                _settings = _settings.copyWith(language: AppLanguage.turkish);
-              }),
-            ),
-            const SizedBox(width: 4),
-            _LanguageChoice(
-              label: 'EN',
-              selected: _settings.language == AppLanguage.english,
-              onTap: () => setState(() {
-                _settings = _settings.copyWith(language: AppLanguage.english);
-              }),
-            ),
-            const SizedBox(width: 4),
-            _LanguageChoice(
-              label: 'DE',
-              selected: _settings.language == AppLanguage.german,
-              onTap: () => setState(() {
-                _settings = _settings.copyWith(language: AppLanguage.german);
-              }),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-
-  Widget _toggleCard({
-    required String title,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-    IconData? icon,
-    String? activeAsset,
-    String? inactiveAsset,
-    bool showOffBadge = false,
-  }) {
-    final iconAsset = value ? activeAsset : inactiveAsset;
-    return GestureDetector(
-      onTap: () => onChanged(!value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        height: _compactLayout ? 76 : 148,
-        padding: EdgeInsets.fromLTRB(
-          _compactLayout ? 7 : 12,
-          _compactLayout ? 5 : 10,
-          _compactLayout ? 7 : 12,
-          _compactLayout ? 5 : 10,
-        ),
-        decoration: BoxDecoration(
-          gradient: value
-              ? const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF1E6847), Color(0xFF0E432F)],
-                )
-              : const LinearGradient(
-                  colors: [Color(0xFF12392B), Color(0xFF0A271E)],
-                ),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: value
-                ? OkeyColors.gold.withValues(alpha: 0.52)
-                : Colors.white10,
-            width: value ? 1.4 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.55),
-              blurRadius: 8,
-              offset: const Offset(0, 5),
-            ),
-            if (value)
-              BoxShadow(
-                color: OkeyColors.goldLight.withValues(alpha: 0.12),
-                blurRadius: 3,
-                offset: const Offset(0, -1),
-              ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            Align(
-              alignment: Alignment.topCenter,
-              child: SizedBox(
-                width: _compactLayout ? 42 : 78,
-                height: _compactLayout ? 42 : 78,
-                child: iconAsset != null
-                    ? Image.asset(
-                        iconAsset,
-                        cacheWidth: _compactLayout ? 72 : 120,
-                        cacheHeight: _compactLayout ? 72 : 120,
-                        filterQuality: FilterQuality.low,
-                      )
-                    : _settingsIconCircle(icon: icon, enabled: value),
-              ),
-            ),
-            if (!value && showOffBadge)
-              Positioned(
-                top: 2,
-                right: 0,
-                child: Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: _compactLayout ? 6 : 9,
-                    vertical: _compactLayout ? 2 : 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white24),
+                    elevation: 4,
+                    shadowColor: Colors.black87,
                   ),
                   child: Text(
-                    'OFF',
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: _compactLayout ? 7 : 9,
+                    claimed ? 'ALINDI ✓' : 'ÖDÜLÜ AL',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 10,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 0.8,
                     ),
                   ),
                 ),
               ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: OkeyColors.cream,
-                  fontSize: _compactLayout ? 12 : 16,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ),
+            ],
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _settingsIconCircle({required IconData? icon, required bool enabled}) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: const RadialGradient(
-          colors: [Color(0xFF0A593B), Color(0xFF032A1D)],
-        ),
-        shape: BoxShape.circle,
-        border: Border.all(color: OkeyColors.gold, width: 1.5),
-        boxShadow: const [
-          BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2)),
-        ],
-      ),
-      child: Icon(
-        icon,
-        color: enabled ? OkeyColors.goldLight : Colors.white54,
-        size: _compactLayout ? 25 : 42,
-      ),
-    );
-  }
-
-  Widget _buildFontScaleSetting() => Container(
-    padding: EdgeInsets.fromLTRB(
-      _compactLayout ? 10 : 18,
-      _compactLayout ? 6 : 16,
-      _compactLayout ? 10 : 18,
-      _compactLayout ? 6 : 12,
-    ),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF154833), Color(0xFF092A1F)],
-      ),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(
-        color: OkeyColors.gold.withValues(alpha: 0.42),
-        width: 1.2,
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.55),
-          blurRadius: 8,
-          offset: const Offset(0, 5),
-        ),
-        BoxShadow(
-          color: OkeyColors.goldLight.withValues(alpha: 0.1),
-          blurRadius: 3,
-          offset: const Offset(0, -1),
-        ),
-      ],
-    ),
-    child: Column(
-      children: [
-        Row(
-          children: [
-            Icon(
-              Icons.text_fields_rounded,
-              color: OkeyColors.goldLight,
-              size: _compactLayout ? 18 : 25,
-            ),
-            SizedBox(width: _compactLayout ? 7 : 10),
-            Expanded(
-              child: Text(
-                _st('Yazı Boyutu', 'Text Size'),
-                style: TextStyle(
-                  color: OkeyColors.cream,
-                  fontSize: _compactLayout ? 11 : 15,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.6,
-                ),
-              ),
-            ),
-            Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: _compactLayout ? 7 : 10,
-                vertical: _compactLayout ? 2 : 4,
-              ),
-              decoration: BoxDecoration(
-                color: OkeyColors.gold.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: OkeyColors.gold.withValues(alpha: 0.45),
-                ),
-              ),
-              child: Text(
-                '$_fontScaleLabel • ${(_settings.fontScale * 100).round()}%',
-                style: TextStyle(
-                  color: OkeyColors.goldLight,
-                  fontSize: _compactLayout ? 8 : 10,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ],
-        ),
-        Row(
-          children: [
-            const Text(
-              'A',
-              style: TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-            Expanded(
-              child: SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  activeTrackColor: OkeyColors.gold,
-                  inactiveTrackColor: Colors.white12,
-                  thumbColor: OkeyColors.goldLight,
-                  overlayColor: OkeyColors.gold.withValues(alpha: 0.12),
-                  trackHeight: 4,
-                ),
-                child: Slider(
-                  value: _settings.fontScale,
-                  min: 0.85,
-                  max: 1.25,
-                  divisions: 8,
-                  onChanged: (value) => setState(() {
-                    _settings = _settings.copyWith(fontScale: value);
-                  }),
-                ),
-              ),
-            ),
-            const Text(
-              'A',
-              style: TextStyle(
-                color: OkeyColors.cream,
-                fontSize: 19,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        if (!_compactLayout)
-          Text(
-            _st('101 Okey yazı önizlemesi', '101 Okey text preview'),
-            textScaler: appTextScaler(_settings.fontScale),
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 11,
-              fontFamily: 'Georgia',
-            ),
-          ),
-      ],
-    ),
-  );
-
-  Widget _buildFooter() => MediaQuery.withClampedTextScaling(
-    maxScaleFactor: 1.25,
-    child: Container(
-      height: _compactLayout ? 46 : 58,
-      padding: EdgeInsets.fromLTRB(
-        _compactLayout ? 8 : 14,
-        _compactLayout ? 4 : 7,
-        _compactLayout ? 8 : 14,
-        _compactLayout ? 4 : 8,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.26),
-        border: Border(
-          top: BorderSide(color: OkeyColors.gold.withValues(alpha: 0.28)),
-        ),
-      ),
-      child: Row(
-        children: [
-          OutlinedButton.icon(
-            onPressed: () => setState(() {
-              _settings = const _MenuSettings();
-            }),
-            icon: Icon(
-              Icons.restart_alt_rounded,
-              size: _compactLayout ? 15 : 18,
-            ),
-            label: Text(_st('VARSAYILAN', 'DEFAULT')),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white70,
-              side: BorderSide(color: OkeyColors.gold.withValues(alpha: 0.38)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-          const Spacer(),
-          SizedBox(
-            width: _compactLayout ? 150 : 172,
-            height: _compactLayout ? 34 : 40,
-            child: FilledButton.icon(
-              onPressed: () => Navigator.of(context).pop(_settings),
-              style: FilledButton.styleFrom(
-                backgroundColor: OkeyColors.goldLight,
-                foregroundColor: OkeyColors.buttonBrown,
-                elevation: 7,
-                shadowColor: Colors.black87,
-                shape: RoundedRectangleBorder(
-                  side: BorderSide(
-                    color: OkeyColors.gold.withValues(alpha: 0.95),
-                    width: 1.5,
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              icon: Icon(Icons.check_rounded, size: _compactLayout ? 18 : 21),
-              label: Text(
-                _st('KAYDET', 'SAVE'),
-                style: TextStyle(
-                  fontSize: _compactLayout ? 12 : 14,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _LanguageChoice extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _LanguageChoice({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).height < 520;
-    return GestureDetector(
-      key: ValueKey('language-$label'),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        width: compact ? 32 : 44,
-        height: compact ? 20 : 28,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? OkeyColors.gold : Colors.white10,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected ? OkeyColors.goldLight : Colors.white24,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? const Color(0xFF2D1B05) : Colors.white70,
-            fontSize: compact ? 8 : 12,
-            fontWeight: FontWeight.w900,
-          ),
         ),
       ),
     );
@@ -5265,9 +3626,44 @@ class _HomeLogoArtwork extends StatelessWidget {
   );
 }
 
+class _HomePlayActions extends StatelessWidget {
+  final VoidCallback onNew;
+  final VoidCallback onResume;
+  const _HomePlayActions({required this.onNew, required this.onResume});
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: savedGame,
+    builder: (context, _) => savedGame.hasGame
+        ? SizedBox(
+            width: 318,
+            child: Row(
+              key: const ValueKey('home-resume-actions'),
+              children: [
+                Expanded(child: _HemenOynaButton(onTap: onNew, compact: true)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _HemenOynaButton(
+                    onTap: onResume,
+                    resume: true,
+                    compact: true,
+                  ),
+                ),
+              ],
+            ),
+          )
+        : _HemenOynaButton(onTap: onNew),
+  );
+}
+
 class _HemenOynaButton extends StatefulWidget {
   final VoidCallback onTap;
-  const _HemenOynaButton({required this.onTap});
+  final bool resume;
+  final bool compact;
+  const _HemenOynaButton({
+    required this.onTap,
+    this.resume = false,
+    this.compact = false,
+  });
 
   @override
   State<_HemenOynaButton> createState() => _HemenOynaButtonState();
@@ -5311,7 +3707,7 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
       child: AnimatedBuilder(
         animation: Listenable.merge([_pressScale, _pulseScale]),
         builder: (_, child) => Transform.scale(
-          scale: _pressScale.value * _pulseScale.value,
+          scale: _pressScale.value * (widget.compact ? 1 : _pulseScale.value),
           child: child,
         ),
         child: GestureDetector(
@@ -5321,43 +3717,26 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
             widget.onTap();
           },
           onTapCancel: () => _pressController.reverse(),
-          child: Container(
+          child: SizedBox(
             width: 318,
             height: 60,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(19),
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFF64C653),
-                  Color(0xFF279C3D),
-                  Color(0xFF08752D),
-                ],
-                stops: [0, 0.55, 1],
-              ),
-              border: Border.all(color: OkeyColors.goldLight, width: 1.6),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  blurRadius: 10,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                Expanded(
+                const AppHomeButtonArtwork(play: true),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Center(
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        appText('HEMEN OYNA', 'PLAY NOW'),
+                        widget.resume
+                            ? appText('DEVAM ET', 'CONTINUE')
+                            : appText('HEMEN OYNA', 'PLAY NOW'),
                         maxLines: 1,
-                        style: const TextStyle(
-                          color: Color(0xFFFFF4E8),
-                          fontSize: 25,
+                        style: TextStyle(
+                          color: const Color(0xFFFFF4E8),
+                          fontSize: widget.compact ? 17 : 25,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.25,
                           shadows: _homeButtonTextShadows,
@@ -5366,7 +3745,6 @@ class _HemenOynaButtonState extends State<_HemenOynaButton>
                     ),
                   ),
                 ),
-                const SizedBox(width: 14),
               ],
             ),
           ),
@@ -5414,7 +3792,7 @@ class _RightButtonColumn extends StatelessWidget {
         'images/ui/icons/turnuva.png',
         appText('LİG', 'LEAGUE'),
         appText(
-          'Hemen Oyna ile günlük 20 el yarışmasına katıl, sıralamanı ve ödüllerini takip et.',
+          'Hemen Oyna ile süre bitene kadar günlük ligde yarış, sıralamanı ve ödüllerini takip et.',
           'Play 20 daily rounds with Play Now and follow standings and rewards.',
         ),
       ),
@@ -5431,7 +3809,7 @@ class _RightButtonColumn extends StatelessWidget {
 
     Widget buttonAt(int index) {
       final (icon, assetPath, label, description) = buttons[index];
-      return _RightSideButton(
+      final button = _RightSideButton(
         key: index == 3 ? const ValueKey('home-missions-button') : null,
         icon: icon,
         assetPath: assetPath,
@@ -5444,6 +3822,54 @@ class _RightButtonColumn extends StatelessWidget {
             : index == 2
             ? onTournament
             : () => onOpen(icon, 'GÖREVLER', description),
+      );
+      if (index != 3) return button;
+      return AnimatedBuilder(
+        animation: progressNotifications,
+        child: button,
+        builder: (context, child) {
+          final count = progressNotifications.missions
+              .where((mission) => mission.complete && !mission.claimed)
+              .length;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              child!,
+              if (count > 0)
+                Positioned(
+                  top: -6,
+                  right: -4,
+                  child: IgnorePointer(
+                    child: Container(
+                      key: const ValueKey('home-missions-badge'),
+                      constraints: const BoxConstraints(
+                        minWidth: 23,
+                        minHeight: 23,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE62424),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white, width: 1.2),
+                      ),
+                      child: Text(
+                        '$count',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       );
     }
 
@@ -5549,96 +3975,67 @@ class _RightSideButtonState extends State<_RightSideButton>
           widget.onTap();
         },
         onTapCancel: () => _controller.reverse(),
-        child: Container(
+        child: SizedBox(
           width: 220,
           height: 68,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF183D2D), Color(0xFF092D20), Color(0xFF052418)],
-              stops: [0, 0.58, 1],
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: OkeyColors.goldLight.withValues(alpha: 0.42),
-              width: 0.9,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF02140C).withValues(alpha: 0.65),
-                blurRadius: 0,
-                offset: const Offset(0, 3),
-              ),
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 5,
-                offset: const Offset(0, 4),
-              ),
-              BoxShadow(
-                color: OkeyColors.goldLight.withValues(alpha: 0.03),
-                blurRadius: 3,
-                offset: const Offset(0, -1),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.only(left: 14, right: 7),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: Text(
-                        widget.label,
-                        maxLines: 2,
-                        softWrap: true,
-                        textAlign: TextAlign.left,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xFFFFF4E8),
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          height: 0.88,
-                          letterSpacing: 0.05,
-                          shadows: _homeButtonTextShadows,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const AppHomeButtonArtwork(play: false),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Text(
+                            widget.label,
+                            maxLines: 2,
+                            softWrap: true,
+                            textAlign: TextAlign.left,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFFFF4E8),
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              height: 0.88,
+                              letterSpacing: 0.05,
+                              shadows: _homeButtonTextShadows,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    if (widget.showIcon) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        key: ValueKey('home-action-icon-${widget.label}'),
+                        width: 48,
+                        height: 48,
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.all(2),
+                        child: widget.assetPath == null
+                            ? Icon(
+                                widget.icon,
+                                color: OkeyColors.goldLight,
+                                size: 32,
+                              )
+                            : Image.asset(
+                                widget.assetPath!,
+                                fit: BoxFit.contain,
+                                cacheWidth: 168,
+                                filterQuality: FilterQuality.medium,
+                              ),
+                      ),
+                    ],
+                  ],
                 ),
-                if (widget.showIcon) ...[
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    key: ValueKey('home-action-icon-${widget.label}'),
-                    width: 46,
-                    height: 44,
-                    child: widget.assetPath == null
-                        ? Icon(
-                            widget.icon,
-                            color: OkeyColors.goldLight,
-                            size: 32,
-                          )
-                        : Transform.scale(
-                            scale:
-                                widget.assetPath ==
-                                    'görseller/icon/oyun_modlari_kompakt.png'
-                                ? 1.40
-                                : 1,
-                            child: Image.asset(
-                              widget.assetPath!,
-                              fit: BoxFit.contain,
-                              cacheWidth: 168,
-                              filterQuality: FilterQuality.medium,
-                            ),
-                          ),
-                  ),
-                ],
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

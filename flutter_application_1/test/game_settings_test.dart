@@ -1,10 +1,14 @@
+import 'panel_artwork_test_support.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
+import 'package:flutter_application_1/performance_overlay.dart';
 
 void main() {
+  preparePanelArtwork();
   testWidgets('oyun ayarlari acilir, degisir ve dar ekranda tasmaz', (
     tester,
   ) async {
@@ -36,6 +40,12 @@ void main() {
     expect(find.text('Rakip Resimleri'), findsOneWidget);
     expect(find.text('Otomatik Istaka Dizimi'), findsOneWidget);
     expect(find.text('Yazı Boyutu'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('settings-performance-button')));
+    await tester.pump();
+    expect(performanceOverlayEnabled.value, isTrue);
+    await tester.tap(find.byKey(const ValueKey('settings-performance-button')));
+    await tester.pump();
+    expect(performanceOverlayEnabled.value, isFalse);
     expect(find.text('Grid Büyüteci'), findsNothing);
     expect(find.text('ANA MENÜ'), findsNothing);
     expect(find.text('ANA SAYFA'), findsOneWidget);
@@ -48,14 +58,20 @@ void main() {
     expect(find.byKey(const ValueKey('game-restart-button')), findsNothing);
     expect(tester.takeException(), isNull);
 
-    for (final size in const [Size(800, 450), Size(568, 320), Size(390, 844)]) {
+    for (final size in const [
+      Size(800, 450),
+      Size(568, 320),
+      Size(390, 844),
+      Size(320, 568),
+      Size(1024, 768),
+    ]) {
       await tester.binding.setSurfaceSize(size);
       await tester.pump();
       final actions = [
         find.byKey(const ValueKey('settings-home-button')),
         find.byKey(const ValueKey('settings-restart-button')),
-        find.widgetWithText(OutlinedButton, 'VARSAYILAN'),
-        find.widgetWithText(FilledButton, 'KAYDET'),
+        find.byKey(const ValueKey('settings-default-button')),
+        find.byKey(const ValueKey('settings-save-button')),
       ];
       final rects = actions.map(tester.getRect).toList();
       final panel = tester.getRect(
@@ -63,6 +79,8 @@ void main() {
       );
       for (var i = 0; i < rects.length; i++) {
         expect(rects[i].center.dy, closeTo(rects.first.center.dy, 0.1));
+        expect(rects[i].width, closeTo(rects.first.width, 0.1));
+        expect(rects[i].height, closeTo(rects.first.height, 0.1));
         expect(panel.contains(rects[i].topLeft), isTrue);
         expect(panel.contains(rects[i].bottomRight), isTrue);
         expect(actions[i].hitTestable(), findsOneWidget);
@@ -73,10 +91,7 @@ void main() {
 
     await tester.ensureVisible(find.text('KAYDET'));
     await tester.pump();
-    final saveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'KAYDET'),
-    );
-    saveButton.onPressed!();
+    await tester.tap(find.byKey(const ValueKey('settings-save-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('AYARLAR'), findsNothing);
@@ -112,9 +127,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('game-help-button')));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.byKey(const ValueKey('game-help-dialog')), findsOneWidget);
-    expect(find.text('101 OKEY NASIL OYNANIR?'), findsOneWidget);
+    expect(find.text('NASIL OYNANIR'), findsOneWidget);
     expect(find.text('1. AÇILIŞ değerine ulaşın.'), findsNothing);
-    expect(find.text('AÇILIŞ değerine ulaşın.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quick-rule-1')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
   testWidgets(

@@ -21,18 +21,29 @@ const dailyLoginRewards = <DailyLoginReward>[
 ];
 
 class DailyLoginController extends ChangeNotifier {
+  // Rewards normally unlock once per local calendar day.
+  final bool waitForNextDay;
+  DailyLoginController({this.waitForNextDay = true});
+
   static const _lastClaimKey = 'daily_login.last_claim_day';
   static const _streakKey = 'daily_login.streak';
 
   int _streak = 0;
   int? _lastClaimDay;
   bool _loaded = false;
+  bool _claiming = false;
 
   int get streak => _streak;
-  int get displayDay => canClaimToday
+  int get displayDay => !waitForNextDay
+      ? (_streak % dailyLoginRewards.length) + 1
+      : canClaimToday
       ? (_isYesterday(_lastClaimDay) ? (_streak % 7) + 1 : 1)
       : ((_streak - 1) % 7) + 1;
-  bool get canClaimToday => _lastClaimDay != _dayNumber(DateTime.now());
+  bool get canClaimToday =>
+      !waitForNextDay || _lastClaimDay != _dayNumber(DateTime.now());
+  bool isDayClaimed(int day) => waitForNextDay
+      ? day < displayDay || (!canClaimToday && day == displayDay)
+      : day <= _streak % dailyLoginRewards.length;
   bool get loaded => _loaded;
 
   Future<void> load() async {
@@ -42,7 +53,9 @@ class DailyLoginController extends ChangeNotifier {
       _lastClaimDay = await prefs.getInt(_lastClaimKey);
       _streak = (await prefs.getInt(_streakKey) ?? 0).clamp(0, 1000000);
       final today = _dayNumber(DateTime.now());
-      if (_lastClaimDay != null && _lastClaimDay! < today - 1) {
+      if (waitForNextDay &&
+          _lastClaimDay != null &&
+          _lastClaimDay! < today - 1) {
         _streak = 0;
         resetMissedStreak = true;
       }
@@ -55,20 +68,28 @@ class DailyLoginController extends ChangeNotifier {
   }
 
   Future<DailyLoginReward?> claim() async {
-    if (!_loaded) await load();
-    if (!canClaimToday) return null;
-    final today = _dayNumber(DateTime.now());
-    _streak = _isYesterday(_lastClaimDay) ? _streak + 1 : 1;
-    _lastClaimDay = today;
-    final reward = dailyLoginRewards[(_streak - 1) % 7];
-    playerProgress.grantDailyReward(coins: reward.coins, xp: reward.xp);
+    if (_claiming) return null;
+    _claiming = true;
     try {
-      final prefs = SharedPreferencesAsync();
-      await prefs.setInt(_lastClaimKey, today);
-      await prefs.setInt(_streakKey, _streak);
-    } catch (_) {}
-    notifyListeners();
-    return reward;
+      if (!_loaded) await load();
+      if (!canClaimToday) return null;
+      final today = _dayNumber(DateTime.now());
+      _streak = !waitForNextDay || _isYesterday(_lastClaimDay)
+          ? _streak + 1
+          : 1;
+      _lastClaimDay = today;
+      final reward = dailyLoginRewards[(_streak - 1) % 7];
+      playerProgress.grantDailyReward(coins: reward.coins, xp: reward.xp);
+      try {
+        final prefs = SharedPreferencesAsync();
+        await prefs.setInt(_lastClaimKey, today);
+        await prefs.setInt(_streakKey, _streak);
+      } catch (_) {}
+      notifyListeners();
+      return reward;
+    } finally {
+      _claiming = false;
+    }
   }
 
   bool _isYesterday(int? value) =>

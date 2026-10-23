@@ -2,6 +2,8 @@ enum GameEntryPoint { quickPlay, gameMode, room, tournament, tutorial }
 
 enum OkeyGameMode { standard, classic101, timed101, colorBonus101, progressive }
 
+enum BotDifficulty { easy, medium, hard }
+
 /// Bir oyun masasının hangi ekrandan ve hangi seçimle açıldığını taşır.
 /// Moda/odaya özel kurallar ileride bu nesne üzerinden ayrıştırılabilir.
 class GameLaunchConfig {
@@ -12,6 +14,7 @@ class GameLaunchConfig {
   final int? entryFee;
   final int? tournamentRound;
   final String? opponent;
+  final BotDifficulty? difficulty;
 
   const GameLaunchConfig._({
     required this.entryPoint,
@@ -21,6 +24,7 @@ class GameLaunchConfig {
     this.entryFee,
     this.tournamentRound,
     this.opponent,
+    this.difficulty,
   });
 
   const GameLaunchConfig.quickPlay()
@@ -76,6 +80,42 @@ class GameLaunchConfig {
        );
 
   bool get isTournament => entryPoint == GameEntryPoint.tournament;
+
+  GameLaunchConfig withDifficulty(BotDifficulty value) => GameLaunchConfig._(
+    entryPoint: entryPoint,
+    mode: mode,
+    selectionId: selectionId,
+    selectionLabel: selectionLabel,
+    entryFee: entryFee,
+    tournamentRound: tournamentRound,
+    opponent: opponent,
+    difficulty: value,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'entry': entryPoint.name,
+    'mode': mode.name,
+    'id': selectionId,
+    'label': selectionLabel,
+    'fee': entryFee,
+    'round': tournamentRound,
+    'opponent': opponent,
+    'difficulty': difficulty?.name,
+  };
+
+  factory GameLaunchConfig.fromJson(Map<String, dynamic> data) =>
+      GameLaunchConfig._(
+        entryPoint: GameEntryPoint.values.byName(data['entry'] as String),
+        mode: OkeyGameMode.values.byName(data['mode'] as String),
+        selectionId: data['id'] as String,
+        selectionLabel: data['label'] as String,
+        entryFee: data['fee'] as int?,
+        tournamentRound: data['round'] as int?,
+        opponent: data['opponent'] as String?,
+        difficulty: data['difficulty'] == null
+            ? null
+            : BotDifficulty.values.byName(data['difficulty'] as String),
+      );
 
   String get modeLabel => switch (mode) {
     OkeyGameMode.standard => 'Sıradan',

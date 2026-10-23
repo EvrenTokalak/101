@@ -1,12 +1,16 @@
+import 'panel_artwork_test_support.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_1/daily_league.dart';
+import 'package:flutter_application_1/league_rank_popup.dart';
 import 'package:flutter_application_1/game.dart';
 import 'package:flutter_application_1/game_launch.dart';
 
 void main() {
+  preparePanelArtwork();
   setUp(() async {
     await dailyLeague.resetForTesting();
     await SharedPreferencesAsync().clear();
@@ -44,6 +48,28 @@ void main() {
       },
     );
   });
+  testWidgets('rank notice text is centered inside the frame', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Center(child: LeagueRankPopup(notice: LeagueRankNotice(4, 3))),
+        ),
+      ),
+    );
+    final content = tester.getRect(
+      find.byKey(const ValueKey('artwork-panel-content')),
+    );
+    final rank = tester.getRect(find.text('4. sıradasın'));
+    final detail = tester.getRect(find.text('20 yarışmacı · 3 el tamamlandı'));
+    expect(rank.center.dx, closeTo(content.center.dx, .1));
+    expect(detail.center.dx, closeTo(content.center.dx, .1));
+    expect(
+      rank.expandToInclude(detail).center.dy,
+      closeTo(content.center.dy, .1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'league rank appears at new hand start, fades, and does not repeat',
     (tester) async {
@@ -72,7 +98,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 150));
       expect(find.byKey(const ValueKey('league-rank-popup')), findsOneWidget);
       expect(find.text('4. sıradasın'), findsOneWidget);
-      expect(find.text('20 yarışmacı · 3/20 el tamamlandı'), findsOneWidget);
+      expect(find.text('20 yarışmacı · 3 el tamamlandı'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 2200));
       await tester.tap(find.byKey(const ValueKey('rack-visible-tile-0')));
       // A random first tile may be okey, whose single tap waits for the

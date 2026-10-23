@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'game.dart';
@@ -7,12 +9,23 @@ import 'league_reminder.dart';
 import 'app_settings_dialog.dart';
 import 'performance_overlay.dart';
 import 'route_activity.dart';
+import 'difficulty_picker.dart';
+import 'saved_game.dart';
+import 'player_progress.dart';
 
 Future<T?> openGameScreen<T>(
   BuildContext context, {
   required GameLaunchConfig config,
+  Map<String, dynamic>? savedState,
 }) async {
   if (!context.mounted) return null;
+  if (savedState == null &&
+      (config.entryPoint == GameEntryPoint.room ||
+          config.entryPoint == GameEntryPoint.gameMode)) {
+    final selected = config.difficulty ?? await pickBotDifficulty(context);
+    if (selected == null || !context.mounted) return null;
+    config = config.withDifficulty(selected);
+  }
   if (config.entryPoint == GameEntryPoint.quickPlay) {
     await dailyLeague.load();
     dailyLeague.refresh();
@@ -22,28 +35,29 @@ Future<T?> openGameScreen<T>(
     if (!context.mounted) return null;
   }
 
+  if (!context.mounted) return null;
+  if (savedState == null &&
+      config.entryPoint == GameEntryPoint.room &&
+      !playerProgress.trySpendCoins(config.entryFee ?? 0)) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        dismissDirection: DismissDirection.horizontal,
+        content: Text('Yeterli altın yok.'),
+      ),
+    );
+    return null;
+  }
+  if (savedState == null &&
+      config.entryPoint != GameEntryPoint.tutorial &&
+      config.entryPoint != GameEntryPoint.tournament) {
+    unawaited(savedGame.clear());
+  }
+
   final result = await Navigator.of(context).push<T>(
-    PageRouteBuilder<T>(
-      pageBuilder: (_, _, _) =>
-          ActiveRouteScene(child: GameScreen(launchConfig: config)),
-      transitionDuration: const Duration(milliseconds: 120),
-      reverseTransitionDuration: const Duration(milliseconds: 100),
-      transitionsBuilder: (_, animation, _, child) {
-        final curved = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        // Opacity iki tam ekran sahneyi GPU'da birlestirir. Kisa ve opak kayma
-        // gecisi ayni akiciligi daha dusuk raster maliyetiyle verir.
-        return SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0.035, 0),
-            end: Offset.zero,
-          ).animate(curved),
-          child: child,
-        );
-      },
+    AppSceneRoute<T>(
+      builder: (_) => GameScreen(launchConfig: config, savedState: savedState),
+      reverseCurve: Curves.easeInCubic,
+      reverseDuration: const Duration(milliseconds: 100),
     ),
   );
 

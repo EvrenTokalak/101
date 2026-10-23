@@ -4,12 +4,11 @@ import 'package:flutter/material.dart';
 
 import 'app_controls.dart';
 import 'app_language.dart';
-import 'app_settings_dialog.dart';
 import 'daily_league.dart';
 import 'game_launch.dart';
 import 'game_navigation.dart';
-import 'league_reminder.dart';
 import 'player_progress.dart';
+import 'store_cosmetics.dart';
 
 const _leagueGold = Color(0xFFF0D563);
 const _leagueCream = Color(0xFFFFF4DD);
@@ -71,30 +70,35 @@ class _LeagueScreenState extends State<LeagueScreen>
       backgroundColor: const Color(0xFF071B12),
       body: Stack(
         children: [
+          Positioned.fill(child: StoreBackground(cacheWidth: 1440)),
           Positioned.fill(
-            child: Image.asset(
-              'images/anamenu/menubg.png',
-              fit: BoxFit.cover,
-              cacheWidth: 1440,
-            ),
-          ),
-          Positioned.fill(
-            child: ColoredBox(
-              color: const Color(0xFF071B12).withValues(alpha: .58),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0, -.18),
+                  radius: 1.08,
+                  colors: [
+                    const Color(0xFF08763E).withValues(alpha: .12),
+                    const Color(0xFF001B10).withValues(alpha: .42),
+                  ],
+                ),
+              ),
             ),
           ),
           SafeArea(
             child: LayoutBuilder(
               builder: (context, box) {
-                final wide =
-                    box.maxWidth / box.maxHeight > 1.2 || box.maxHeight < 480;
+                final wide = box.maxWidth > box.maxHeight * 1.25;
                 final compact = box.maxHeight < 620 || box.maxWidth < 650;
                 final summary = _sidebar(compact: compact);
                 return Padding(
-                  padding: EdgeInsets.all(compact ? 10 : 20),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: (box.maxWidth * .02).clamp(10.0, 32.0),
+                    vertical: compact ? 8 : 16,
+                  ),
                   child: Column(
                     children: [
-                      _header(compact),
+                      _header(compact, short: box.maxHeight < 450),
                       SizedBox(height: compact ? 8 : 14),
                       Expanded(
                         child: wide
@@ -102,21 +106,32 @@ class _LeagueScreenState extends State<LeagueScreen>
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Expanded(
-                                    flex: 17,
-                                    child: _standings(compact),
+                                    flex: 20,
+                                    child: _standings(
+                                      compact,
+                                      showPlayerSummary: box.maxHeight >= 500,
+                                    ),
                                   ),
                                   SizedBox(width: compact ? 10 : 18),
-                                  Expanded(flex: 10, child: summary),
+                                  Expanded(flex: 9, child: summary),
                                 ],
                               )
                             : Column(
                                 children: [
                                   SizedBox(
-                                    height: box.maxHeight < 650 ? 190 : 270,
+                                    height: (box.maxHeight * .25).clamp(
+                                      80.0,
+                                      240.0,
+                                    ),
                                     child: summary,
                                   ),
                                   const SizedBox(height: 10),
-                                  Expanded(child: _standings(true)),
+                                  Expanded(
+                                    child: _standings(
+                                      true,
+                                      showPlayerSummary: box.maxHeight >= 500,
+                                    ),
+                                  ),
                                 ],
                               ),
                       ),
@@ -131,107 +146,59 @@ class _LeagueScreenState extends State<LeagueScreen>
     ),
   );
 
-  Widget _header(bool compact) => SizedBox(
-    height: compact ? 78 : 106,
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _header(bool compact, {bool short = false}) => SizedBox(
+    height: compact ? 48 : 72,
+    child: Stack(
+      alignment: Alignment.center,
       children: [
-        SizedBox(
-          width: compact ? 42 : 60,
+        Padding(
+          padding: EdgeInsets.only(left: compact ? 52 : 108, right: 108),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text('GÜNLÜK LİG', style: _title(compact ? 26 : 40)),
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
           child: AppBackButton(
             buttonKey: const ValueKey('league-back'),
-            size: compact ? 38 : 52,
+            size: compact ? 44 : 52,
             onTap: () => Navigator.of(context).pop(),
           ),
         ),
-        Expanded(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.topCenter,
-            child: Column(
+        Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: _leagueGold, width: 1.2),
+            ),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Image.asset('images/ui/coin.png', width: compact ? 20 : 28),
+                const SizedBox(width: 6),
                 Text(
-                  'GÜNLÜK LİG',
+                  formatGameNumber(playerProgress.coins),
                   style: TextStyle(
                     color: _leagueCream,
-                    fontFamily: 'Baloo 2',
-                    fontSize: compact ? 26 : 40,
+                    fontSize: compact ? 12 : 19,
                     fontWeight: FontWeight.w900,
-                    height: 1.1,
-                    shadows: const [
-                      Shadow(
-                        color: Colors.black,
-                        offset: Offset(0, 3),
-                        blurRadius: 2,
-                      ),
-                    ],
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '20 YARIŞMACI',
-                  style: TextStyle(
-                    color: _leagueCream,
-                    fontSize: compact ? 11 : 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.emoji_events_rounded,
-                      size: compact ? 13 : 17,
-                      color: const Color(0xFFB7C7AD),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      'İlk 3’e ${[1, 2, 3].map((rank) => formatGameNumber(LeaguePrize.forRank(rank).coins)).join(' · ')} altın',
-                      key: const ValueKey('league-prize-summary'),
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: compact ? 10 : 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
         ),
-        Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 8 : 14,
-            vertical: 8,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.black54,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: _leagueGold, width: 1.2),
-          ),
-          child: Row(
-            children: [
-              Image.asset('images/ui/coin.png', width: compact ? 20 : 28),
-              const SizedBox(width: 6),
-              Text(
-                formatGameNumber(playerProgress.coins),
-                style: TextStyle(
-                  color: _leagueCream,
-                  fontSize: compact ? 12 : 19,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-        ),
       ],
     ),
   );
-
-  Widget _standings(bool compact) => _LeagueCard(
+  Widget _standings(
+    bool compact, {
+    bool showPlayerSummary = true,
+  }) => _LeagueCard(
     compact: compact,
     child: Column(
       children: [
@@ -239,7 +206,7 @@ class _LeagueScreenState extends State<LeagueScreen>
           children: [
             Icon(
               Icons.leaderboard_rounded,
-              color: const Color(0xFF9AB29D),
+              color: _leagueGold,
               size: compact ? 24 : 34,
             ),
             const SizedBox(width: 10),
@@ -260,9 +227,12 @@ class _LeagueScreenState extends State<LeagueScreen>
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: compact ? 5 : 10),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: compact ? 3 : 6,
+          ),
           decoration: BoxDecoration(
             color: const Color(0x442A6731),
             borderRadius: BorderRadius.circular(10),
@@ -282,9 +252,9 @@ class _LeagueScreenState extends State<LeagueScreen>
         Expanded(
           child: Stack(
             children: [
-              Scrollbar(
-                controller: _listScroll,
-                thumbVisibility: true,
+              ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context)
+                    .copyWith(scrollbars: false),
                 child: ListView.builder(
                   controller: _listScroll,
                   key: const ValueKey('league-standings'),
@@ -292,6 +262,8 @@ class _LeagueScreenState extends State<LeagueScreen>
                   itemBuilder: (context, index) {
                     final entry = dailyLeague.standings[index];
                     final highlight = entry.isPlayer;
+                    final leading =
+                        dailyLeague.completedRounds > 0 && entry.rank == 1;
                     final medalColor = dailyLeague.completedRounds == 0
                         ? Colors.white54
                         : switch (entry.rank) {
@@ -307,9 +279,11 @@ class _LeagueScreenState extends State<LeagueScreen>
                         vertical: compact ? 6 : 8,
                       ),
                       decoration: BoxDecoration(
-                        color: highlight
-                            ? const Color(0x553F783C)
-                            : Colors.black12,
+                        gradient: LinearGradient(
+                          colors: highlight || leading
+                              ? const [Color(0x99558128), Color(0x6628431C)]
+                              : const [Color(0x33234E30), Color(0x44001810)],
+                        ),
                         borderRadius: BorderRadius.circular(highlight ? 10 : 0),
                         border: highlight
                             ? Border.all(color: _leagueGold, width: 1.5)
@@ -356,25 +330,6 @@ class _LeagueScreenState extends State<LeagueScreen>
                               ),
                             ),
                           ),
-                          if (!highlight && !compact)
-                            Container(
-                              margin: const EdgeInsets.only(right: 12),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white12,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: const Text(
-                                'BOT',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
                           Text(
                             dailyLeague.completedRounds == 0
                                 ? '—'
@@ -465,6 +420,10 @@ class _LeagueScreenState extends State<LeagueScreen>
           ),
         ),
         const SizedBox(height: 8),
+        if (showPlayerSummary) ...[
+          _playerStanding(compact),
+          const SizedBox(height: 6),
+        ],
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -483,137 +442,189 @@ class _LeagueScreenState extends State<LeagueScreen>
     ),
   );
 
-  Widget _summary({required bool compact}) => Column(
-    children: [
-      _LeagueCard(
-        compact: compact,
-        gold: true,
-        child: Row(
-          children: [
-            Icon(
-              Icons.schedule_rounded,
-              color: const Color(0xFF9AB29D),
-              size: compact ? 25 : 38,
+  Widget _playerStanding(bool compact) {
+    final player = dailyLeague.standings.firstWhere((entry) => entry.isPlayer);
+    return Container(
+      key: const ValueKey('league-player-summary'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF244C35),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _leagueGold.withValues(alpha: .6)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.person_rounded, color: _leagueGold, size: 18),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              dailyLeague.completedRounds == 0
+                  ? 'SEN · Henüz el oynamadın'
+                  : 'SEN · ${player.rank}. sıra',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _label(compact).copyWith(color: _leagueGold),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          if (dailyLeague.completedRounds > 0)
+            Text(
+              '${formatGameNumber(player.penalty)} ceza',
+              style: _label(compact).copyWith(color: _leagueCream),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sidebar({required bool compact}) => LayoutBuilder(
+    builder: (context, bounds) => FittedBox(
+      fit: BoxFit.contain,
+      alignment: Alignment.topCenter,
+      child: SizedBox(
+        width: bounds.maxWidth,
+        height: compact ? 332 : 390,
+        child: Column(
+          children: [
+            _LeagueCard(
+              compact: true,
+              gold: true,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text('LİG BİTİMİNE', style: _label(compact)),
-                  Text(
-                    dailyLeague.remainingText,
-                    key: const ValueKey('league-countdown'),
-                    style: _title(compact ? 23 : 32),
+                  const Icon(
+                    Icons.schedule_rounded,
+                    color: _leagueGold,
+                    size: 32,
+                  ),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('LİG BİTİMİNE', style: _label(false)),
+                        FittedBox(
+                          child: Text(
+                            dailyLeague.remainingText,
+                            key: const ValueKey('league-countdown'),
+                            style: _title(compact ? 28 : 36),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
-      SizedBox(height: compact ? 6 : 10),
-      _LeagueCard(
-        compact: compact,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              dailyLeague.complete
-                  ? 'GÜNLÜK SONUCUN KESİNLEŞTİ'
-                  : 'BUGÜNKÜ İLERLEMEN',
-              style: _title(compact ? 13 : 17),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${dailyLeague.completedRounds} / 20 EL',
-              key: const ValueKey('league-progress'),
-              style: _title(compact ? 25 : 36),
-            ),
             const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: LinearProgressIndicator(
-                value: dailyLeague.completedRounds / leagueRoundLimit,
-                minHeight: compact ? 9 : 14,
-                backgroundColor: Colors.black38,
-                color: const Color(0xFF6DA77E),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              dailyLeague.completedRounds == 0
-                  ? 'İlk elini oyna, sıralamaya katıl'
-                  : 'Sıran: ${dailyLeague.playerRank} / 20',
-              style: TextStyle(
-                color: _leagueCream,
-                fontSize: compact ? 14 : 18,
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (leagueReminder.supported)
-        TextButton.icon(
-          onPressed: appSettings.value.notifications
-              ? () async {
-                  final allowed = await leagueReminder.requestPermission();
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        allowed ? 'Son 1 saat için hatırlatıcı açık.' : 'Hatırlatıcı için telefon ayarlarından bildirim izni ver.',
+            Expanded(
+              child: _LeagueCard(
+                compact: true,
+                gold: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('İLK 3 ÖDÜLLERİ', style: _title(compact ? 17 : 21)),
+                    const SizedBox(height: 6),
+                    for (final rank in [1, 2, 3])
+                      Expanded(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: rank.isOdd
+                                ? const Color(0x243F7A3A)
+                                : Colors.transparent,
+                            border: const Border(
+                              bottom: BorderSide(color: Color(0x334B8B46)),
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.emoji_events_rounded,
+                                  size: compact ? 21 : 26,
+                                  color: rank == 1
+                                      ? _leagueGold
+                                      : rank == 2
+                                      ? const Color(0xFFCCD7DC)
+                                      : const Color(0xFFD79B55),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '$rank. sıra',
+                                    style: _label(false),
+                                  ),
+                                ),
+                                Flexible(
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      '${formatGameNumber(LeaguePrize.forRank(rank).coins)} altın',
+                                      style: TextStyle(
+                                        color: _leagueCream,
+                                        fontSize: compact ? 15 : 19,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: compact ? 54 : 66,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF287C22), Color(0xFF6BD944)],
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: _leagueGold, width: 2),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x444DD72C), blurRadius: 10),
+                  ],
+                ),
+                child: TextButton(
+                  key: const ValueKey('league-play'),
+                  onPressed: _opening ? null : _play,
+                  style: TextButton.styleFrom(
+                    foregroundColor: _leagueCream,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(22),
                     ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.notifications_active_outlined, size: 17),
-          label: const Text('Son 1 saat hatırlatıcısı'),
-          style: TextButton.styleFrom(foregroundColor: const Color(0xFF9AB29D)),
-        ),
-    ],
-  );
-
-  Widget _sidebar({required bool compact}) => Column(
-    children: [
-      Expanded(
-        child: SingleChildScrollView(child: _summary(compact: compact)),
-      ),
-      const SizedBox(height: 12),
-      SizedBox(
-        width: double.infinity,
-        height: compact ? 46 : 62,
-        child: ElevatedButton(
-          key: const ValueKey('league-play'),
-          onPressed: _opening ? null : _play,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF409B32),
-            foregroundColor: _leagueCream,
-            side: const BorderSide(color: _leagueGold, width: 1.5),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.play_arrow_rounded, size: 32),
+                        const SizedBox(width: 8),
+                        Text('HEMEN OYNA', style: _title(compact ? 23 : 28)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              'HEMEN OYNA',
-              maxLines: 1,
-              style: _title(compact ? 19 : 27),
+            const SizedBox(height: 7),
+            Text(
+              'Süre bitene kadar oynadığın eller ligine sayılır',
+              textAlign: TextAlign.center,
+              style: _label(compact),
             ),
-          ),
+          ],
         ),
       ),
-      const SizedBox(height: 7),
-      Text(
-        dailyLeague.complete
-            ? 'Oynamaya devam et · Lig toplamın sabit'
-            : 'Oynadığın ilk 20 el günlük ligine sayılır',
-        textAlign: TextAlign.center,
-        style: _label(compact),
-      ),
-    ],
+    ),
   );
 
   TextStyle _title(double size) => TextStyle(
@@ -649,16 +660,19 @@ class _LeagueCard extends StatelessWidget {
         end: Alignment.bottomRight,
         colors: [Color(0xEF193D25), Color(0xF00A1D12)],
       ),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(
-        color: gold ? _leagueGold : const Color(0xFFB5A641),
-        width: 1.4,
-      ),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _leagueGold, width: 1.7),
       boxShadow: const [
         BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 3)),
       ],
     ),
-    child: child,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: const Color(0x665C9B50)),
+      ),
+      child: Padding(padding: const EdgeInsets.all(4), child: child),
+    ),
   );
 }
 
@@ -699,42 +713,48 @@ class _HomeLeagueSummaryState extends State<HomeLeagueSummary>
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: Listenable.merge([dailyLeague, appLanguage]),
-    builder: (context, _) => GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.onTap,
-      child: Container(
-        key: const ValueKey('home-league-summary'),
-        margin: const EdgeInsets.only(top: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xC0103220),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _leagueGold.withValues(alpha: .55)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.emoji_events_rounded,
-              color: _leagueGold,
-              size: 19,
+    builder: (context, _) => Align(
+      alignment: Alignment.topCenter,
+      heightFactor: 1,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 260),
+        child: AppPressable(
+          onTap: widget.onTap,
+          child: Container(
+            key: const ValueKey('home-league-summary'),
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xC0103220),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _leagueGold.withValues(alpha: .55)),
             ),
-            const SizedBox(width: 7),
-            Flexible(
-              child: Text(
-                '${appText('Lig', 'League', german: 'Liga')} · '
-                '${dailyLeague.completedRounds == 0 ? appText('İlk elini tamamla', 'Complete your first hand', german: 'Spiele deine erste Runde') : appText('${dailyLeague.playerRank}. sıra', 'Rank ${dailyLeague.playerRank}', german: 'Platz ${dailyLeague.playerRank}')} · '
-                '${dailyLeague.completedRounds}/20 ${appText('el', 'hands', german: 'Runden')} · ${dailyLeague.remainingText}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: _leagueCream,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.emoji_events_rounded,
+                  color: _leagueGold,
+                  size: 19,
                 ),
-              ),
+                const SizedBox(width: 7),
+                Flexible(
+                  child: Text(
+                    '${appText('Lig', 'League', german: 'Liga')} · '
+                    '${dailyLeague.completedRounds == 0 ? appText('İlk elini tamamla', 'Complete your first hand', german: 'Spiele deine erste Runde') : appText('${dailyLeague.playerRank}. sıra', 'Rank ${dailyLeague.playerRank}', german: 'Platz ${dailyLeague.playerRank}')} · '
+                    '${dailyLeague.completedRounds} ${appText('el', 'hands', german: 'Runden')} · ${dailyLeague.remainingText}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _leagueCream,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     ),

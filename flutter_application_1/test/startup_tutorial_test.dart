@@ -1,13 +1,18 @@
+import 'panel_artwork_test_support.dart';
+
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_application_1/player_progress.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_application_1/game.dart' show GameScreen;
 import 'package:flutter_application_1/main.dart' as app;
 import 'package:flutter_application_1/startup_tutorial.dart';
+import 'package:flutter_application_1/app_controls.dart';
 
 void main() {
+  preparePanelArtwork();
   Future<void> expectFingerVisits(
     WidgetTester tester,
     Finder start,
@@ -105,7 +110,34 @@ void main() {
       find.byKey(const ValueKey('rack-slot-20')),
       find.byKey(const ValueKey('rack-slot-14')),
     );
-    await tester.dragFrom(yellowThreeCenter, arrangeTarget - yellowThreeCenter);
+    final arrangeDrag = await tester.startGesture(yellowThreeCenter);
+    await arrangeDrag.moveBy(const Offset(25, -25));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
+    final feedback = find.byKey(const ValueKey('rack-drag-feedback-tile'));
+    final movingFrame = find.descendant(
+      of: feedback,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.key.toString().contains('processable-highlight-'),
+      ),
+    );
+    expect(movingFrame, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('tutorial-arrange-highlight')),
+      findsNothing,
+    );
+    final frameBeforeMove = tester.getCenter(movingFrame);
+    await arrangeDrag.moveBy(const Offset(20, -15));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
+    final frameMovement = tester.getCenter(movingFrame) - frameBeforeMove;
+    expect(frameMovement.dx, closeTo(20, 2));
+    expect(frameMovement.dy, closeTo(-15, 2));
+    expect(tester.getRect(movingFrame), tester.getRect(feedback));
+    await arrangeDrag.moveTo(arrangeTarget);
+    await arrangeDrag.up();
     await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('3. ELİNİ AÇ'), findsOneWidget);
     expect(
@@ -126,11 +158,37 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('tutorial-hand-image')), findsOneWidget);
-    await expectFingerVisits(
-      tester,
-      find.byKey(const ValueKey('grid-per-summary')),
-      find.byKey(const ValueKey('tutorial-open-button')),
+    expect(
+      find.byKey(const ValueKey('tutorial-open-highlight')),
+      findsOneWidget,
     );
+    expect(find.text('101+ HAZIR'), findsOneWidget);
+    final hand = tester.widget<Image>(
+      find.byKey(const ValueKey('tutorial-hand-image')),
+    );
+    expect(
+      ((hand.image as ResizeImage).imageProvider as AssetImage).assetName,
+      'görseller/icon/t_hand',
+    );
+    for (var frame = 0; frame < 25; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        (tester.getCenter(find.byKey(const ValueKey('tutorial-finger'))) -
+                tester.getCenter(
+                  find.byKey(const ValueKey('tutorial-open-button')),
+                ))
+            .distance,
+        lessThan(1),
+      );
+      expect(
+        find.byKey(const ValueKey('tutorial-total-highlight')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('tutorial-open-highlight')),
+        findsOneWidget,
+      );
+    }
 
     await tester.tap(find.text('SERİ AÇ'));
     await tester.pump(const Duration(milliseconds: 900));
@@ -170,7 +228,7 @@ void main() {
     await tester.pump();
     expect(
       find.text(
-        'Kırmızı 7’yi parlayan kırmızı 4–5–6 perinin üzerine veya sonundaki siluete bırak.',
+        'Kırmızı 7’yi parlayan kırmızı 4–5–6 perinin üzerine veya sonuna bırak.',
       ),
       findsOneWidget,
     );
@@ -179,7 +237,7 @@ void main() {
     await tester.pump();
     await processingGesture.moveTo(processTarget);
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byKey(const ValueKey('meld-drop-silhouette')), findsOneWidget);
+    expect(find.byKey(const ValueKey('meld-drop-silhouette')), findsNothing);
     expect(find.byKey(const ValueKey('meld-drop-target-glow')), findsOneWidget);
     await processingGesture.up();
     await tester.pump();
@@ -250,9 +308,15 @@ void main() {
       find.byKey(const ValueKey('profile-name-field')),
       'Gökde',
     );
-    await tester.tap(find.byKey(const ValueKey('profile-name-save')));
+    await tester.tap(find.byKey(const ValueKey('profile-name-confirm')));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('TAMAM').last);
+    expect(playerProgress.playerName, defaultPlayerProfileName);
+    await tester.tap(find.byKey(const ValueKey('profile-name-save')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(playerProgress.playerName, 'Gökde');
+    expect(find.byKey(const ValueKey('feature-dialog-PROFİLİM')), findsNothing);
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 1));
     await tester.pump(const Duration(milliseconds: 500));
@@ -274,6 +338,28 @@ void main() {
       find.byKey(const ValueKey('feature-dialog-GÖREVLER')),
       findsOneWidget,
     );
+    await tester.pump(const Duration(milliseconds: 300));
+    final missionsClose = find.byKey(const ValueKey('popup-outside-close'));
+    final missionsFrame = tester.getRect(
+      find.byKey(const ValueKey('popup-panel-artwork')),
+    );
+    expect(missionsClose.hitTestable(), findsOneWidget);
+    expect(
+      tester.getRect(missionsClose).center.dy,
+      closeTo(missionsFrame.top + missionsFrame.height * .205, .1),
+    );
+    expect(
+      tester.getRect(missionsClose).right,
+      lessThanOrEqualTo(missionsFrame.right),
+    );
+    final homeButton = tester.element(
+      find.byKey(const ValueKey('home-missions-button')),
+    );
+    expect(TickerMode.valuesOf(homeButton).enabled, isFalse);
+    await tester.tap(missionsClose);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(TickerMode.valuesOf(homeButton).enabled, isTrue);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -331,6 +417,42 @@ void main() {
         await tester.pump(const Duration(milliseconds: 200));
         expect(tester.takeException(), isNull);
         expect(find.text('ÖĞRETİCİYİ GÖRMEK\nİSTER MİSİN?'), findsOneWidget);
+        expect(
+          tester
+              .widget<Image>(find.byKey(const ValueKey('popup-panel-artwork')))
+              .image,
+          appPopupArtwork(appTutorialPanelAsset),
+        );
+        expect(
+          find.byKey(const ValueKey('popup-outside-close')).hitTestable(),
+          findsOneWidget,
+        );
+        final artworkBounds = tester.getRect(
+          find.byKey(const ValueKey('popup-panel-artwork')),
+        );
+        final titleBox = tester.renderObject<RenderBox>(
+          find.byKey(const ValueKey('tutorial-panel-title')),
+        );
+        final titleBounds = Rect.fromPoints(
+          titleBox.localToGlobal(Offset.zero),
+          titleBox.localToGlobal(titleBox.size.bottomRight(Offset.zero)),
+        );
+        expect(
+          titleBounds.width,
+          lessThanOrEqualTo(artworkBounds.width * .39 + .1),
+        );
+        expect(
+          titleBounds.top,
+          greaterThanOrEqualTo(
+            artworkBounds.top + artworkBounds.height * .11 - .1,
+          ),
+        );
+        expect(
+          titleBounds.bottom,
+          lessThanOrEqualTo(
+            artworkBounds.top + artworkBounds.height * .20 + .1,
+          ),
+        );
         expect(find.byType(SingleChildScrollView), findsNothing);
         expect(find.textContaining('Kontrollü bir eğitim'), findsNothing);
         await tester.ensureVisible(

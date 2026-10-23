@@ -3,6 +3,35 @@ import 'package:flutter/material.dart';
 final RouteObserver<PageRoute<dynamic>> appRouteObserver =
     RouteObserver<PageRoute<dynamic>>();
 
+/// Shared slide transition and activity tracking for full-screen scenes.
+class AppSceneRoute<T> extends PageRouteBuilder<T> {
+  AppSceneRoute({
+    required WidgetBuilder builder,
+    Curve curve = Curves.easeOutCubic,
+    Curve? reverseCurve,
+    Duration reverseDuration = const Duration(milliseconds: 120),
+  }) : super(
+         pageBuilder: (context, _, _) =>
+             ActiveRouteScene(child: builder(context)),
+         transitionDuration: const Duration(milliseconds: 120),
+         reverseTransitionDuration: reverseDuration,
+         transitionsBuilder: (_, animation, _, child) => SlideTransition(
+           position:
+               Tween<Offset>(
+                 begin: const Offset(0.035, 0),
+                 end: Offset.zero,
+               ).animate(
+                 CurvedAnimation(
+                   parent: animation,
+                   curve: curve,
+                   reverseCurve: reverseCurve,
+                 ),
+               ),
+           child: child,
+         ),
+       );
+}
+
 /// Üstüne başka bir tam sayfa açıldığında sahnenin widget ağacını pasife alır.
 /// Popup ve dialog rotaları bu gözlemciye dahil değildir.
 class ActiveRouteScene extends StatefulWidget {

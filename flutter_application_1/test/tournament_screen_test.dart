@@ -5,6 +5,7 @@ import 'package:flutter_application_1/daily_league.dart';
 import 'package:flutter_application_1/league_screen.dart';
 import 'package:flutter_application_1/main.dart' as app;
 import 'package:flutter_application_1/player_progress.dart';
+import 'package:flutter_application_1/game_launch.dart';
 
 void main() {
   setUp(() async {
@@ -13,6 +14,46 @@ void main() {
     playerProgress.reset();
     await dailyLeague.load();
   });
+
+  testWidgets(
+    'competition card shows actual leader gap and changes on taking the lead',
+    (tester) async {
+      await tester.runAsync(
+        () => dailyLeague.recordRound(
+          config: const GameLaunchConfig.quickPlay(),
+          roundId: 'competition-first',
+          tablePenalties: [80, 50, 60, 70],
+          simulatedPenalties: List.filled(16, 202),
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(1180, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(const MaterialApp(home: LeagueScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('SEN · 4. sıra'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('league-competition-gap')),
+        findsNothing,
+      );
+      await tester.runAsync(
+        () => dailyLeague.recordRound(
+          config: const GameLaunchConfig.quickPlay(),
+          roundId: 'competition-second',
+          tablePenalties: [-101, 202, 202, 202],
+          simulatedPenalties: List.filled(16, 202),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('SEN · 1. sıra'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('league-competition-rank')),
+        findsNothing,
+      );
+      expect(find.text('BUGÜNKÜ OYUNLARIN'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('league standings adapt to desktop tablet and phone sizes', (
     tester,
@@ -32,11 +73,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: 'viewport: $size');
       expect(find.text('GÜNLÜK LİG'), findsOneWidget);
-      expect(find.text('20 YARIŞMACI'), findsOneWidget);
-      expect(find.text('İlk elini oyna, sıralamaya katıl'), findsOneWidget);
+      expect(find.byType(Scrollbar), findsNothing);
+      expect(find.text('20 YARIŞMACI'), findsNothing);
+      expect(find.text('HAZIR MISIN?'), findsNothing);
       expect(find.text('LİG BİTİMİNE'), findsOneWidget);
       expect(find.text('YENİLENMEYE'), findsNothing);
-      expect(find.text('İlk 3’e 3.000 · 2.000 · 1.000 altın'), findsOneWidget);
+      expect(find.text('İlk 3’e 3.000 · 2.000 · 1.000 altın'), findsNothing);
+      expect(find.text('Son 1 saat hatırlatıcısı'), findsNothing);
       expect(find.byKey(const ValueKey('league-scroll-hint')), findsOneWidget);
       expect(find.text('20 yarışmacı · Kaydır'), findsNothing);
       expect(
@@ -46,13 +89,16 @@ void main() {
         '—',
       );
       expect(
-        find.text('Oynadığın ilk 20 el günlük ligine sayılır'),
+        find.text('Süre bitene kadar oynadığın eller ligine sayılır'),
         findsOneWidget,
       );
       expect(find.textContaining('Beginner'), findsNothing);
       expect(find.textContaining('BEGINNER'), findsNothing);
       expect(find.text('GÜNLÜK ÖDÜLLER'), findsNothing);
-      expect(find.byKey(const ValueKey('league-progress')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('league-competition-rank')),
+        findsNothing,
+      );
       final list = tester.widget<ListView>(
         find.byKey(const ValueKey('league-standings')),
       );

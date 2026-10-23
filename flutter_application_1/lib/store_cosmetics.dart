@@ -21,6 +21,8 @@ class StoreCosmeticsController extends ChangeNotifier {
   String _selectedTile = 'tile0';
   String _selectedBackground = 'bg_menu';
   bool _loaded = false;
+  Future<void>? _loading;
+  Future<void>? _writes;
 
   Set<String> owned(CosmeticKind kind) => Set.unmodifiable(switch (kind) {
     CosmeticKind.rack => _ownedRacks,
@@ -71,9 +73,12 @@ class StoreCosmeticsController extends ChangeNotifier {
   // the black rails without overlapping them.
   double get rackHorizontalInset => _selectedRack == 'rack0' ? 0.074 : 0.098;
 
-  Future<void> load() async {
-    if (_loaded) return;
-    _loaded = true;
+  Future<void> load() {
+    if (_loaded) return Future<void>.value();
+    return _loading ??= _load();
+  }
+
+  Future<void> _load() async {
     try {
       final preferences = SharedPreferencesAsync();
       _ownedRacks.addAll(
@@ -95,7 +100,7 @@ class StoreCosmeticsController extends ChangeNotifier {
       }
       if (await preferences.getBool(_menuBackgroundDefaultKey) != true) {
         _ownedBackgrounds.add('bg_menu');
-        _selectedBackground = 'bg_menu';
+        if (background == null) _selectedBackground = 'bg_menu';
         await preferences.setBool(_menuBackgroundDefaultKey, true);
         await preferences.setString(
           _selectedBackgroundKey,
@@ -105,6 +110,8 @@ class StoreCosmeticsController extends ChangeNotifier {
     } on StateError {
       // Saf widget testlerinde platform deposu kurulmayabilir.
     }
+    _loaded = true;
+    _loading = null;
     notifyListeners();
   }
 
@@ -121,22 +128,43 @@ class StoreCosmeticsController extends ChangeNotifier {
         _selectedBackground = id;
     }
     notifyListeners();
-    unawaited(_persist());
+    final pending = (_writes ?? Future<void>.value()).then(
+      (_) => _persist(
+        owned(CosmeticKind.rack).toList(),
+        owned(CosmeticKind.tile).toList(),
+        owned(CosmeticKind.background).toList(),
+        _selectedRack,
+        _selectedTile,
+        _selectedBackground,
+      ),
+    );
+    _writes = pending;
+    unawaited(
+      pending.whenComplete(() {
+        if (identical(_writes, pending)) _writes = null;
+      }),
+    );
   }
 
-  Future<void> _persist() async {
+  Future<void> flush() => _writes ?? Future<void>.value();
+
+  Future<void> _persist(
+    List<String> racks,
+    List<String> tiles,
+    List<String> backgrounds,
+    String rack,
+    String tile,
+    String background,
+  ) async {
     try {
       final preferences = SharedPreferencesAsync();
       await Future.wait([
-        preferences.setStringList(_ownedRacksKey, _ownedRacks.toList()),
-        preferences.setStringList(_ownedTilesKey, _ownedTiles.toList()),
-        preferences.setStringList(
-          _ownedBackgroundsKey,
-          _ownedBackgrounds.toList(),
-        ),
-        preferences.setString(_selectedRackKey, _selectedRack),
-        preferences.setString(_selectedTileKey, _selectedTile),
-        preferences.setString(_selectedBackgroundKey, _selectedBackground),
+        preferences.setStringList(_ownedRacksKey, racks),
+        preferences.setStringList(_ownedTilesKey, tiles),
+        preferences.setStringList(_ownedBackgroundsKey, backgrounds),
+        preferences.setString(_selectedRackKey, rack),
+        preferences.setString(_selectedTileKey, tile),
+        preferences.setString(_selectedBackgroundKey, background),
       ]);
     } on StateError {
       // Test ortamında seçim, süreç ömrü boyunca denetleyicide kalır.
@@ -145,3 +173,29 @@ class StoreCosmeticsController extends ChangeNotifier {
 }
 
 final storeCosmetics = StoreCosmeticsController();
+
+/// Uses the same live selection in the menu, store and game.
+class StoreBackground extends StatelessWidget {
+  final int cacheWidth;
+  const StoreBackground({super.key, this.cacheWidth = 1280});
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: storeCosmetics,
+    builder: (context, _) {
+      final color = storeCosmetics.backgroundColor;
+      return color != null
+          ? ColoredBox(
+              key: ValueKey(storeCosmetics.selected(CosmeticKind.background)),
+              color: color,
+            )
+          : Image.asset(
+              storeCosmetics.backgroundAsset,
+              key: ValueKey(storeCosmetics.backgroundAsset),
+              fit: BoxFit.cover,
+              cacheWidth: cacheWidth,
+              filterQuality: FilterQuality.medium,
+            );
+    },
+  );
+}

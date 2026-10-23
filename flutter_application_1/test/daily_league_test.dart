@@ -61,7 +61,7 @@ void main() {
       await round(6);
       expect(league.takeRankNotice()!.completedRounds, 6);
       now = league.deadline!;
-      league.refresh();
+      await league.refresh();
       for (var n = 1; n <= 3; n++) {
         await round(n);
       }
@@ -93,7 +93,7 @@ void main() {
     }
     final before = league.standings.map((e) => e.penalty).toList();
     now = now.add(const Duration(hours: 3));
-    league.refresh();
+    await league.refresh();
     expect(league.standings.map((e) => e.penalty), before);
     final reopened = DailyLeagueController(now: () => now, wallet: wallet);
     await reopened.load();
@@ -129,7 +129,7 @@ void main() {
     expect(league.completedRounds, 0);
   });
   test(
-    '20 rounds freeze results and award exactly once across reloads',
+    'more than 20 hands count until expiry and rewards are awarded once',
     () async {
       final initial = wallet.coins;
       for (var i = 1; i <= 19; i++) {
@@ -137,12 +137,12 @@ void main() {
       }
       expect(wallet.coins, initial);
       await round(20);
-      expect(league.finalRank, 1);
-      expect(wallet.coins, initial + 3000);
-      expect(wallet.leagueStars, 3);
+      expect(league.finalRank, isNull);
+      expect(wallet.coins, initial);
+      expect(wallet.leagueStars, 0);
       final totals = league.standings.map((e) => e.penalty).toList();
-      expect(await round(21), isFalse);
-      expect(league.standings.map((e) => e.penalty), totals);
+      expect(await round(21), isTrue);
+      expect(league.standings.map((e) => e.penalty), isNot(totals));
       final reloadedWallet = PlayerProgressController();
       await reloadedWallet.load();
       final reopened = DailyLeagueController(
@@ -150,9 +150,20 @@ void main() {
         wallet: reloadedWallet,
       );
       await reopened.load();
+      expect(reloadedWallet.coins, initial);
+      expect(reopened.completedRounds, 21);
+      expect(reopened.complete, isFalse);
+      now = reopened.deadline!;
+      await reopened.refresh();
       expect(reloadedWallet.coins, initial + 3000);
       expect(reloadedWallet.leagueStars, 3);
-      expect(reopened.complete, isTrue);
+      expect(reopened.completedRounds, 0);
+      final reopenedAgain = DailyLeagueController(
+        now: () => now,
+        wallet: reloadedWallet,
+      );
+      await reopenedAgain.load();
+      expect(reloadedWallet.coins, initial + 3000);
     },
   );
   for (final rank in [1, 2, 3, 4]) {
@@ -174,21 +185,23 @@ void main() {
       expect(league.playerRank, rank);
       expect(league.standings.firstWhere((e) => e.id == 4).rank, rank);
       final prize = LeaguePrize.forRank(rank);
+      now = league.deadline!;
+      await league.refresh();
       expect(wallet.coins, initial + prize.coins);
       expect(wallet.leagueStars, prize.stars);
     });
   }
-  test('expiry resets unfinished scores without awarding anything', () async {
+  test('expiry awards a played cycle even with only one hand', () async {
     await round(1);
     final initial = wallet.coins;
     final oldDeadline = league.deadline!;
     now = oldDeadline.add(const Duration(hours: 49));
-    league.refresh();
+    await league.refresh();
     expect(league.completedRounds, 0);
     expect(league.standings.every((e) => e.penalty == 0), isTrue);
     expect(league.deadline, oldDeadline.add(const Duration(hours: 72)));
-    expect(wallet.coins, initial);
-    expect(wallet.leagueStars, 0);
+    expect(wallet.coins, initial + 3000);
+    expect(wallet.leagueStars, 3);
     expect(await round(2), isTrue);
     expect(league.completedRounds, 1);
   });
@@ -198,14 +211,14 @@ void main() {
         await round(cycle * 20 + i);
       }
       now = league.deadline!;
-      league.refresh();
+      await league.refresh();
     }
     expect(wallet.leagueStars, 6);
     expect(league.tier, 'Amateur');
     expect(league.completedRounds, 0);
     expect(league.nextTierStars, 15);
   });
-  test('saved final result recovers reward missing from wallet', () async {
+  test('old 20-hand save resumes play and awards only at expiry', () async {
     final deadline = now.add(const Duration(hours: 24));
     await SharedPreferencesAsync().setString(
       DailyLeagueController.storageKey,
@@ -218,9 +231,43 @@ void main() {
     );
     final reopened = DailyLeagueController(now: () => now, wallet: wallet);
     await reopened.load();
+    expect(wallet.coins, initialPlayerCoins);
+    expect(reopened.complete, isFalse);
+    now = deadline;
+    await reopened.refresh();
     expect(wallet.coins, initialPlayerCoins + 3000);
     expect(wallet.leagueStars, 3);
   });
+  test('a cycle with no played hands has no reward', () async {
+    final initial = wallet.coins;
+    now = league.deadline!;
+    await league.refresh();
+    expect(wallet.coins, initial);
+    expect(wallet.leagueStars, 0);
+  });
+  test('pending expired-cycle prize recovers once after reopening', () async {
+    final end = now.add(const Duration(hours: 24));
+    final initial = wallet.coins;
+    await SharedPreferencesAsync().setString(
+      DailyLeagueController.storageKey,
+      jsonEncode({
+        'deadline': end.millisecondsSinceEpoch,
+        'totals': List.filled(20, 0),
+        'roundIds': [],
+        'pendingPrizes': [
+          {'id': 'league-interrupted-cycle', 'coins': 3000, 'stars': 3},
+        ],
+      }),
+    );
+    final reopened = DailyLeagueController(now: () => now, wallet: wallet);
+    await reopened.load();
+    expect(wallet.coins, initial + 3000);
+    final reopenedAgain = DailyLeagueController(now: () => now, wallet: wallet);
+    await reopenedAgain.load();
+    expect(wallet.coins, initial + 3000);
+    expect(wallet.leagueStars, 3);
+  });
+
   test('four bot tables play actual deterministic rounds', () {
     final tables = simulateLeagueTables(seed: 2026);
     final repeated = simulateLeagueTables(seed: 2026);

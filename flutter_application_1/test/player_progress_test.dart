@@ -5,6 +5,23 @@ import 'package:flutter_application_1/game_launch.dart';
 import 'package:flutter_application_1/player_progress.dart';
 
 void main() {
+  test('highest opening keeps the record across reloads', () async {
+    final preferences = SharedPreferencesAsync();
+    await preferences.clear();
+    final controller = PlayerProgressController();
+    await controller.load();
+    controller.recordOpening(156);
+    controller.recordOpening(112);
+    expect(controller.highestOpening, 156);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final reopened = PlayerProgressController();
+    await reopened.load();
+    expect(reopened.highestOpening, 156);
+    reopened.recordOpening(202);
+    expect(reopened.highestOpening, 202);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await preferences.clear();
+  });
   late PlayerProgressController progress;
 
   setUp(() {

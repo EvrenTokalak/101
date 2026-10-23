@@ -1,3 +1,5 @@
+import 'panel_artwork_test_support.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +9,7 @@ import 'package:flutter_application_1/app_settings_dialog.dart';
 import 'package:flutter_application_1/app_language.dart';
 
 void main() {
+  preparePanelArtwork();
   for (final size in const [
     Size(320, 568),
     Size(390, 844),
@@ -24,6 +27,28 @@ void main() {
       await tester.pumpWidget(const OkeyApp(home: MainMenuScreen()));
       await tester.pump(const Duration(milliseconds: 750));
       expect(tester.takeException(), isNull);
+      final chipBox = tester.renderObject<RenderBox>(
+        find.byKey(const ValueKey('main-xp-chip')),
+      );
+      final progressBox = tester.renderObject<RenderBox>(
+        find.byKey(const ValueKey('home-xp-progress')),
+      );
+      final chipRect = Rect.fromPoints(
+        chipBox.localToGlobal(Offset.zero),
+        chipBox.localToGlobal(chipBox.size.bottomRight(Offset.zero)),
+      );
+      final progressRect = Rect.fromPoints(
+        progressBox.localToGlobal(Offset.zero),
+        progressBox.localToGlobal(progressBox.size.bottomRight(Offset.zero)),
+      );
+      expect(
+        progressRect.right,
+        lessThanOrEqualTo(chipRect.left + chipRect.width * .90),
+      );
+      expect(
+        progressRect.bottom,
+        lessThanOrEqualTo(chipRect.top + chipRect.height * .79),
+      );
       if (size.width / size.height >= 1.2 && size.height >= 600) {
         final layout = tester.getRect(
           find.byKey(const ValueKey('landscape-home-layout')),
@@ -51,7 +76,7 @@ void main() {
         find.byKey(const ValueKey('settings-close-button')).hitTestable(),
         findsOneWidget,
       );
-      expect(panel.width / panel.height, closeTo(1671 / 941, 0.001));
+      expect(panel.width / panel.height, closeTo(1.5, 0.001));
       final cards = find.byKey(const ValueKey('settings-option-card'));
       expect(cards, findsNWidgets(9));
       expect(
@@ -76,6 +101,11 @@ void main() {
       final soundSwitch = find
           .byKey(const ValueKey('settings-switch-indicator'))
           .first;
+      expect(tester.getSize(soundSwitch), const Size(50, 24));
+      expect(
+        tester.widget<Text>(find.text('Ses Efektleri')).style?.fontSize,
+        closeTo(15 * 900 / 620, .01),
+      );
       Alignment soundKnobAlignment() =>
           tester
                   .widget<AnimatedAlign>(

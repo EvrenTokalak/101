@@ -62,3 +62,12 @@ flutter_application_1/.last_chrome_run_dir
 /.codex-build/
 /.last_*
 /görseller/*.zip
+
+# Local hosting checkout and generated APK deliveries
+/sites/
+/releases/*.apk
+/.tool-home/
+**/*.keystore
+**/*.jks
+**/key.properties
+~$*

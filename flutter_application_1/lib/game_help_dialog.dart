@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
 
+import 'dart:math' as math;
+
 import 'app_controls.dart';
 import 'app_language.dart';
 
 String _helpText(String tr, String en, {String? de}) =>
     appText(tr, en, german: de);
+
+Size gameHelpPanelSize(BoxConstraints bounds) {
+  final base = appArtworkPanelSize(bounds);
+  return Size(math.min(bounds.maxWidth, base.width * 1.16), base.height);
+}
 
 class GameHelpDialog extends StatefulWidget {
   const GameHelpDialog({super.key});
@@ -14,7 +21,6 @@ class GameHelpDialog extends StatefulWidget {
 }
 
 class _GameHelpDialogState extends State<GameHelpDialog> {
-  static const _gold = Color(0xFFF0CC5A);
   final PageController _controller = PageController();
   int page = 0;
 
@@ -26,294 +32,399 @@ class _GameHelpDialogState extends State<GameHelpDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final popupSize = appPopupSize(context);
-    return Dialog(
-      key: const ValueKey('game-help-dialog'),
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(12),
-      child: Container(
-        width: popupSize.width,
-        height: popupSize.height,
-        decoration: BoxDecoration(
-          color: const Color(0xFF07100F),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _gold, width: 2.5),
-          boxShadow: const [BoxShadow(color: Colors.black87, blurRadius: 28)],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: [
-            Container(
-              height: 58,
-              padding: const EdgeInsets.fromLTRB(18, 6, 8, 6),
-              color: const Color(0xFF123C2E),
-              child: Row(
-                children: [
-                  const Icon(Icons.help_rounded, color: _gold, size: 34),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _helpText(
-                        '101 OKEY NASIL OYNANIR?',
-                        'HOW TO PLAY 101 OKEY?',
-                        de: 'WIE SPIELT MAN 101 OKEY?',
-                      ),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 19,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ),
-                  AppCloseButton(onTap: () => Navigator.of(context).pop()),
-                ],
-              ),
-            ),
-            Expanded(
-              child: PageView(
-                controller: _controller,
-                onPageChanged: (value) => setState(() => page = value),
-                children: const [
-                  _QuickGuide(),
-                  _MeldExamples(),
-                  _GeneralRules(),
-                ],
-              ),
-            ),
-            Container(
-              height: 54,
-              color: Colors.black26,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    key: const ValueKey('help-previous'),
-                    onPressed: page == 0
-                        ? null
-                        : () => _controller.previousPage(
-                            duration: const Duration(milliseconds: 220),
-                            curve: Curves.easeOut,
-                          ),
-                    icon: const Icon(Icons.chevron_left_rounded),
-                  ),
-                  for (var index = 0; index < 3; index++)
-                    Container(
-                      key: ValueKey('help-dot-$index'),
-                      width: 11,
-                      height: 11,
-                      margin: const EdgeInsets.symmetric(horizontal: 6),
-                      decoration: BoxDecoration(
-                        color: page == index ? Colors.white : Colors.white24,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  IconButton(
-                    key: const ValueKey('help-next'),
-                    onPressed: page == 2
-                        ? null
-                        : () => _controller.nextPage(
-                            duration: const Duration(milliseconds: 220),
-                            curve: Curves.easeOut,
-                          ),
-                    icon: const Icon(Icons.chevron_right_rounded),
-                  ),
-                ],
-              ),
-            ),
-          ],
+    return SafeArea(
+      child: Dialog(
+        key: const ValueKey('game-help-dialog'),
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, bounds) =>
+              _panel(context, gameHelpPanelSize(bounds)),
         ),
       ),
     );
   }
+
+  Widget _panel(BuildContext context, Size popupSize) => AppPopupSurface(
+    width: popupSize.width,
+    height: popupSize.height,
+    artworkAsset: appHelpPanelAsset,
+    artworkTitle: Text(
+      _helpText('NASIL OYNANIR', 'HOW TO PLAY', de: 'SPIELANLEITUNG'),
+      maxLines: 1,
+      softWrap: false,
+    ),
+    onOutsideClose: () => Navigator.of(context).pop(),
+    closeOnFrame: true,
+    padding: EdgeInsets.fromLTRB(
+      popupSize.width * .055,
+      popupSize.height * .235,
+      popupSize.width * .055,
+      popupSize.height * .09,
+    ),
+    child: Column(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            key: const ValueKey('help-page-viewport'),
+            borderRadius: BorderRadius.circular(12),
+            child: PageView(
+              controller: _controller,
+              physics: const ClampingScrollPhysics(),
+              clipBehavior: Clip.hardEdge,
+              onPageChanged: (value) => setState(() => page = value),
+              children: const [
+                RepaintBoundary(child: _QuickGuide()),
+                RepaintBoundary(child: _MeldExamples()),
+                RepaintBoundary(child: _GeneralRules()),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 44,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                key: const ValueKey('help-previous'),
+                color: const Color(0xFFFFDF74),
+                disabledColor: Colors.white38,
+                iconSize: 30,
+                tooltip: _helpText(
+                  'Önceki sayfa',
+                  'Previous page',
+                  de: 'Vorherige Seite',
+                ),
+                onPressed: page == 0
+                    ? null
+                    : () => _controller.previousPage(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                      ),
+                icon: const Icon(Icons.chevron_left_rounded),
+              ),
+              const SizedBox(width: 16),
+              IconButton(
+                key: const ValueKey('help-next'),
+                color: const Color(0xFFFFDF74),
+                disabledColor: Colors.white38,
+                iconSize: 30,
+                tooltip: _helpText(
+                  'Sonraki sayfa',
+                  'Next page',
+                  de: 'Nächste Seite',
+                ),
+                onPressed: page == 2
+                    ? null
+                    : () => _controller.nextPage(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                      ),
+                icon: const Icon(Icons.chevron_right_rounded),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _QuickGuide extends StatelessWidget {
   const _QuickGuide();
 
+  static List<String> get rules => [
+    _helpText(
+      'Her tur taş çekin; seri için en az 101 puan veya çift için 5 çift toplayın.',
+      'Draw each turn; collect 101 meld points or five pairs.',
+      de: 'Ziehe pro Zug; sammle 101 Satzpunkte oder fünf Paare.',
+    ),
+    _helpText(
+      'SERİ / ÇİFT DİZ ile taşları düzenleyin; AÇ ile uygun perleri masaya indirin.',
+      'Arrange with MELD / PAIRS; use OPEN to lay them on the table.',
+      de: 'Ordne mit SATZ / PAARE; öffne passende Sätze am Tisch.',
+    ),
+    _helpText(
+      'Elinizi açtıktan sonra İŞLE ile uygun taşları masadaki açık perlere ekleyin.',
+      'After opening, use ADD to extend suitable melds on the table.',
+      de: 'Lege nach dem Öffnen passende Steine mit ANLEGEN an.',
+    ),
+    _helpText(
+      'Her turu bir taş atarak tamamlayın; elinizdeki son taşı atarak eli bitirin.',
+      'End each turn by discarding; discard your last tile to finish.',
+      de: 'Lege am Zugende einen Stein ab; der letzte beendet die Runde.',
+    ),
+    _helpText(
+      'Taşları elle dizebilir, uygun taşları açık perlere sürükleyip bırakarak işleyebilirsiniz.',
+      'Reorder tiles by hand or drag matching tiles onto open melds.',
+      de: 'Ordne Steine per Hand oder ziehe passende an offene Sätze.',
+    ),
+  ];
+
+  static double _fontSize(BuildContext context, BoxConstraints bounds) {
+    final columnWidth = (bounds.maxWidth - 12) / 2;
+    bool fits(double font) {
+      final left = rules.fold<double>(
+        0,
+        (total, rule) =>
+            total +
+            5 +
+            math.max(
+              _helpTextHeight(context, rule, font, columnWidth - 25, 1.22),
+              (font + 1) * 1.22,
+            ),
+      );
+      final right = _ButtonGuide.controls.fold<double>(
+        14,
+        (total, control) =>
+            total +
+            _ButtonGuide.rowHeight(context, columnWidth, control.$4, font),
+      );
+      return math.max(left, right) <= bounds.maxHeight - 2;
+    }
+
+    var lower = 1.0;
+    var upper = _GeneralRules._fontSize(context, bounds, _GeneralRules.rules);
+    if (fits(upper)) return upper;
+    for (var attempt = 0; attempt < 14; attempt++) {
+      final font = (lower + upper) / 2;
+      if (fits(font)) {
+        lower = font;
+      } else {
+        upper = font;
+      }
+    }
+    return lower;
+  }
+
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(18),
-    child: Row(
-      children: [
-        Expanded(
-          flex: 5,
-          child: _HelpPanel(
-            child: LayoutBuilder(
-              builder: (context, constraints) => FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.topLeft,
-                child: SizedBox(
-                  width: constraints.maxWidth,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _Step(
-                        '1.',
-                        _helpText(
-                          'AÇILIŞ değerine ulaşın.',
-                          'Reach the opening requirement.',
-                          de: 'Erreiche den Eröffnungswert.',
-                        ),
-                      ),
-                      _Step(
-                        '2.',
-                        _helpText(
-                          'SERİ ve ÇİFT butonları ile perleri açın.',
-                          'Use OPEN MELD or OPEN PAIRS to open your hand.',
-                          de: 'Öffne deine Hand mit SATZ oder PAARE.',
-                        ),
-                      ),
-                      _Step(
-                        '3.',
-                        _helpText(
-                          'İŞLE butonu ile işler taşlarınızı işleyin.',
-                          'Use ADD to place matching tiles on open melds.',
-                          de: 'Lege passende Steine mit ANLEGEN an.',
-                        ),
-                      ),
-                      _Step(
-                        '4.',
-                        _helpText(
-                          'Son taşınızı yan tarafa atarak bitin.',
-                          'Finish by discarding your last tile to the side.',
-                          de: 'Beende die Runde, indem du den letzten Stein ablegst.',
-                        ),
-                      ),
-                      _Step(
-                        '5.',
-                        _helpText(
-                          'İşler taşlarınızı elle işleyebilirsiniz.',
-                          'You can also add matching tiles manually.',
-                          de: 'Passende Steine kannst du auch manuell anlegen.',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+    key: const ValueKey('quick-guide-page'),
+    padding: const EdgeInsets.fromLTRB(2, 2, 2, 0),
+    child: LayoutBuilder(
+      builder: (context, bounds) {
+        final fontSize = _fontSize(context, bounds);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              flex: 3,
+              child: _RuleColumn(
+                startIndex: 0,
+                keyPrefix: 'quick-rule',
+                fontSize: fontSize,
+                rules: rules,
               ),
             ),
-          ),
-        ),
-        const SizedBox(width: 16),
-        const Expanded(flex: 4, child: _ButtonGuide()),
-      ],
-    ),
-  );
-}
-
-class _Step extends StatelessWidget {
-  final String number;
-  final String text;
-  const _Step(this.number, this.text);
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          number,
-          style: const TextStyle(
-            color: Color(0xFFF0CC5A),
-            fontSize: 17,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      ],
+            const SizedBox(width: 12),
+            Expanded(flex: 3, child: _ButtonGuide(fontSize: fontSize)),
+          ],
+        );
+      },
     ),
   );
 }
 
 class _ButtonGuide extends StatelessWidget {
-  const _ButtonGuide();
+  final double fontSize;
+  const _ButtonGuide({required this.fontSize});
+  static double rowHeight(
+    BuildContext context,
+    double width,
+    String text,
+    double font,
+  ) =>
+      math.max(
+        font * 1.6,
+        _helpTextHeight(context, text, font, (width - 21) * 6 / 11, 1.05),
+      ) +
+      2;
 
+  static List<(String, String, String, String)> get controls => [
+    (
+      'open-run',
+      _helpText('SERİ AÇ', 'OPEN MELD', de: 'SATZ ÖFFNEN'),
+      'green',
+      _helpText(
+        'Serileri masaya açar.',
+        'Opens your melds.',
+        de: 'Öffnet deine Sätze.',
+      ),
+    ),
+    (
+      'sort-run',
+      _helpText('SERİ DİZ', 'SORT MELDS', de: 'SÄTZE ORDNEN'),
+      'green',
+      _helpText(
+        'Taşları seri dizer.',
+        'Sorts tiles into melds.',
+        de: 'Ordnet die Sätze.',
+      ),
+    ),
+    (
+      'open-pairs',
+      _helpText('ÇİFT AÇ', 'OPEN PAIRS', de: 'PAARE ÖFFNEN'),
+      'gold',
+      _helpText(
+        'Çiftleri masaya açar.',
+        'Opens your pairs.',
+        de: 'Öffnet deine Paare.',
+      ),
+    ),
+    (
+      'sort-pairs',
+      _helpText('ÇİFT DİZ', 'SORT PAIRS', de: 'PAARE ORDNEN'),
+      'gold',
+      _helpText(
+        'Eş taşları yan yana dizer.',
+        'Groups matching tiles.',
+        de: 'Ordnet gleiche Steine.',
+      ),
+    ),
+    (
+      'process',
+      _helpText('İŞLE', 'ADD', de: 'ANLEGEN'),
+      'blue',
+      _helpText(
+        'Açık perlere taş ekler.',
+        'Adds tiles to open melds.',
+        de: 'Erweitert offene Sätze.',
+      ),
+    ),
+    (
+      'draw',
+      _helpText('TAŞ ÇEK', 'DRAW', de: 'ZIEHEN'),
+      'blue',
+      _helpText(
+        'Ortadan bir taş çeker.',
+        'Draws from the pile.',
+        de: 'Zieht vom Stapel.',
+      ),
+    ),
+  ];
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Expanded(
-        child: _HelpPanel(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 14,
-                children: [
-                  _GuideButton(
-                    Icons.view_week_rounded,
-                    _helpText('SERİ', 'MELD', de: 'SATZ'),
-                  ),
-                  _GuideButton(
-                    Icons.filter_2_rounded,
-                    _helpText('ÇİFT', 'PAIRS', de: 'PAARE'),
-                  ),
-                  _GuideButton(
-                    Icons.add_box_rounded,
-                    _helpText('İŞLE', 'ADD', de: 'ANLEGEN'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Text(
-                _helpText(
-                  'Butonları Göster / Sakla',
-                  'Show / Hide Buttons',
-                  de: 'Tasten ein-/ausblenden',
-                ),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const Icon(
-                Icons.arrow_downward_rounded,
-                color: Colors.white70,
-                size: 32,
-              ),
-            ],
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, bounds) {
+      return Container(
+        key: const ValueKey('help-game-controls'),
+        padding: const EdgeInsets.all(7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B352A).withValues(alpha: .85),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: const Color(0xFFBBA95F).withValues(alpha: .45),
           ),
         ),
-      ),
-    ],
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (final (index, control) in controls.indexed)
+              SizedBox(
+                height: rowHeight(
+                  context,
+                  bounds.maxWidth,
+                  control.$4,
+                  fontSize,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 1),
+                  child: Row(
+                    children: [
+                      if (index.isEven) ...[
+                        Expanded(
+                          flex: 5,
+                          child: _GuideButton(
+                            id: control.$1,
+                            label: control.$2,
+                            color: control.$3,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                      ],
+                      Expanded(
+                        flex: 6,
+                        child: Text(
+                          control.$4,
+                          key: ValueKey(
+                            'help-control-description-${control.$1}',
+                          ),
+                          textAlign: index.isEven
+                              ? TextAlign.left
+                              : TextAlign.right,
+                          style: TextStyle(
+                            color: const Color(0xFFFFF3CF),
+                            fontSize: fontSize,
+                            height: 1.05,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      if (index.isOdd) ...[
+                        const SizedBox(width: 7),
+                        Expanded(
+                          flex: 5,
+                          child: _GuideButton(
+                            id: control.$1,
+                            label: control.$2,
+                            color: control.$3,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    },
   );
 }
 
 class _GuideButton extends StatelessWidget {
-  final IconData icon;
+  final String id;
   final String label;
-  const _GuideButton(this.icon, this.label);
+  final String color;
+  const _GuideButton({
+    required this.id,
+    required this.label,
+    required this.color,
+  });
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      CircleAvatar(
-        radius: 27,
-        backgroundColor: const Color(0xFF123C2E),
-        child: Icon(icon, color: Colors.white, size: 31),
-      ),
-      const SizedBox(height: 4),
-      Text(
-        label,
-        style: const TextStyle(
-          color: Color(0xFFF0CC5A),
-          fontWeight: FontWeight.w900,
+  Widget build(BuildContext context) => Semantics(
+    label: label,
+    image: true,
+    child: DecoratedBox(
+      key: ValueKey('help-control-$id'),
+      decoration: BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('images/ui/action_$color.png'),
+          fit: BoxFit.fill,
         ),
       ),
-    ],
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              maxLines: 1,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .25,
+                height: 1,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -322,18 +433,10 @@ class _MeldExamples extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
+    key: const ValueKey('meld-examples-page'),
     padding: const EdgeInsets.all(8),
     child: Column(
       children: [
-        Text(
-          _helpText('PER ÖRNEKLERİ', 'MELD EXAMPLES', de: 'SATZBEISPIELE'),
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        const SizedBox(height: 5),
         Expanded(
           child: Row(
             children: [
@@ -446,17 +549,21 @@ class _Example extends StatelessWidget {
   const _Example(this.correct, this.tiles);
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      Icon(
-        correct ? Icons.check_rounded : Icons.close_rounded,
-        color: correct ? Colors.greenAccent : Colors.redAccent,
-        size: 38,
-      ),
-      const SizedBox(width: 12),
-      for (final tile in tiles) _HelpTile(tile.$1, tile.$2),
-    ],
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          correct ? Icons.check_rounded : Icons.close_rounded,
+          color: correct ? Colors.greenAccent : Colors.redAccent,
+          size: 38,
+        ),
+        const SizedBox(width: 12),
+        for (final tile in tiles) _HelpTile(tile.$1, tile.$2),
+      ],
+    ),
   );
 }
 
@@ -509,122 +616,152 @@ class _HelpTile extends StatelessWidget {
 class _GeneralRules extends StatelessWidget {
   const _GeneralRules();
 
+  static double _fontSize(
+    BuildContext context,
+    BoxConstraints bounds,
+    List<String> rules,
+  ) {
+    final textWidth = ((bounds.maxWidth - 19) / 2 - 25).clamp(
+      1.0,
+      double.infinity,
+    );
+    final baseStyle = DefaultTextStyle.of(context).style;
+    double height(String text, double font, FontWeight weight, double width) {
+      final painter = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: baseStyle.merge(
+            TextStyle(fontSize: font, height: 1.22, fontWeight: weight),
+          ),
+        ),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout(maxWidth: width);
+      final result = painter.height;
+      painter.dispose();
+      return result;
+    }
+
+    bool fits(double font) {
+      for (final start in [0, 5]) {
+        var total = 0.0;
+        for (var index = start; index < start + 5; index++) {
+          total +=
+              5 +
+              math.max(
+                height(rules[index], font, FontWeight.w700, textWidth),
+                height('${index + 1}.', font + 1, FontWeight.w900, 25),
+              );
+        }
+        if (total > bounds.maxHeight - 1) return false;
+      }
+      return true;
+    }
+
+    if (fits(16)) return 16;
+    var lower = 1.0;
+    var upper = 16.0;
+    for (var attempt = 0; attempt < 12; attempt++) {
+      final candidate = (lower + upper) / 2;
+      if (fits(candidate)) {
+        lower = candidate;
+      } else {
+        upper = candidate;
+      }
+    }
+    return lower;
+  }
+
+  static List<String> get rules => [
+    _helpText(
+      'Oyun sonu en az puana sahip oyuncu oyunu kazanır.',
+      'The player with the lowest score wins the game.',
+      de: 'Der Spieler mit den wenigsten Punkten gewinnt.',
+    ),
+    _helpText(
+      'Biten −101, açmayan 202; diğerleri kalan puanı alır.',
+      'Finish: −101; unopened: 202; others score their rack.',
+      de: 'Beendet: −101; ungeöffnet: 202; sonst zählt der Rest.',
+    ),
+    _helpText(
+      'Çift açanın kalan taşları, biri bitince iki kat sayılır.',
+      'After a pair opening, remaining rack points count double.',
+      de: 'Nach einer Paareröffnung zählen die Restpunkte doppelt.',
+    ),
+    _helpText(
+      'Çift veya okeyle bitişte ceza puanları ikiye katlanır.',
+      'Finishing with a pair or okey doubles penalty points.',
+      de: 'Ein Abschluss mit Paar oder Okey verdoppelt Strafpunkte.',
+    ),
+    _helpText(
+      'İşler taş ya da okey atmak 101 ceza puanı getirir.',
+      'Discarding a playable tile or okey adds 101 points.',
+      de: 'Anlegbaren Stein oder Okey ablegen: 101 Strafpunkte.',
+    ),
+    _helpText(
+      'Gösterge, yalnız ilk çift açılışında her taşla eşleşir.',
+      'The indicator pairs freely only in the first pair opening.',
+      de: 'Die Anzeige paart sich nur beim ersten Öffnen beliebig.',
+    ),
+    _helpText(
+      'Çift açan oyuncu daha sonra seri açılışı yapamaz.',
+      'Opening pairs prevents a later run or group opening.',
+      de: 'Nach Paaren sind Reihen- und Gruppeneröffnungen gesperrt.',
+    ),
+    _helpText(
+      'Tüm taşlar uygun diziliyse elden bitiş yapılabilir.',
+      'With all tiles in valid melds, you can finish from hand.',
+      de: 'Mit passend geordneten Steinen ist ein Handabschluss möglich.',
+    ),
+    _helpText(
+      'Katlamalıda sonraki açılış, önceki değerden 1 fazladır.',
+      'In progressive mode, each opening raises the limit by 1.',
+      de: 'Progressiv: Jede Eröffnung erhöht die Grenze um 1.',
+    ),
+    _helpText(
+      'El açtıktan sonra elde kalan her okey 101 puandır.',
+      'After opening, each okey left on the rack is worth 101.',
+      de: 'Nach dem Öffnen zählt jeder übrige Okey 101 Punkte.',
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final rules = [
-      _helpText(
-        'Oyun sonu en az puana sahip oyuncu oyunu kazanır.',
-        'The player with the lowest score wins the game.',
-        de: 'Der Spieler mit den wenigsten Punkten gewinnt.',
-      ),
-      _helpText(
-        'El açmayan oyuncu 202 ceza puanı alır.',
-        'A player who has not opened receives 202 penalty points.',
-        de: 'Wer nicht eröffnet hat, erhält 202 Strafpunkte.',
-      ),
-      _helpText(
-        'Çift açan oyuncu, oyunda biten varsa ıstakada kalanın 2 katını alır.',
-        'A player who opened pairs receives twice the value left on the rack when someone finishes.',
-        de: 'Wer mit Paaren eröffnet hat, erhält beim Rundenende den doppelten Restwert.',
-      ),
-      _helpText(
-        'Çifte veya okey ile biten varsa puanlar 2’şer katına çıkar.',
-        'Finishing with a pair or an okey doubles the scores.',
-        de: 'Ein Abschluss mit Paar oder Okey verdoppelt die Punkte.',
-      ),
-      _helpText(
-        'İşler taş veya okey taşını yere atan oyuncu 101 ceza alır.',
-        'Discarding a playable tile or an okey costs 101 penalty points.',
-        de: 'Das Ablegen eines anlegbaren Steins oder Okeys kostet 101 Strafpunkte.',
-      ),
-      _helpText(
-        'Gösterge taşı yalnız ilk çift açılışında herhangi bir taşla çift oluşturabilir. El açıldıktan sonra ek çift indirirken gösterge kendi sayı ve renginde normal taş sayılır. Örneğin kırmızı 6 göstergeyse kırmızı 6 + sarı 13 geçerli çifttir; seride ve sayı grubunda gösterge normal taştır.',
-        'The indicator tile may pair with any tile only in the initial pair opening. After opening, it keeps its own number and color when laying additional pairs. If red 6 is the indicator, red 6 + yellow 13 is a valid pair. It remains a normal tile in runs and number groups.',
-        de: 'Der Anzeigestein kann nur beim ersten Eröffnen mit Paaren jeden Stein ergänzen. Nach der Eröffnung gelten bei zusätzlichen Paaren seine eigene Zahl und Farbe. Ist die rote 6 die Anzeige, bilden rote 6 und gelbe 13 ein gültiges Paar. In Reihen und Zahlengruppen bleibt er ein normaler Stein.',
-      ),
-      _helpText(
-        'Çift açılış yapan oyuncu daha sonra seri açamaz.',
-        'A player who opens pairs cannot open melds later.',
-        de: 'Wer mit Paaren eröffnet, kann später keine Sätze eröffnen.',
-      ),
-      _helpText(
-        'Tüm taşlar dizili ise her durumda elden bitebilirsiniz.',
-        'You may finish directly from your hand when all tiles are arranged.',
-        de: 'Sind alle Steine geordnet, kannst du direkt aus der Hand beenden.',
-      ),
-      _helpText(
-        'Katlamalı oyunda açılış değerleri, el açan oyuncunun +1 fazlası olur.',
-        'In progressive mode, the next opening must exceed the previous opening by one.',
-        de: 'Im progressiven Modus muss die nächste Eröffnung um eins höher sein.',
-      ),
-      _helpText(
-        'El açtıktan sonra ıstakada kalan okey taşı 101 puan sayılır.',
-        'After opening, an okey left on the rack counts as 101 points.',
-        de: 'Nach dem Eröffnen zählt ein Okey auf der Ablage 101 Punkte.',
-      ),
-      _helpText(
-        'El açan oyuncu biterse -101, bitemezse ıstakada kalan puanı alır.',
-        'A player who opened scores -101 when finishing; otherwise the rack value is added.',
-        de: 'Ein eröffneter Spieler erhält beim Beenden -101, sonst den Restwert der Ablage.',
-      ),
-    ];
+    final rules = _GeneralRules.rules;
     return Padding(
+      key: const ValueKey('general-rules-page'),
       padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
       child: Column(
         children: [
-          Text(
-            _helpText(
-              'GENEL KURALLAR',
-              'GENERAL RULES',
-              de: 'ALLGEMEINE REGELN',
-            ),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 4),
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.topLeft,
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        child: _RuleColumn(
-                          startIndex: 0,
-                          rules: rules.take(5).toList(),
-                        ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final fontSize = _fontSize(context, constraints, rules);
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: _RuleColumn(
+                        fontSize: fontSize,
+                        startIndex: 0,
+                        rules: rules.take(5).toList(),
                       ),
                     ),
-                  ),
-                ),
-                Container(
-                  width: 1,
-                  margin: const EdgeInsets.symmetric(horizontal: 9),
-                  color: Colors.white24,
-                ),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.topLeft,
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        child: _RuleColumn(
-                          startIndex: 5,
-                          rules: rules.skip(5).toList(),
-                        ),
+                    const VerticalDivider(
+                      width: 19,
+                      thickness: 1,
+                      color: Colors.white24,
+                    ),
+                    Expanded(
+                      child: _RuleColumn(
+                        fontSize: fontSize,
+                        startIndex: 5,
+                        rules: rules.skip(5).toList(),
                       ),
                     ),
-                  ),
-                ),
-              ],
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -634,10 +771,17 @@ class _GeneralRules extends StatelessWidget {
 }
 
 class _RuleColumn extends StatelessWidget {
+  final String keyPrefix;
+  final double fontSize;
   final int startIndex;
   final List<String> rules;
 
-  const _RuleColumn({required this.startIndex, required this.rules});
+  const _RuleColumn({
+    this.keyPrefix = 'general-rule',
+    required this.startIndex,
+    required this.rules,
+    required this.fontSize,
+  });
 
   @override
   Widget build(BuildContext context) => Column(
@@ -653,9 +797,10 @@ class _RuleColumn extends StatelessWidget {
                 width: 25,
                 child: Text(
                   '${startIndex + index + 1}.',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Color(0xFFF0CC5A),
-                    fontSize: 15,
+                    fontSize: fontSize + 1,
+                    height: 1.22,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -663,9 +808,10 @@ class _RuleColumn extends StatelessWidget {
               Expanded(
                 child: Text(
                   rules[index],
-                  style: const TextStyle(
+                  key: ValueKey('$keyPrefix-${startIndex + index + 1}'),
+                  style: TextStyle(
                     color: Colors.white,
-                    fontSize: 14.5,
+                    fontSize: fontSize,
                     height: 1.22,
                     fontWeight: FontWeight.w700,
                   ),
@@ -678,19 +824,24 @@ class _RuleColumn extends StatelessWidget {
   );
 }
 
-class _HelpPanel extends StatelessWidget {
-  final Widget child;
-  const _HelpPanel({required this.child});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: const Color(0xFF171D1B),
-      borderRadius: BorderRadius.circular(28),
-      border: Border.all(color: Colors.white10),
+double _helpTextHeight(
+  BuildContext context,
+  String text,
+  double font,
+  double width,
+  double height,
+) {
+  final painter = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: DefaultTextStyle.of(context).style.merge(
+        TextStyle(fontSize: font, fontWeight: FontWeight.w700, height: height),
+      ),
     ),
-    child: child,
-  );
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout(maxWidth: math.max(1, width));
+  final result = painter.height;
+  painter.dispose();
+  return result;
 }

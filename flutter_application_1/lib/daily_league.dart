@@ -30,7 +30,6 @@ const leagueBotNames = [
   'Aslı',
   'Eren',
 ];
-const leagueRoundLimit = 20;
 const leagueTierNames = ['Beginner', 'Amateur', 'Skilled', 'Pro', 'Master'];
 const leagueTierThresholds = [0, 5, 15, 30, 50];
 
@@ -107,6 +106,8 @@ class DailyLeagueController extends ChangeNotifier {
   final LeagueReminder? reminder;
   Future<void>? _loading;
   Future<void> _writes = Future.value();
+  Future<void> _settlements = Future.value();
+  final List<({String id, int coins, int stars})> _pendingPrizes = [];
   DateTime? _deadline;
   List<int> _totals = List.filled(20, 0);
   List<String> _roundIds = [];
@@ -132,7 +133,7 @@ class DailyLeagueController extends ChangeNotifier {
   bool get initialized => _deadline != null;
   DateTime? get deadline => _deadline;
   int get completedRounds => _roundIds.length;
-  bool get complete => completedRounds == leagueRoundLimit;
+  bool get complete => initialized && !_deadline!.isAfter(_now());
   int? get finalRank => _finalRank;
   int get stars => _wallet.leagueStars;
   int get tierIndex => leagueTierThresholds.lastIndexWhere((n) => stars >= n);
@@ -182,9 +183,12 @@ class DailyLeagueController extends ChangeNotifier {
   @visibleForTesting
   Future<void> resetForTesting({bool waitForWrites = true}) async {
     if (waitForWrites) await _writes;
+    if (waitForWrites) await _settlements;
     // An already-awaited widget-test write can belong to a finished FakeAsync
     // zone. Start subsequent test writes in the current zone instead.
     _writes = Future.value();
+    _settlements = Future.value();
+    _pendingPrizes.clear();
     _loading = null;
     _lastRankNoticeRound = 0;
     lastRoundUpdate = null;
@@ -201,15 +205,22 @@ class DailyLeagueController extends ChangeNotifier {
         final data = jsonDecode(raw) as Map<String, dynamic>;
         final totals = (data['totals'] as List).cast<int>();
         final ids = (data['roundIds'] as List).cast<String>();
-        if (totals.length == 20 &&
-            ids.length <= leagueRoundLimit &&
-            ids.toSet().length == ids.length) {
+        if (totals.length == 20 && ids.toSet().length == ids.length) {
           _deadline = DateTime.fromMillisecondsSinceEpoch(
             data['deadline'] as int,
           );
           _totals = totals;
           _roundIds = ids;
-          _finalRank = complete ? data['finalRank'] as int? : null;
+          // Former 20-hand results become active again until their deadline.
+          _finalRank = null;
+          for (final entry in (data['pendingPrizes'] as List? ?? [])) {
+            final award = entry as Map<String, dynamic>;
+            _pendingPrizes.add((
+              id: award['id'] as String,
+              coins: award['coins'] as int,
+              stars: award['stars'] as int,
+            ));
+          }
           _lastRankNoticeRound = ((data['rankNoticeRound'] as int?) ?? 0).clamp(
             0,
             ids.length,
@@ -218,11 +229,6 @@ class DailyLeagueController extends ChangeNotifier {
       } catch (_) {
         // A damaged league save starts a fresh cycle; the wallet is independent.
       }
-    }
-    // Finish a pending award before resetting an expired, completed cycle.
-    if (complete) {
-      _finalRank ??= standings.firstWhere((e) => e.isPlayer).rank;
-      await _grantPrize();
     }
     if (_deadline == null) {
       final taskDeadline = await _read(
@@ -234,6 +240,7 @@ class DailyLeagueController extends ChangeNotifier {
     }
     _rollover();
     await _persist();
+    await _settlePendingPrizes();
     await _updateReminder();
     notifyListeners();
   }
@@ -241,6 +248,14 @@ class DailyLeagueController extends ChangeNotifier {
   bool _rollover() {
     final previous = _deadline;
     if (previous == null || previous.isAfter(_now())) return false;
+    if (completedRounds > 0) {
+      final prize = LeaguePrize.forRank(playerRank);
+      _pendingPrizes.add((
+        id: settlementId,
+        coins: prize.coins,
+        stars: prize.stars,
+      ));
+    }
     final elapsed = _now().difference(previous).inMilliseconds;
     _deadline = previous.add(
       Duration(
@@ -257,11 +272,14 @@ class DailyLeagueController extends ChangeNotifier {
     return true;
   }
 
-  void refresh() {
-    if (!initialized || !_rollover()) return;
-    unawaited(_persist());
-    unawaited(_updateReminder());
+  Future<void> refresh() async {
+    if (!initialized) return;
+    final rolledOver = _rollover();
+    if (!rolledOver && _pendingPrizes.isEmpty) return;
+    final settlement = _settlePendingPrizes();
     notifyListeners();
+    await settlement;
+    await _updateReminder();
   }
 
   Future<void> setNotificationsEnabled(bool enabled) async {
@@ -294,7 +312,7 @@ class DailyLeagueController extends ChangeNotifier {
       );
     }
     await load();
-    refresh();
+    await refresh();
     if (complete || _roundIds.contains(roundId)) return false;
     final ids = participantIds ?? List.generate(20, (index) => index);
     if (ids.length != 20 ||
@@ -309,36 +327,37 @@ class DailyLeagueController extends ChangeNotifier {
       _totals[ids[i]] += scores[i];
     }
     _roundIds.add(roundId);
-    if (complete) _finalRank = standings.firstWhere((e) => e.isPlayer).rank;
     lastRoundUpdate = LeagueRoundUpdate(
       roundId: roundId,
       rank: playerRank,
       previousRank: previousRank,
     );
-    final award = complete ? finalPrize : null;
-    final awardId = settlementId;
     notifyListeners();
-    // Save the result first. Wallet awards use the cycle ID for crash recovery.
     await _persist();
-    if (award != null) {
-      await _wallet.grantLeagueReward(
-        id: awardId,
-        coins: award.coins,
-        stars: award.stars,
-      );
-    }
     await _updateReminder();
     notifyListeners();
     return true;
   }
 
-  Future<void> _grantPrize() async {
-    final prize = finalPrize;
-    await _wallet.grantLeagueReward(
-      id: settlementId,
-      coins: prize.coins,
-      stars: prize.stars,
+  Future<void> _settlePendingPrizes() {
+    final settlement = _settlements.then((_) async {
+      // Persist the completed cycle before crediting its idempotent wallet award.
+      await _persist();
+      for (final prize in List.of(_pendingPrizes)) {
+        await _wallet.grantLeagueReward(
+          id: prize.id,
+          coins: prize.coins,
+          stars: prize.stars,
+        );
+        _pendingPrizes.removeWhere((entry) => entry.id == prize.id);
+        await _persist();
+      }
+    });
+    _settlements = settlement.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {},
     );
+    return settlement;
   }
 
   Future<void> _persist() {
@@ -348,6 +367,10 @@ class DailyLeagueController extends ChangeNotifier {
       'roundIds': _roundIds,
       'finalRank': _finalRank,
       'rankNoticeRound': _lastRankNoticeRound ?? 0,
+      'pendingPrizes': [
+        for (final prize in _pendingPrizes)
+          {'id': prize.id, 'coins': prize.coins, 'stars': prize.stars},
+      ],
     });
     final write = _writes.then((_) async {
       try {
